@@ -1,0 +1,14 @@
+# Create source repo
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Create destination repo
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING-dest --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING-dest
+
+# Create an issue in source repo
+exec gh issue create --title 'Transfer Test' --body 'Body' -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+stdout2env ISSUE_URL
+
+# Transfer the issue to destination repo
+exec gh issue transfer $ISSUE_URL $ORG/$SCRIPT_NAME-$RANDOM_STRING-dest

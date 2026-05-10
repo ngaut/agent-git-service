@@ -1,0 +1,16 @@
+# Create a gist
+exec gh gist create --desc 'Test gist' hello.txt
+stdout2env GIST_URL
+
+# View it to verify it was created
+exec gh gist view $GIST_URL
+stdout 'Hello from gist test'
+
+# Delete the gist
+exec gh gist delete $GIST_URL --yes
+
+# Verify it's gone
+! exec gh gist view $GIST_URL
+
+-- hello.txt --
+Hello from gist test

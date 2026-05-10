@@ -1,0 +1,131 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+
+# Defer repo cleanup
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+cd $SCRIPT_NAME-$RANDOM_STRING
+exec git config user.email "test@example.com"
+exec git config user.name "Test User"
+
+# ============================================
+# Test 1: Detect merge conflict
+# ============================================
+
+# Create a file on main branch
+exec sh -c 'echo "Line 1: Original content" > conflict.txt && echo "Line 2: Main branch version" >> conflict.txt && echo "Line 3: Shared content" >> conflict.txt'
+exec git add conflict.txt
+exec git commit -m 'Add conflict.txt on main'
+exec git push origin main
+
+# Create a feature branch from an earlier commit
+exec git checkout -b feature-conflict HEAD~1
+
+# Create conflicting content on feature branch
+exec sh -c 'printf "%s\n" "Line 1: Original content" "Line 2: Feature branch version" "Line 3: Shared content" > conflict.txt'
+exec git add conflict.txt
+exec git commit -m 'Add conflict.txt on feature'
+exec git push -u origin feature-conflict
+
+# Create the PR
+exec gh pr create --base main --head feature-conflict --title 'Conflicting PR' --body 'This PR has a merge conflict'
+stdout2env PR_URL
+
+# Verify PR is open and has conflict
+exec gh pr view $PR_URL --json mergeStateStatus
+stdout 'mergeStateStatus'
+
+# Attempt to merge - should fail due to conflict
+! exec gh pr merge $PR_URL --merge
+stderr 'conflict|Unable to merge'
+
+# Verify PR is still open (not merged)
+exec gh pr view $PR_URL
+stdout 'state:\tOPEN'
+
+# ============================================
+# Test 2: Merge after conflict resolution
+# ============================================
+
+# Resolve conflict on feature branch:
+# first merge main into feature, then resolve and commit.
+exec git checkout feature-conflict
+exec sh -c 'git merge origin/main || true'
+exec sh -c 'printf "%s\n" "Line 1: Original content" "Line 2: Resolved - combined version" "Line 3: Shared content" > conflict.txt'
+exec git add conflict.txt
+exec git commit -m 'Resolve merge conflict'
+exec git push origin feature-conflict
+
+# Retry merge - should succeed now
+exec gh pr merge $PR_URL --merge
+
+# Verify PR is merged
+exec gh pr view $PR_URL
+stdout 'state:\tMERGED'
+
+# Verify resolved content on main
+exec git checkout main
+exec git pull -r
+exec cat conflict.txt
+stdout 'Resolved - combined version'
+
+# ============================================
+# Test 3: Conflict with squash strategy
+# ============================================
+
+# Create another conflict scenario
+exec git checkout -b feature-squash HEAD~2
+exec sh -c 'printf "%s\n" "Squash version on feature" > squash-conflict.txt'
+exec git add squash-conflict.txt
+exec git commit -m 'Add squash-conflict.txt on feature'
+exec git push -u origin feature-squash
+
+# Create conflicting content on main
+exec git checkout main
+exec sh -c 'printf "%s\n" "Main version of squash-conflict" > squash-conflict.txt'
+exec git add squash-conflict.txt
+exec git commit -m 'Add squash-conflict.txt on main'
+exec git push origin main
+
+# Create PR for squash test
+exec gh pr create --base main --head feature-squash --title 'Squash Conflict PR' --body 'Testing squash with conflict'
+stdout2env PR_URL2
+
+# Attempt squash merge - should fail due to conflict
+! exec gh pr merge $PR_URL2 --squash
+stderr 'conflict|Unable to merge'
+
+# ============================================
+# Test 4: Edge case - binary file conflict
+# ============================================
+
+# Create binary file on main
+exec git checkout main
+exec sh -c 'printf "\x89PNG\r\n\x1a\n" > binary.png'
+exec git add binary.png
+exec git commit -m 'Add binary.png on main'
+exec git push origin main
+
+# Create conflicting binary on feature
+exec git checkout -b feature-binary HEAD~1
+exec sh -c 'printf "\x89PNG\r\n\x1a\nBINARY" > binary.png'
+exec git add binary.png
+exec git commit -m 'Add binary.png on feature'
+exec git push -u origin feature-binary
+
+# Create PR
+exec gh pr create --base main --head feature-binary --title 'Binary Conflict PR' --body 'Testing binary file conflict'
+stdout2env PR_URL3
+
+# Attempt merge - should fail due to binary conflict
+! exec gh pr merge $PR_URL3 --merge
+stderr 'conflict|Unable to merge'
+
+# Cleanup
+exec sh -c 'gh pr close --delete-branch "$PR_URL2" 2>/dev/null || true'
+exec sh -c 'gh pr close --delete-branch "$PR_URL3" 2>/dev/null || true'

@@ -1,0 +1,13 @@
+# Create a repo for the test
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Create an issue
+exec gh issue create --title 'Lock Test' --body 'Body' -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+stdout2env ISSUE_URL
+
+# Lock the issue
+exec gh issue lock $ISSUE_URL --reason 'spam'
+
+# Unlock the issue
+exec gh issue unlock $ISSUE_URL

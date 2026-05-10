@@ -1,0 +1,27 @@
+data: {"id": "bad1", "object": "chat.completion.chunk", "choices": [ { "delta": { "tool_calls": [ { "function": { "name": "view", "arguments": "{bad json" } } ] } } ] }
+
+data: {"id":"v1","object":"chat.completion.chunk","choices":[{"delta":{"content":"@@ -1,2 +1,2 @@\n-old line\n+new line\nunchanged line\nINSIDE A VIEW CALL","tool_calls":[{"function":{"name":"view","arguments":"{\"path\":\"/home/runner/work/repo/owner/repo/README.md\"}"},"id":"tc1","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"v1b","object":"chat.completion.chunk","choices":[{"delta":{"content":"@@ -1,2 +1,2 @@\n-old line\n+new line\nunchanged line","tool_calls":[{"function":{"name":"view","arguments":"{\"path\":\"/home/runner/work/repo/owner/repo/README.md\"}"},"id":"tc1b","index":0}]}],"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"v1","object":"chat.completion.chunk","choices":[{"delta":{"content":"@@ -1,2 +1,2 @@\n-old line\n+new line\nunchanged line\nINSIDE A VIEW CALL","tool_calls":[{"function":{"name":"view","arguments":"{\"path\":\"/home/runner/work/repo/owner/repo/README.md"},"id":"tc1","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"t1","object":"chat.completion.chunk","choices":[{"delta":{"content":"THINK","tool_calls":[{"function":{"name":"think","arguments":"{\"thought\":123"},"id":"tc2","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"t2","object":"chat.completion.chunk","choices":[{"delta":{"content":"A valid thought to render.","reasoning_text":"Interim reasoning that should show as raw markdown.","tool_calls":[{"function":{"name":"think","arguments":"{\"thought\":\"A valid thought to render.\"}"},"id":"tc3","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"rp1","object":"chat.completion.chunk","choices":[{"delta":{"content":"RP","tool_calls":[{"function":{"name":"report_progress","arguments":"{\"commitMessage\": 5"},"id":"tc4","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"rp2","object":"chat.completion.chunk","choices":[{"delta":{"content":"not-json","tool_calls":[{"function":{"name":"report_progress","arguments":"{\"commitMessage\":\"Valid commit msg\"}"},"id":"tc5","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{"content":"CREATE","tool_calls":[{"function":{"name":"create","arguments":"{\"path\":\"/abs/path/file.txt\""},"id":"tc6","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"c2","object":"chat.completion.chunk","choices":[{"delta":{"content":"CREATE2","tool_calls":[{"function":{"name":"create","arguments":"{\"path\":\"/home/runner/work/repo/owner/repo/new.txt\",\"file_text\":\"hello world\"}"},"id":"tc7","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"sr1","object":"chat.completion.chunk","choices":[{"delta":{"content":"SR","tool_calls":[{"function":{"name":"str_replace","arguments":"{\"path\":\"/home/runner/work/repo/owner/repo/file.diff"},"id":"tc8","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"sr2","object":"chat.completion.chunk","choices":[{"delta":{"content":"@@ -1,2 +1,2 @@\n-old line\n+new line\nunchanged line","tool_calls":[{"function":{"name":"str_replace","arguments":"{\"path\":\"/home/runner/work/repo/owner/repo/file.diff\"}"},"id":"tc9","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"u1","object":"chat.completion.chunk","choices":[{"delta":{"content":"{\"foo\":1}","tool_calls":[{"function":{"name":"mystery_tool","arguments":"{\"bar\":2}"},"id":"tc10","index":0}]},"finish_reason":"tool_calls","index":0}]}
+
+data: {"id":"end","object":"chat.completion.chunk","choices":[{"delta":{"content":"","tool_calls":[],"role":"assistant"},"finish_reason":"stop","index":0}]}

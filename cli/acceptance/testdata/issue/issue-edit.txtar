@@ -1,0 +1,21 @@
+# Create a repo for the test
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Create an issue
+exec gh issue create --title 'Original Title' --body 'Original Body' -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+stdout2env ISSUE_URL
+
+# Edit the title
+exec gh issue edit $ISSUE_URL --title 'Updated Title'
+
+# Verify the title changed
+exec gh issue view $ISSUE_URL
+stdout 'title:\tUpdated Title'
+
+# Edit the body
+exec gh issue edit $ISSUE_URL --body 'Updated Body'
+
+# Verify the body changed
+exec gh issue view $ISSUE_URL
+stdout 'Updated Body'

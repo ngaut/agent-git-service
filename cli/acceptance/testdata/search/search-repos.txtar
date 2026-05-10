@@ -1,0 +1,10 @@
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Wait for indexing
+sleep 5
+
+# Search for the repo
+exec gh search repos $SCRIPT_NAME-$RANDOM_STRING --owner $ORG
+stdout $SCRIPT_NAME-$RANDOM_STRING

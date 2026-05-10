@@ -1,0 +1,22 @@
+# Regression gate manifest (SSOT)
+#
+# This file defines the stable, fast checks that run inside
+# scripts/regression_gate.sh. Keep it small, deterministic, and green.
+#
+# Format:
+#   - Section headers: [go] / [shell]
+#   - One repo-relative entry per line
+#   - Blank lines and # comments are ignored
+
+[go]
+./internal/controlplane
+./internal/db
+./internal/gitstore
+./internal/githttp/...
+./internal/middleware
+./internal/oauth
+./internal/router
+./internal/testharness
+
+[shell]
+scripts/check-tenant-db.sh

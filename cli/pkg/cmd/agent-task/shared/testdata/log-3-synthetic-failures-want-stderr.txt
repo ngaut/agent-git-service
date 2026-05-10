@@ -1,0 +1,10 @@
+
+failed to parse 'view' tool call arguments: unexpected end of JSON input
+
+failed to parse 'think' tool call arguments: unexpected end of JSON input
+
+failed to parse 'report_progress' tool call arguments: unexpected end of JSON input
+
+failed to parse 'create' tool call arguments: unexpected end of JSON input
+
+failed to parse 'str_replace' tool call arguments: unexpected end of JSON input

@@ -1,0 +1,31 @@
+name: Go Vulnerability Check
+on:
+  schedule:
+    - cron: "0 0 * * 1" # Every Monday at midnight UTC
+  workflow_dispatch:
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      # `govulncheck -format sarif` exits successfully regardless of results, which are not in stdout.
+      # See https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck#hdr-Exit_codes for more information on exit codes.
+      - name: Check Go vulnerabilities
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@d1f380186385b4f64e00313f31743df8e4b89a77 -format sarif ./... > gh.sarif
+
+      - name: Upload SARIF report
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: gh.sarif

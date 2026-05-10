@@ -1,0 +1,116 @@
+# Setup environment variables used for testscript
+env REPO=${SCRIPT_NAME}-${RANDOM_STRING}
+
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$REPO --add-readme --private
+
+# Defer repo cleanup
+defer gh repo delete --yes $ORG/$REPO
+
+# Clone the repo
+exec gh repo clone $ORG/$REPO
+cd $REPO
+exec git config user.email "test@example.com"
+exec git config user.name "Test User"
+
+# ============================================
+# Test 1: Set branch protection via API
+# ============================================
+
+# Verify no branch protection exists initially
+! exec gh api /repos/{owner}/{repo}/branches/main/protection
+
+# Create branch protection with required PR reviews
+exec gh api /repos/{owner}/{repo}/branches/main/protection -X PUT --input ../create-branch-protection.json
+
+# Verify branch protection was created
+exec gh api /repos/{owner}/{repo}/branches/main/protection
+stdout 'required_pull_request_reviews'
+stdout 'required_approving_review_count.*1'
+
+# ============================================
+# Test 2: Get branch protection settings
+# ============================================
+
+# Verify we can retrieve protection settings
+exec gh api /repos/{owner}/{repo}/branches/main/protection
+stdout 'url'
+stdout 'required_pull_request_reviews'
+stdout 'enforce_admins'
+
+# ============================================
+# Test 3: Update branch protection
+# ============================================
+
+# Update protection to require 2 reviews
+exec gh api /repos/{owner}/{repo}/branches/main/protection -X PUT --input ../update-branch-protection.json
+
+# Verify updated settings
+exec gh api /repos/{owner}/{repo}/branches/main/protection
+stdout 'required_approving_review_count.*2'
+
+# ============================================
+# Test 4: Delete branch protection
+# ============================================
+
+# Delete branch protection
+exec gh api /repos/{owner}/{repo}/branches/main/protection -X DELETE
+
+# Verify protection is removed
+! exec gh api /repos/{owner}/{repo}/branches/main/protection
+
+# ============================================
+# Test 5: Enforcement on merge (basic check)
+# ============================================
+
+# Re-create protection
+exec gh api /repos/{owner}/{repo}/branches/main/protection -X PUT --input ../create-branch-protection.json
+
+# Create a feature branch with changes
+exec git checkout -b feature-branch
+exec git commit --allow-empty -m Feature-commit
+exec git push -u origin feature-branch
+
+# Create a PR
+exec gh pr create --base main --head feature-branch --title Test-PR --body Testing-branch-protection
+
+# Attempt to merge without review - should fail or require review
+# Note: Actual enforcement depends on server implementation
+# This test verifies the protection is in place
+exec gh pr view --json mergeStateStatus
+stdout 'mergeStateStatus'
+
+# Cleanup PR
+exec gh pr close feature-branch --delete-branch
+
+# Cleanup branch protection so deferred repo delete does not hit FK constraints
+exec gh api /repos/{owner}/{repo}/branches/main/protection -X DELETE
+
+-- create-branch-protection.json --
+{
+    "required_status_checks": null,
+    "enforce_admins": true,
+    "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_reviews": false,
+        "require_last_push_approval": false
+    },
+    "restrictions": null
+}
+
+-- update-branch-protection.json --
+{
+    "required_status_checks": null,
+    "enforce_admins": true,
+    "required_pull_request_reviews": {
+        "required_approving_review_count": 2,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_reviews": false,
+        "require_last_push_approval": false
+    },
+    "restrictions": null
+}

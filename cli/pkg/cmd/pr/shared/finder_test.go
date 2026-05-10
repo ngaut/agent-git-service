@@ -1,0 +1,1029 @@
+package shared
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/url"
+	"testing"
+
+	ghContext "github.com/cli/cli/v2/context"
+	"github.com/cli/cli/v2/git"
+	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/pkg/httpmock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParseURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		arg      string
+		wantRepo ghrepo.Interface
+		wantNum  int
+		wantRest string
+		wantErr  string
+	}{
+		{
+			name:     "valid HTTPS URL",
+			arg:      "https://example.com/owner/repo/pull/123",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+		},
+		{
+			name:     "valid HTTP URL",
+			arg:      "http://example.com/owner/repo/pull/123",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+		},
+		{
+			name:     "valid HTTP URL with rest",
+			arg:      "http://example.com/owner/repo/pull/123/foo/bar",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+			wantRest: "/foo/bar",
+		},
+		{
+			name:     "valid HTTP URL with .patch as rest",
+			arg:      "http://example.com/owner/repo/pull/123.patch",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+			wantRest: ".patch",
+		},
+		{
+			name:     "valid HTTP URL with a trailing slash",
+			arg:      "http://example.com/owner/repo/pull/123/",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+			wantRest: "/",
+		},
+		{
+			name:    "empty URL",
+			wantErr: "invalid URL: \"\"",
+		},
+		{
+			name:    "no scheme",
+			arg:     "github.com/owner/repo/pull/123",
+			wantErr: "invalid scheme: ",
+		},
+		{
+			name:    "invalid scheme",
+			arg:     "ftp://github.com/owner/repo/pull/123",
+			wantErr: "invalid scheme: ftp",
+		},
+		{
+			name:    "no hostname",
+			arg:     "/owner/repo/pull/123",
+			wantErr: "invalid scheme: ",
+		},
+		{
+			name:    "incorrect path",
+			arg:     "https://github.com/owner/repo/issues/123",
+			wantErr: "not a pull request URL: https://github.com/owner/repo/issues/123",
+		},
+		{
+			name:    "no PR number",
+			arg:     "https://github.com/owner/repo/pull/",
+			wantErr: "not a pull request URL: https://github.com/owner/repo/pull/",
+		},
+		{
+			name:    "invalid PR number",
+			arg:     "https://github.com/owner/repo/pull/foo",
+			wantErr: "not a pull request URL: https://github.com/owner/repo/pull/foo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, num, rest, err := ParseURL(tt.arg)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.Equal(t, tt.wantErr, err.Error())
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantNum, num)
+			require.Equal(t, tt.wantRest, rest)
+			require.NotNil(t, repo)
+			require.True(t, ghrepo.IsSame(tt.wantRepo, repo))
+		})
+	}
+}
+
+func TestParseFullReference(t *testing.T) {
+	tests := []struct {
+		name       string
+		arg        string
+		wantRepo   ghrepo.Interface
+		wantNumber int
+		wantErr    string
+	}{
+		{
+			name:    "number",
+			arg:     "123",
+			wantErr: `invalid reference: "123"`,
+		},
+		{
+			name:    "number with hash",
+			arg:     "#123",
+			wantErr: `invalid reference: "#123"`,
+		},
+		{
+			name:       "full form",
+			arg:        "OWNER/REPO#123",
+			wantNumber: 123,
+			wantRepo:   ghrepo.New("OWNER", "REPO"),
+		},
+		{
+			name:    "empty",
+			wantErr: "empty reference",
+		},
+		{
+			name:    "invalid full form, without hash",
+			arg:     "OWNER/REPO123",
+			wantErr: `invalid reference: "OWNER/REPO123"`,
+		},
+		{
+			name:    "invalid full form, empty owner and repo",
+			arg:     "/#123",
+			wantErr: `invalid reference: "/#123"`,
+		},
+		{
+			name:    "invalid full form, without owner",
+			arg:     "REPO#123",
+			wantErr: `invalid reference: "REPO#123"`,
+		},
+		{
+			name:    "invalid full form, without repo",
+			arg:     "OWNER/#123",
+			wantErr: `invalid reference: "OWNER/#123"`,
+		},
+		{
+			name:    "invalid full form, too large number",
+			arg:     "OWNER/REPO#9999999999999999999",
+			wantErr: `invalid reference: "OWNER/REPO#9999999999999999999"; strconv.Atoi: parsing "9999999999999999999": value out of range`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, number, err := ParseFullReference(tt.arg)
+
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				assert.Nil(t, repo)
+				assert.Zero(t, number)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantNumber, number)
+
+			if tt.wantRepo != nil {
+				require.NotNil(t, repo)
+				assert.True(t, ghrepo.IsSame(tt.wantRepo, repo))
+			} else {
+				assert.Nil(t, repo)
+			}
+		})
+	}
+}
+
+type args struct {
+	baseRepoFn      func() (ghrepo.Interface, error)
+	branchFn        func() (string, error)
+	gitConfigClient stubGitConfigClient
+	progress        *stubProgressIndicator
+	selector        string
+	fields          []string
+	baseBranch      string
+	disableProgress bool
+}
+
+func TestFind(t *testing.T) {
+	originOwnerUrl, err := url.Parse("https://github.com/ORIGINOWNER/REPO.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteOrigin := ghContext.Remote{
+		Remote: &git.Remote{
+			Name:     "origin",
+			FetchURL: originOwnerUrl,
+		},
+		Repo: ghrepo.New("ORIGINOWNER", "REPO"),
+	}
+	remoteOther := ghContext.Remote{
+		Remote: &git.Remote{
+			Name:     "other",
+			FetchURL: originOwnerUrl,
+		},
+		Repo: ghrepo.New("ORIGINOWNER", "OTHER-REPO"),
+	}
+
+	upstreamOwnerUrl, err := url.Parse("https://github.com/UPSTREAMOWNER/REPO.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteUpstream := ghContext.Remote{
+		Remote: &git.Remote{
+			Name:     "upstream",
+			FetchURL: upstreamOwnerUrl,
+		},
+		Repo: ghrepo.New("UPSTREAMOWNER", "REPO"),
+	}
+
+	tests := []struct {
+		name            string
+		args            args
+		httpStub        func(*httpmock.Registry)
+		wantUseProgress bool
+		wantPR          int
+		wantRepo        string
+		wantErr         bool
+	}{
+		{
+			name: "number argument",
+			args: args{
+				selector:   "13",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			name: "number argument with base branch",
+			args: args{
+				selector:   "13",
+				baseBranch: "main",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn: stubBranchConfig(git.BranchConfig{
+						PushRemoteName: remoteOrigin.Remote.Name,
+					}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{}, errors.New("testErr")),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 123,
+								"state": "OPEN",
+								"baseRefName": "main",
+								"headRefName": "13",
+								"isCrossRepository": false,
+								"headRepositoryOwner": {"login":"ORIGINOWNER"}
+							}
+						]}
+					}}}`))
+			},
+			wantPR:   123,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			name: "baseRepo is error",
+			args: args{
+				selector:   "13",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(nil, errors.New("baseRepoErr")),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "blank fields is error",
+			args: args{
+				selector: "13",
+				fields:   []string{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "number only",
+			args: args{
+				selector:   "13",
+				fields:     []string{"number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+				},
+			},
+			httpStub: nil,
+			wantPR:   13,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			name: "pr number zero",
+			args: args{
+				selector:   "0",
+				fields:     []string{"number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "number with hash argument",
+			args: args{
+				selector:   "#13",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			name: "PR URL argument",
+			args: args{
+				selector:   "https://example.org/OWNER/REPO/pull/13/files",
+				fields:     []string{"id", "number"},
+				baseRepoFn: nil,
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://example.org/OWNER/REPO",
+		},
+		{
+			name: "PR URL argument and not in a local git repo",
+			args: args{
+				selector:   "https://example.org/OWNER/REPO/pull/13/files",
+				fields:     []string{"id", "number"},
+				baseRepoFn: nil,
+				branchFn: func() (string, error) {
+					return "", &git.GitError{
+						Stderr:   "fatal: branchFn error",
+						ExitCode: 128,
+					}
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn: stubBranchConfig(git.BranchConfig{}, &git.GitError{
+						Stderr:   "fatal: branchConfig error",
+						ExitCode: 128,
+					}),
+					pushDefaultFn: stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", &git.GitError{
+						Stderr:   "fatal: remotePushDefault error",
+						ExitCode: 128,
+					}),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://example.org/OWNER/REPO",
+		},
+		{
+			name: "when provided branch argument with an open and closed PR for that branch name, it returns the open PR",
+			args: args{
+				selector:   "blueberries",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{}, errors.New("testErr")),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 14,
+								"state": "CLOSED",
+								"baseRefName": "main",
+								"headRefName": "blueberries",
+								"isCrossRepository": false,
+								"headRepositoryOwner": {"login":"ORIGINOWNER"}
+							},
+							{
+								"number": 13,
+								"state": "OPEN",
+								"baseRefName": "main",
+								"headRefName": "blueberries",
+								"isCrossRepository": false,
+								"headRepositoryOwner": {"login":"ORIGINOWNER"}
+							}
+						]}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			name: "branch argument with base branch",
+			args: args{
+				selector:   "blueberries",
+				baseBranch: "main",
+				fields:     []string{"id", "number"},
+				baseRepoFn: func() (ghrepo.Interface, error) {
+					return ghrepo.FromFullName("OWNER/REPO")
+				},
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{}, errors.New("testErr")),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 14,
+								"state": "OPEN",
+								"baseRefName": "dev",
+								"headRefName": "blueberries",
+								"isCrossRepository": false,
+								"headRepositoryOwner": {"login":"OWNER"}
+							},
+							{
+								"number": 13,
+								"state": "OPEN",
+								"baseRefName": "main",
+								"headRefName": "blueberries",
+								"isCrossRepository": false,
+								"headRepositoryOwner": {"login":"OWNER"}
+							}
+						]}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/OWNER/REPO",
+		},
+		{
+			name: "no argument reads current branch",
+			args: args{
+				selector: "",
+				fields:   []string{"id", "number"},
+				baseRepoFn: func() (ghrepo.Interface, error) {
+					return ghrepo.FromFullName("OWNER/REPO")
+				},
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{}, errors.New("testErr")),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 13,
+								"state": "OPEN",
+								"baseRefName": "main",
+								"headRefName": "blueberries",
+								"isCrossRepository": false,
+								"headRepositoryOwner": {"login":"OWNER"}
+							}
+						]}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/OWNER/REPO",
+		},
+		{
+			name: "current branch with merged pr",
+			args: args{
+				selector: "",
+				fields:   []string{"id", "number"},
+				baseRepoFn: func() (ghrepo.Interface, error) {
+					return ghrepo.FromFullName("OWNER/REPO")
+				},
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{}, errors.New("testErr")),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 13,
+								"state": "MERGED",
+								"baseRefName": "main",
+								"headRefName": "blueberries",
+								"isCrossRepository": false,
+								"headRepositoryOwner": {"login":"OWNER"}
+							}
+						]},
+						"defaultBranchRef":{
+							"name": "blueberries"
+						}
+					}}}`))
+			},
+			wantErr: true,
+		},
+		{
+			name: "current branch is error",
+			args: args{
+				selector: "",
+				fields:   []string{"id", "number"},
+				baseRepoFn: func() (ghrepo.Interface, error) {
+					return ghrepo.FromFullName("OWNER/REPO")
+				},
+				branchFn: func() (string, error) {
+					return "", errors.New("branchErr")
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "when the current branch is configured to push to and pull from 'upstream' and push.default = upstream but the repo push/pulls from 'origin', it finds the PR associated with the upstream repo and returns origin as the base repo",
+			args: args{
+				selector:   "",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn: stubBranchConfig(git.BranchConfig{
+						MergeRef:       "refs/heads/blue-upstream-berries",
+						PushRemoteName: "upstream",
+					}, nil),
+					pushDefaultFn:       stubPushDefault("upstream", nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{}, errors.New("testErr")),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 13,
+								"state": "OPEN",
+								"baseRefName": "main",
+								"headRefName": "blue-upstream-berries",
+								"isCrossRepository": true,
+								"headRepositoryOwner": {"login":"UPSTREAMOWNER"}
+							}
+						]}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			// The current BRANCH is configured to push to and pull from a URL (upstream, in this example)
+			// which is different from what the REPO is configured to push to and pull from (origin, in this example)
+			// and push.default = upstream. It should find the PR associated with the upstream repo and return
+			// origin as the base repo
+			name: "when push.default = upstream and the current branch is configured to push/pull from a different remote than the repo",
+			args: args{
+				selector:   "",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn: stubBranchConfig(git.BranchConfig{
+						MergeRef:      "refs/heads/blue-upstream-berries",
+						PushRemoteURL: remoteUpstream.Remote.FetchURL,
+					}, nil),
+					pushDefaultFn:       stubPushDefault("upstream", nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{}, errors.New("testErr")),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 13,
+								"state": "OPEN",
+								"baseRefName": "main",
+								"headRefName": "blue-upstream-berries",
+								"isCrossRepository": true,
+								"headRepositoryOwner": {"login":"UPSTREAMOWNER"}
+							}
+						]}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			name: "current branch with upstream and fork in same org",
+			args: args{
+				selector:   "",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+					pushRevisionFn:      stubPushRevision(git.RemoteTrackingRef{Remote: "other", Branch: "blueberries"}, nil),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestForBranch\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequests":{"nodes":[
+							{
+								"number": 13,
+								"state": "OPEN",
+								"baseRefName": "main",
+								"headRefName": "blueberries",
+								"isCrossRepository": true,
+								"headRepositoryOwner": {"login":"ORIGINOWNER"}
+							}
+						]}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/ORIGINOWNER/REPO",
+		},
+		{
+			name: "current branch made by pr checkout",
+			args: args{
+				selector: "",
+				fields:   []string{"id", "number"},
+				baseRepoFn: func() (ghrepo.Interface, error) {
+					return ghrepo.FromFullName("OWNER/REPO")
+				},
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn: stubBranchConfig(git.BranchConfig{
+						MergeRef: "refs/pull/13/head",
+					}, nil),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/OWNER/REPO",
+		},
+		{
+			name: "including project items",
+			args: args{
+				selector: "",
+				fields:   []string{"projectItems"},
+				baseRepoFn: func() (ghrepo.Interface, error) {
+					return ghrepo.FromFullName("OWNER/REPO")
+				},
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				gitConfigClient: stubGitConfigClient{
+					readBranchConfigFn: stubBranchConfig(git.BranchConfig{
+						MergeRef: "refs/pull/13/head",
+					}, nil),
+					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
+					remotePushDefaultFn: stubRemotePushDefault("", nil),
+				},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+
+				r.Register(
+					httpmock.GraphQL(`query PullRequestProjectItems\b`),
+					httpmock.GraphQLQuery(`{
+		                "data": {
+		                  "repository": {
+		                    "pullRequest": {
+		                      "projectItems": {
+		                        "nodes": [
+		                          {
+		                            "id": "PVTI_lADOB-vozM4AVk16zgK6U50",
+		                            "project": {
+		                              "id": "PVT_kwDOB-vozM4AVk16",
+		                              "title": "Test Project"
+		                            },
+		                            "status": {
+		                              "optionId": "47fc9ee4",
+		                              "name": "In Progress"
+		                            }
+		                          }
+		                        ],
+		                        "pageInfo": {
+		                          "hasNextPage": false,
+		                          "endCursor": "MQ"
+		                        }
+		                      }
+		                    }
+		                  }
+		                }
+		              }`,
+						func(query string, inputs map[string]interface{}) {
+							require.Equal(t, float64(13), inputs["number"])
+							require.Equal(t, "OWNER", inputs["owner"])
+							require.Equal(t, "REPO", inputs["name"])
+						}),
+				)
+			},
+			wantPR:   13,
+			wantRepo: "https://github.com/OWNER/REPO",
+		},
+		{
+			name: "number argument, with non nil-progress indicator",
+			args: args{
+				selector:   "13",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				progress: &stubProgressIndicator{},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:          13,
+			wantRepo:        "https://github.com/ORIGINOWNER/REPO",
+			wantUseProgress: true,
+		},
+		{
+			name: "number argument, with non-nil progress indicator and DisableProgress set",
+			args: args{
+				selector:   "13",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				progress:        &stubProgressIndicator{},
+				disableProgress: true,
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:          13,
+			wantRepo:        "https://github.com/ORIGINOWNER/REPO",
+			wantUseProgress: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			if tt.httpStub != nil {
+				tt.httpStub(reg)
+			}
+
+			f := finder{
+				httpClient: func() (*http.Client, error) {
+					return &http.Client{Transport: reg}, nil
+				},
+				baseRepoFn:      tt.args.baseRepoFn,
+				branchFn:        tt.args.branchFn,
+				gitConfigClient: tt.args.gitConfigClient,
+				remotesFn: stubRemotes(ghContext.Remotes{
+					&remoteOrigin,
+					&remoteOther,
+					&remoteUpstream,
+				}, nil),
+			}
+
+			if tt.args.progress != nil {
+				f.progress = tt.args.progress
+			}
+
+			pr, repo, err := f.Find(FindOptions{
+				Selector:        tt.args.selector,
+				Fields:          tt.args.fields,
+				BaseBranch:      tt.args.baseBranch,
+				DisableProgress: tt.args.disableProgress,
+			})
+
+			if tt.args.progress != nil {
+				if tt.args.progress.startCalled != tt.wantUseProgress {
+					t.Errorf("progress was (not) used as expected")
+				} else if tt.args.progress.startCalled != tt.args.progress.stopCalled {
+					t.Errorf("progress was started but not stopped")
+				}
+			}
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Find() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				if tt.wantPR > 0 {
+					t.Error("wantPR field is not checked in error case")
+				}
+				if tt.wantRepo != "" {
+					t.Error("wantRepo field is not checked in error case")
+				}
+				return
+			}
+
+			if pr.Number != tt.wantPR {
+				t.Errorf("want pr #%d, got #%d", tt.wantPR, pr.Number)
+			}
+			repoURL := ghrepo.GenerateRepoURL(repo, "")
+			if repoURL != tt.wantRepo {
+				t.Errorf("want repo %s, got %s", tt.wantRepo, repoURL)
+			}
+		})
+	}
+}
+
+func stubBranchConfig(branchConfig git.BranchConfig, err error) func(context.Context, string) (git.BranchConfig, error) {
+	return func(_ context.Context, branch string) (git.BranchConfig, error) {
+		return branchConfig, err
+	}
+}
+
+func stubRemotes(remotes ghContext.Remotes, err error) func() (ghContext.Remotes, error) {
+	return func() (ghContext.Remotes, error) {
+		return remotes, err
+	}
+}
+
+func stubBaseRepoFn(baseRepo ghrepo.Interface, err error) func() (ghrepo.Interface, error) {
+	return func() (ghrepo.Interface, error) {
+		return baseRepo, err
+	}
+}
+
+func stubPushDefault(pushDefault git.PushDefault, err error) func(context.Context) (git.PushDefault, error) {
+	return func(_ context.Context) (git.PushDefault, error) {
+		return pushDefault, err
+	}
+}
+
+func stubRemotePushDefault(remotePushDefault string, err error) func(context.Context) (string, error) {
+	return func(_ context.Context) (string, error) {
+		return remotePushDefault, err
+	}
+}
+
+func stubPushRevision(parsedPushRevision git.RemoteTrackingRef, err error) func(context.Context, string) (git.RemoteTrackingRef, error) {
+	return func(_ context.Context, _ string) (git.RemoteTrackingRef, error) {
+		return parsedPushRevision, err
+	}
+}
+
+type stubGitConfigClient struct {
+	readBranchConfigFn  func(ctx context.Context, branchName string) (git.BranchConfig, error)
+	pushDefaultFn       func(ctx context.Context) (git.PushDefault, error)
+	remotePushDefaultFn func(ctx context.Context) (string, error)
+	pushRevisionFn      func(ctx context.Context, branchName string) (git.RemoteTrackingRef, error)
+}
+
+func (s stubGitConfigClient) ReadBranchConfig(ctx context.Context, branchName string) (git.BranchConfig, error) {
+	if s.readBranchConfigFn == nil {
+		panic("unexpected call to ReadBranchConfig")
+	}
+	return s.readBranchConfigFn(ctx, branchName)
+}
+
+func (s stubGitConfigClient) PushDefault(ctx context.Context) (git.PushDefault, error) {
+	if s.pushDefaultFn == nil {
+		panic("unexpected call to PushDefault")
+	}
+	return s.pushDefaultFn(ctx)
+}
+
+func (s stubGitConfigClient) RemotePushDefault(ctx context.Context) (string, error) {
+	if s.remotePushDefaultFn == nil {
+		panic("unexpected call to RemotePushDefault")
+	}
+	return s.remotePushDefaultFn(ctx)
+}
+
+func (s stubGitConfigClient) PushRevision(ctx context.Context, branchName string) (git.RemoteTrackingRef, error) {
+	if s.pushRevisionFn == nil {
+		panic("unexpected call to PushRevision")
+	}
+	return s.pushRevisionFn(ctx, branchName)
+}
+
+type stubProgressIndicator struct {
+	startCalled bool
+	stopCalled  bool
+}
+
+func (s *stubProgressIndicator) StartProgressIndicator() {
+	s.startCalled = true
+}
+
+func (s *stubProgressIndicator) StopProgressIndicator() {
+	s.stopCalled = true
+}

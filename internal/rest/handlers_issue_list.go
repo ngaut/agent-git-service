@@ -1,0 +1,495 @@
+package rest
+
+import (
+	"context"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"gh-server/internal/db"
+	"gh-server/internal/rest/respond"
+	"gh-server/internal/rest/transform"
+	"gh-server/internal/service"
+)
+
+// --- Issues: Listing & Filtering ---
+
+// ListAssignees handles GET /api/v3/repos/{owner}/{repo}/assignees
+// Returns the list of users that can be assigned to issues in this repository.
+func (d *Deps) ListAssignees(w http.ResponseWriter, r *http.Request) {
+	d.ListCollaborators(w, r) // assignees are the repo collaborators
+}
+
+type issueListParams struct {
+	repoFullName string
+	state        string
+	labels       string
+	assignee     string
+	creator      string
+	mentioned    string
+	sort         string
+	direction    string
+	milestone    string
+	since        string
+	sinceTime    time.Time
+	hasSince     bool
+}
+
+type issueListItem struct {
+	issue     *db.Issue
+	pr        *db.PullRequest
+	comments  int64
+	createdAt time.Time
+	updatedAt time.Time
+	number    int
+}
+
+type validationError string
+
+func (e validationError) Error() string {
+	return string(e)
+}
+
+// ListIssues handles GET /api/v3/repos/{owner}/{repo}/issues
+func (d *Deps) ListIssues(w http.ResponseWriter, r *http.Request) {
+	params, err := parseIssueListParams(r)
+	if err != nil {
+		respond.ValidationFailed(w, err.Error())
+		return
+	}
+	issues, prs, err := d.fetchIssuesAndPRs(r.Context(), params)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	items := mergeIssuesAndPRs(issues, prs)
+	if err := d.countCommentsForItems(r.Context(), items); err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	sortKey := strings.ToLower(params.sort)
+	if sortKey == "" {
+		sortKey = "created"
+	}
+	sortDir := strings.ToLower(params.direction)
+	if sortDir != "asc" && sortDir != "desc" {
+		sortDir = "desc"
+	}
+	sortIssueItems(items, sortKey, sortDir)
+	page, perPage := parsePagination(r)
+	paged := paginate(w, r, d.Svc.BaseURL, items, page, perPage)
+	resolver := d.batchUserResolver(r.Context(), collectIssueListUserLogins(paged))
+	var assoc transform.AuthorAssociationChecks
+	if len(issues) > 0 {
+		assoc = d.authorAssociationChecks(r.Context(), issues[0].Repository)
+	} else if len(prs) > 0 {
+		assoc = d.authorAssociationChecks(r.Context(), prs[0].Repository)
+	}
+
+	out, err := d.buildIssueListResponse(r.Context(), paged, resolver, assoc)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, 200, out)
+}
+
+func parseIssueListParams(r *http.Request) (*issueListParams, error) {
+	full := repoFullName(r)
+	state := r.URL.Query().Get("state")
+	if state == "" {
+		state = "open"
+	}
+	labels := r.URL.Query().Get("labels") // comma-separated label names
+	assignee := r.URL.Query().Get("assignee")
+	creator := r.URL.Query().Get("creator")
+	mentioned := r.URL.Query().Get("mentioned")
+	sortParam := strings.TrimSpace(r.URL.Query().Get("sort"))
+	if sortParam != "" {
+		sortParam = strings.ToLower(sortParam)
+		switch sortParam {
+		case "created", "updated", "comments":
+		default:
+			return nil, validationError("sort must be one of: created, updated, comments")
+		}
+	}
+	direction := strings.TrimSpace(r.URL.Query().Get("direction"))
+	if direction != "" {
+		direction = strings.ToLower(direction)
+		switch direction {
+		case "asc", "desc":
+		default:
+			return nil, validationError("direction must be one of: asc, desc")
+		}
+	}
+	milestone := strings.TrimSpace(r.URL.Query().Get("milestone"))
+	since := strings.TrimSpace(r.URL.Query().Get("since"))
+	var (
+		sinceTime time.Time
+		hasSince  bool
+	)
+	if since != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, since)
+		if err != nil {
+			return nil, validationError("since must be ISO 8601")
+		}
+		sinceTime = parsed
+		hasSince = true
+	}
+
+	return &issueListParams{
+		repoFullName: full,
+		state:        state,
+		labels:       labels,
+		assignee:     assignee,
+		creator:      creator,
+		mentioned:    mentioned,
+		sort:         sortParam,
+		direction:    direction,
+		milestone:    milestone,
+		since:        since,
+		sinceTime:    sinceTime,
+		hasSince:     hasSince,
+	}, nil
+}
+
+func (d *Deps) fetchIssuesAndPRs(ctx context.Context, params *issueListParams) ([]db.Issue, []db.PullRequest, error) {
+	var issues []db.Issue
+	var err error
+	if params.assignee != "" || params.creator != "" || params.mentioned != "" {
+		issues, err = d.Svc.ListIssuesFiltered(ctx, service.IssueListFilter{
+			RepoFullName: params.repoFullName,
+			State:        params.state,
+			Assignee:     params.assignee,
+			Mentioned:    params.mentioned,
+			CreatedBy:    params.creator,
+			Labels:       params.labels,
+			Sort:         params.sort,
+			Direction:    params.direction,
+			Milestone:    params.milestone,
+			Since:        params.since,
+		})
+	} else {
+		issues, err = d.Svc.ListIssuesForREST(ctx, params.repoFullName, params.state, params.labels, params.sort, params.direction, params.milestone, params.since)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var prs []db.PullRequest
+	prs, err = d.Svc.ListPRsFiltered(ctx, service.PRListFilter{
+		RepoFullName: params.repoFullName,
+		State:        params.state,
+		Mentioned:    params.mentioned,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	labelFilters := parseFilterList(params.labels)
+	if len(prs) > 0 {
+		var invalidMilestone bool
+		prs, invalidMilestone = filterPRs(prs, labelFilters, params.assignee, params.creator, params.milestone, params.sinceTime, params.hasSince)
+		if invalidMilestone {
+			prs = nil
+		}
+	}
+
+	return issues, prs, nil
+}
+
+func mergeIssuesAndPRs(issues []db.Issue, prs []db.PullRequest) []issueListItem {
+	items := make([]issueListItem, 0, len(issues)+len(prs))
+	for i := range issues {
+		iss := &issues[i]
+		items = append(items, issueListItem{
+			issue:     iss,
+			createdAt: iss.CreatedAt,
+			updatedAt: iss.UpdatedAt,
+			number:    iss.Number,
+		})
+	}
+	for i := range prs {
+		pr := &prs[i]
+		items = append(items, issueListItem{
+			pr:        pr,
+			createdAt: pr.CreatedAt,
+			updatedAt: pr.UpdatedAt,
+			number:    pr.Number,
+		})
+	}
+	return items
+}
+
+func collectIssueListUserLogins(items []issueListItem) []string {
+	logins := make([]string, 0)
+	seen := make(map[string]struct{})
+	addLogin := func(login string) {
+		login = strings.TrimSpace(login)
+		if login == "" {
+			return
+		}
+		if _, ok := seen[login]; ok {
+			return
+		}
+		seen[login] = struct{}{}
+		logins = append(logins, login)
+	}
+	addAssignees := func(raw string) {
+		for _, login := range strings.Split(raw, ",") {
+			addLogin(login)
+		}
+	}
+	for _, item := range items {
+		if item.issue != nil {
+			addAssignees(item.issue.AssigneeLogins)
+			addLogin(item.issue.ClosedByLogin)
+		}
+		if item.pr != nil {
+			addAssignees(item.pr.AssigneeLogins)
+		}
+	}
+	return logins
+}
+
+func (d *Deps) countCommentsForItems(ctx context.Context, items []issueListItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	var issueNumbers []int
+	var issueRepoID uint
+	hasIssueRepo := false
+	for i := range items {
+		if items[i].issue == nil {
+			continue
+		}
+		issueNumbers = append(issueNumbers, items[i].issue.Number)
+		if !hasIssueRepo {
+			issueRepoID = items[i].issue.RepositoryID
+			hasIssueRepo = true
+		}
+	}
+	if len(issueNumbers) > 0 {
+		commentCounts, err := d.Svc.CountIssueCommentsBatch(ctx, issueRepoID, issueNumbers)
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			if items[i].issue != nil {
+				items[i].comments = commentCounts[items[i].issue.Number]
+			}
+		}
+	}
+	var prNumbers []int
+	var prRepoID uint
+	hasPRRepo := false
+	for i := range items {
+		if items[i].pr == nil {
+			continue
+		}
+		prNumbers = append(prNumbers, items[i].pr.Number)
+		if !hasPRRepo {
+			prRepoID = items[i].pr.RepositoryID
+			hasPRRepo = true
+		}
+	}
+	if len(prNumbers) > 0 {
+		prCommentCounts := d.Svc.CountPRCommentsBatch(ctx, prRepoID, prNumbers)
+		for i := range items {
+			if items[i].pr != nil {
+				items[i].comments = prCommentCounts[items[i].pr.Number]
+			}
+		}
+	}
+
+	return nil
+}
+
+func sortIssueItems(items []issueListItem, sortKey, sortDir string) {
+	compareTime := func(a, b time.Time) int {
+		if a.Before(b) {
+			return -1
+		}
+		if a.After(b) {
+			return 1
+		}
+		return 0
+	}
+	compareInt64 := func(a, b int64) int {
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	}
+	sort.Slice(items, func(i, j int) bool {
+		a := items[i]
+		b := items[j]
+		var cmp int
+		switch sortKey {
+		case "updated":
+			cmp = compareTime(a.updatedAt, b.updatedAt)
+		case "comments":
+			cmp = compareInt64(a.comments, b.comments)
+		default:
+			cmp = compareTime(a.createdAt, b.createdAt)
+		}
+		if cmp == 0 {
+			cmp = compareInt64(int64(a.number), int64(b.number))
+		}
+		if sortDir == "asc" {
+			return cmp < 0
+		}
+		return cmp > 0
+	})
+}
+
+func (d *Deps) buildIssueListResponse(ctx context.Context, items []issueListItem, resolver transform.UserResolver, assoc transform.AuthorAssociationChecks) ([]any, error) {
+	// Batch-fetch reaction counts for all issues in one query instead of N+1.
+	issueIDs := make([]uint, 0, len(items))
+	for _, item := range items {
+		if item.issue != nil {
+			issueIDs = append(issueIDs, item.issue.ID)
+		}
+	}
+	allReactions, err := d.Svc.CountReactionsBatch(ctx, issueIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]any, len(items))
+	for i, item := range items {
+		if item.issue != nil {
+			out[i] = transform.Issue(*item.issue, resolver, assoc, transform.IssueCounts{
+				Comments:  item.comments,
+				Reactions: allReactions[item.issue.ID],
+			})
+			continue
+		}
+		if item.pr != nil {
+			out[i] = transform.IssueFromPR(*item.pr, resolver, assoc, item.comments)
+		}
+	}
+	return out, nil
+}
+
+func parseFilterList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, strings.ToLower(p))
+	}
+	return out
+}
+
+func prHasAllLabels(pr db.PullRequest, labels []string) bool {
+	if len(labels) == 0 {
+		return true
+	}
+	if len(pr.Labels) == 0 {
+		return false
+	}
+	prLabels := make(map[string]struct{}, len(pr.Labels))
+	for _, label := range pr.Labels {
+		prLabels[strings.ToLower(label.Name)] = struct{}{}
+	}
+	for _, label := range labels {
+		if _, ok := prLabels[label]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func prHasAssignee(pr db.PullRequest, login string) bool {
+	login = strings.TrimSpace(login)
+	if login == "" {
+		return true
+	}
+	for _, assignee := range strings.Split(pr.AssigneeLogins, ",") {
+		assignee = strings.TrimSpace(assignee)
+		if assignee == "" {
+			continue
+		}
+		if strings.EqualFold(assignee, login) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterPRs(prs []db.PullRequest, labels []string, assignee, creator, milestone string, since time.Time, hasSince bool) ([]db.PullRequest, bool) {
+	rawMilestone := strings.TrimSpace(milestone)
+	milestone = strings.ToLower(rawMilestone)
+	var (
+		milestoneMode   string
+		milestoneRaw    string
+		milestoneNum    int
+		hasMilestoneNum bool
+	)
+	switch milestone {
+	case "":
+		milestoneMode = ""
+	case "*":
+		milestoneMode = "any"
+	case "none":
+		milestoneMode = "none"
+	default:
+		milestoneMode = "match"
+		milestoneRaw = rawMilestone
+		n, err := strconv.Atoi(rawMilestone)
+		if err == nil {
+			hasMilestoneNum = true
+			milestoneNum = n
+		}
+	}
+	out := make([]db.PullRequest, 0, len(prs))
+	for _, pr := range prs {
+		if assignee != "" && !prHasAssignee(pr, assignee) {
+			continue
+		}
+		if creator != "" && !strings.EqualFold(pr.Author.Login, creator) {
+			continue
+		}
+		if !prHasAllLabels(pr, labels) {
+			continue
+		}
+		if hasSince && pr.UpdatedAt.Before(since) {
+			continue
+		}
+		switch milestoneMode {
+		case "any":
+			if pr.MilestoneID == nil {
+				continue
+			}
+		case "none":
+			if pr.MilestoneID != nil {
+				continue
+			}
+		case "match":
+			if pr.Milestone == nil {
+				continue
+			}
+			if hasMilestoneNum && pr.Milestone.Number == milestoneNum {
+				break
+			}
+			if !strings.EqualFold(pr.Milestone.Title, milestoneRaw) {
+				continue
+			}
+		}
+		out = append(out, pr)
+	}
+	return out, false
+}

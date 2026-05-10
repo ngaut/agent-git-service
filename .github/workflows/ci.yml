@@ -1,0 +1,254 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Check Go formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request)
+              mapfile -t files < <(git diff --name-only --diff-filter=ACMR \
+                "${{ github.event.pull_request.base.sha }}...HEAD" \
+                -- '*.go' ':(exclude)cli/**')
+              ;;
+            push)
+              if [[ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]]; then
+                mapfile -t files < <(git ls-files '*.go' ':(exclude)cli/**')
+              else
+                mapfile -t files < <(git diff --name-only --diff-filter=ACMR \
+                  "${{ github.event.before }}" HEAD \
+                  -- '*.go' ':(exclude)cli/**')
+              fi
+              ;;
+            *)
+              mapfile -t files < <(git ls-files '*.go' ':(exclude)cli/**')
+              ;;
+          esac
+
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No non-CLI Go files changed."
+            exit 0
+          fi
+
+          unformatted="$(gofmt -l "${files[@]}")"
+          if [[ -n "${unformatted}" ]]; then
+            echo "Go files are not formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+  regression-gate:
+    name: Regression Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.7'
+          cache-dependency-path: |
+            go.sum
+            cli/go.sum
+            cli/_go-gh-local/go.sum
+
+      - name: Run regression gate
+        run: bash scripts/regression_gate.sh
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.7'
+          cache-dependency-path: go.sum
+
+      - name: Run unit tests
+        run: make test-unit
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.7'
+          cache-dependency-path: |
+            go.sum
+            cli/go.sum
+
+      - name: Run integration tests
+        run: make test-integration
+
+  compatibility-tests:
+    name: Compatibility Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.7'
+          cache-dependency-path: |
+            go.sum
+            cli/go.sum
+
+      - name: Install TiDB test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          echo "${HOME}/.tiup/bin" >> "${GITHUB_PATH}"
+
+      - name: Prepare compatibility test environment
+        run: make test-setup
+
+      - name: Verify Docker access
+        run: |
+          docker --version
+          docker run --rm hello-world
+
+      - name: Start compatibility server
+        env:
+          GIT_REPO_DIR: /tmp/gh-server-compatibility-repos
+          LISTEN_MODE: production
+          PORT: '80'
+          ADMIN_LOGIN: testadmin
+          ADMIN_TOKEN: mytoken
+          ENABLE_WORKFLOW_EXEC: "1"
+        run: make run-bg
+
+      - name: Run compatibility tests
+        run: make test
+
+      - name: Clean compatibility environment
+        if: always()
+        run: make test-clean-all
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install E2E test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          echo "${HOME}/.tiup/bin" >> "${GITHUB_PATH}"
+
+      - name: Prepare e2e test environment
+        run: make test-setup
+
+      - name: Start e2e server
+        env:
+          GIT_REPO_DIR: /tmp/gh-server-e2e-repos
+          LISTEN_MODE: production
+          PORT: '80'
+          ADMIN_LOGIN: testadmin
+          ADMIN_TOKEN: mytoken
+          ENABLE_WORKFLOW_EXEC: "1"
+        run: make run-bg
+
+      - name: Run full e2e suite
+        run: make test-e2e
+
+      - name: Clean e2e environment
+        if: always()
+        run: make test-clean-all
+
+  backend-smoke:
+    name: Backend Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run backend smoke
+        run: bash scripts/backend_smoke.sh
+
+  ci-success:
+    name: CI Success
+    needs:
+      - lint
+      - regression-gate
+      - unit-tests
+      - integration-tests
+      - compatibility-tests
+      - e2e-tests
+      - backend-smoke
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ needs.lint.result }}" != "success" ||
+                "${{ needs.regression-gate.result }}" != "success" ||
+                "${{ needs.unit-tests.result }}" != "success" ||
+                "${{ needs.integration-tests.result }}" != "success" ||
+                "${{ needs.compatibility-tests.result }}" != "success" ||
+                "${{ needs.e2e-tests.result }}" != "success" ||
+                "${{ needs.backend-smoke.result }}" != "success" ]]; then
+            echo "One or more CI jobs failed."
+            exit 1
+          fi
+
+          echo "All CI checks passed."

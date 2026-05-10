@@ -1,0 +1,23 @@
+# Create a repository
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+
+# Defer repo cleanup
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Create an autolink reference
+exec gh repo autolink create TICKET- 'https://example.com/TICKET?id=<num>' -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# List autolinks and verify it exists
+exec gh repo autolink list -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+stdout 'TICKET-'
+
+# Get the autolink ID for deletion
+exec gh repo autolink list -R $ORG/$SCRIPT_NAME-$RANDOM_STRING --json id --jq '.[0].id'
+stdout2env AUTOLINK_ID
+
+# Delete the autolink
+exec gh repo autolink delete $AUTOLINK_ID -R $ORG/$SCRIPT_NAME-$RANDOM_STRING --yes
+
+# Verify it's gone
+exec gh repo autolink list -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+! stdout 'TICKET-'

@@ -1,0 +1,27 @@
+# Setup environment variables
+env REPO=${SCRIPT_NAME}-${RANDOM_STRING}
+env VAR_NAME=TEST_VAR_DELETE
+
+# Create a repository
+exec gh repo create $ORG/$REPO --add-readme --private
+
+# Defer repo cleanup
+defer gh repo delete --yes $ORG/$REPO
+
+# Clone the repo
+exec gh repo clone $ORG/$REPO
+cd $REPO
+
+# Create a repository variable
+exec gh variable set $VAR_NAME --body 'variable to delete'
+
+# Verify the variable exists
+exec gh variable list
+stdout $VAR_NAME
+
+# Delete the variable
+exec gh variable delete $VAR_NAME
+
+# Verify the variable is gone
+exec gh variable list
+! stdout $VAR_NAME

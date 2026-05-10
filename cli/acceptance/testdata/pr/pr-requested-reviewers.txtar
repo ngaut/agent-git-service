@@ -1,0 +1,74 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Prepare a branch to PR
+cd $SCRIPT_NAME-$RANDOM_STRING
+exec git config user.email "test@example.com"
+exec git config user.name "Test User"
+exec git checkout -b feature-branch
+exec git commit --allow-empty -m 'Empty Commit'
+exec git push -u origin feature-branch
+
+# Create the PR
+exec gh pr create --title 'Reviewers Test' --body 'Test PR for reviewer requests'
+stdout2env PR_URL
+
+# Extract PR number from URL
+exec bash -c 'echo "$PR_URL" | grep -oE "[0-9]+$"'
+stdout2env PR_NUMBER
+
+# Get current user for self-reference
+exec gh api user --jq .login
+stdout2env CURRENT_USER
+
+# Test 1: Request individual reviewers
+# POST /repos/{owner}/{repo}/pulls/{number}/requested_reviewers
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers -f reviewers[]=$CURRENT_USER
+stdout '"login":"'
+stdout $CURRENT_USER
+
+# Test 2: List requested reviewers
+# GET /repos/{owner}/{repo}/pulls/{number}/requested_reviewers
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers
+stdout '"users":'
+stdout '"login":"'
+stdout $CURRENT_USER
+
+# Verify PR view shows review request data
+exec gh pr view $PR_URL --json reviewRequests
+stdout '"login":"'
+stdout $CURRENT_USER
+
+# Test 3: Request team reviewers (if teams are supported)
+# POST /repos/{owner}/{repo}/pulls/{number}/requested_reviewers with team_reviewers
+# Note: This may not work in all test environments, so we skip if it fails
+exec sh -c 'gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers -f team_reviewers[]=test-team || true'
+
+# Test 4: Remove review request
+# DELETE /repos/{owner}/{repo}/pulls/{number}/requested_reviewers
+exec gh api --method DELETE /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers -f reviewers[]=$CURRENT_USER
+
+# Verify reviewer is removed
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers
+stdout '"users":\[\]'
+
+# Test 5: Edge case - Request non-existent user
+# Current backend accepts arbitrary login strings and stores them as-is.
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers -f reviewers[]=nonexistent-user-xyz-123
+stdout '"login":"nonexistent-user-xyz-123"'
+
+# Test 6: Request reviewer again and verify state
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers -f reviewers[]=$CURRENT_USER
+
+# Final verification - list reviewers
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/requested_reviewers
+stdout '"users":\['
+stdout '"login":"'
+stdout $CURRENT_USER

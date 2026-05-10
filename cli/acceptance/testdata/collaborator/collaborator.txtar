@@ -1,0 +1,98 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+cd $SCRIPT_NAME-$RANDOM_STRING
+
+# Get current user info
+exec gh api user --jq .login
+stdout2env CURRENT_USER
+
+# Get current user ID for invitation operations
+exec gh api user --jq .id
+stdout2env CURRENT_USER_ID
+
+# Test 1: Invite collaborator with read permission
+# PUT /repos/{owner}/{repo}/collaborators/{username}
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER" \
+  -f permission='read'
+stdout '"permission":"read"'
+
+# Test 2: List collaborators
+# GET /repos/{owner}/{repo}/collaborators
+exec gh api "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators"
+stdout '"login":"'"$CURRENT_USER"'"'
+
+# Test 3: Check if user is a collaborator
+# GET /repos/{owner}/{repo}/collaborators/{username}
+exec gh api "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER"
+stdout '"login":"'"$CURRENT_USER"'"'
+stdout '"permission":"read"'
+
+# Test 4: Update collaborator permission to write
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER" \
+  -f permission='write'
+stdout '"permission":"write"'
+
+# Verify permission updated
+exec gh api "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER"
+stdout '"permission":"write"'
+
+# Test 5: Update collaborator permission to admin
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER" \
+  -f permission='admin'
+stdout '"permission":"admin"'
+
+# Test 6: List collaborators with affiliation filter
+exec gh api "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators?affiliation=direct"
+stdout '"login":"'"$CURRENT_USER"'"'
+
+# Test 7: Edge case - Invite already-existing collaborator (should update permission)
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER" \
+  -f permission='read'
+stdout '"permission":"read"'
+
+# Test 8: List pending invitations (if supported)
+# GET /repos/{owner}/{repo}/invitations
+exec gh api "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/invitations" || true
+
+# Test 9: Remove collaborator
+# DELETE /repos/{owner}/{repo}/collaborators/{username}
+exec gh api --method DELETE \
+  -H "Accept: application/vnd.github+json" \
+  "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER"
+
+# Verify removal - user should no longer be in collaborators list
+exec gh api "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators"
+! stdout '"login":"'"$CURRENT_USER"'"'
+
+# Test 10: Edge case - Remove non-collaborator (should succeed or return 404)
+# This tests that removing a non-collaborator doesn't cause an error
+exec gh api --method DELETE \
+  -H "Accept: application/vnd.github+json" \
+  "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER" || true
+
+# Test 11: Re-add collaborator for final verification
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators/$CURRENT_USER" \
+  -f permission='write'
+stdout '"permission":"write"'
+
+# Final verification: list collaborators
+exec gh api "/repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/collaborators"
+stdout '"login":"'"$CURRENT_USER"'"'
+stdout '"permission":"write"'

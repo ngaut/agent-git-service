@@ -1,0 +1,32 @@
+# Create a project
+env PROJECT_TITLE=$SCRIPT_NAME-$RANDOM_STRING
+exec gh project create --owner=$ORG --title=$PROJECT_TITLE --format='json' --jq='.number'
+stdout2env PROJECT_NUMBER
+
+# Defer project cleanup
+defer gh project delete --owner=$ORG $PROJECT_NUMBER
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+
+# Defer repo cleanup
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Create an issue to add to the project
+exec gh issue create --title 'Project item test' --body 'Testing item lifecycle' -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+stdout2env ISSUE_URL
+
+# Add the issue to the project
+exec gh project item-add $PROJECT_NUMBER --owner=$ORG --url $ISSUE_URL --format='json' --jq='.id'
+stdout2env ITEM_ID
+
+# List items and verify the issue is present
+exec gh project item-list $PROJECT_NUMBER --owner=$ORG
+stdout 'Project item test'
+
+# Delete the item from the project
+exec gh project item-delete $PROJECT_NUMBER --owner=$ORG --id $ITEM_ID
+
+# Verify the item is gone
+exec gh project item-list $PROJECT_NUMBER --owner=$ORG
+! stdout 'Project item test'

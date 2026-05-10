@@ -1,0 +1,26 @@
+title = "agent-git-service gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Vendored GitHub CLI upstream test fixtures and intentionally embedded public OAuth client fixture"
+paths = [
+  '''^cli/\.github/workflows/scripts/spam-detection/eval-prompts\.yml$''',
+  '''^cli/internal/authflow/flow\.go$''',
+  '''^cli/internal/prompter/accessible_prompter_test\.go$''',
+  '''^cli/pkg/cmd/agent-task/agent_task_test\.go$''',
+  '''^cli/pkg/cmd/secret/set/set_test\.go$''',
+]
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Historical placeholder secret-encryption examples and tests already reviewed as non-production fixtures"
+paths = [
+  '''^docs/architecture/secrets-encryption\.md$''',
+  '''^docs/secret-encryption-key\.md$''',
+  '''^docs/security-audit\.md$''',
+  '''^internal/crypto/nacl_test\.go$''',
+  '''^internal/rest/handlers_secrets\.go$''',
+]

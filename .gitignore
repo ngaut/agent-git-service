@@ -1,0 +1,42 @@
+# Binaries
+gh-server
+gh-server-bin
+/cli/gh
+
+# Runtime data
+gitrepos/
+gh-server.db
+local-test.db
+*.sqlite
+*.sqlite3
+artifacts/
+*.log
+*.pid
+
+# TLS certs (generated locally)
+cert.pem
+key.pem
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+*.test
+
+# Scratch
+ref
+gosec-results.json
+coverage.out
+/cli/output*.txt
+/cli/test-results.txt
+
+# Frontend/tool caches
+.vite/

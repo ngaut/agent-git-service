@@ -1,0 +1,30 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Prepare a branch to PR with a file
+cd $SCRIPT_NAME-$RANDOM_STRING
+exec git config user.email "test@example.com"
+exec git config user.name "Test User"
+exec git checkout -b feature-branch
+mv ../file.txt file.txt
+exec git add .
+exec git commit -m 'Add file.txt'
+exec git push -u origin feature-branch
+
+# Create the PR
+exec gh pr create --title 'Diff Test' --body 'Body'
+stdout2env PR_URL
+
+# View diff
+exec gh pr diff $PR_URL
+stdout 'file.txt'
+
+-- file.txt --
+Hello from the diff test

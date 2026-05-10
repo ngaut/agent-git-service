@@ -1,0 +1,57 @@
+# Code Search Multi-Repo Acceptance Test
+# Tests that code search covers all repositories accessible to the current token
+
+# Setup: Create two private repositories reachable by the same authenticated user
+exec gh auth setup-git
+
+# Create the first repository with unique content
+exec gh repo create $ORG/$SCRIPT_NAME-a-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-a-$RANDOM_STRING
+exec gh repo clone $ORG/$SCRIPT_NAME-a-$RANDOM_STRING
+cd $SCRIPT_NAME-a-$RANDOM_STRING
+exec git config user.email "tenant-a@example.com"
+exec git config user.name "Tenant A"
+
+# Add the first repository's unique searchable content
+mv ../tenant_a_secret.txt tenant_a_secret.txt
+exec git add .
+exec git commit -m 'Add tenant A secret content'
+exec git push origin main
+cd ..
+
+# Create the second repository with unique content
+exec gh repo create $ORG/$SCRIPT_NAME-b-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-b-$RANDOM_STRING
+exec gh repo clone $ORG/$SCRIPT_NAME-b-$RANDOM_STRING
+cd $SCRIPT_NAME-b-$RANDOM_STRING
+exec git config user.email "tenant-b@example.com"
+exec git config user.name "Tenant B"
+
+# Add the second repository's unique searchable content
+mv ../tenant_b_secret.txt tenant_b_secret.txt
+exec git add .
+exec git commit -m 'Add tenant B secret content'
+exec git push origin main
+cd ..
+
+# Wait for indexing
+sleep 3
+
+# Test 1: Search for the first repository's unique content
+exec gh search code 'TenantAUniqueSecretPhrase' --json path,repository --jq '.[].path'
+stdout 'tenant_a_secret.txt'
+! stdout 'tenant_b_secret.txt'
+
+# Test 2: Verify the same token can search content from the second repository too
+# Both repositories were created with the same authenticated context.
+exec gh search code 'TenantBUniqueSecretPhrase' --json path,repository --jq '.[].path'
+stdout 'tenant_b_secret.txt'
+! stdout 'tenant_a_secret.txt'
+
+-- tenant_a_secret.txt --
+This file contains TenantAUniqueSecretPhrase for multi-repo search testing
+Repository A content for search result scoping checks
+
+-- tenant_b_secret.txt --
+This file contains TenantBUniqueSecretPhrase for multi-repo search testing
+Repository B content for search result scoping checks

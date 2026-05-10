@@ -1,0 +1,39 @@
+View repo/README.md
+
+old line                                                                    
+  new line                                                                    
+  unchanged line                                                              
+  INSIDE A VIEW CALL
+
+
+Interim reasoning that should show as raw markdown.
+
+Thought
+
+A valid thought to render.
+
+Progress update: Valid commit msg
+Create: repo/new.txt
+hello world
+
+Edit: repo/file.diff
+@@ -1,2 +1,2 @@                                                           
+    -old line                                                                 
+    +new line                                                                 
+    unchanged line
+
+Call to mystery_tool
+
+Output:
+
+{                                                                         
+      "foo": 1                                                                
+    }
+
+
+Input:
+
+{                                                                         
+      "bar": 2                                                                
+    }
+

@@ -1,0 +1,637 @@
+package view
+
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/cli/cli/v2/internal/browser"
+	"github.com/cli/cli/v2/internal/config"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
+	"github.com/cli/cli/v2/internal/gh"
+	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/run"
+	"github.com/cli/cli/v2/pkg/cmd/issue/argparsetest"
+	"github.com/cli/cli/v2/pkg/cmdutil"
+	"github.com/cli/cli/v2/pkg/httpmock"
+	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/cli/cli/v2/pkg/jsonfieldstest"
+	"github.com/cli/cli/v2/test"
+	"github.com/google/shlex"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestJSONFields(t *testing.T) {
+	jsonfieldstest.ExpectCommandToSupportJSONFields(t, NewCmdView, []string{
+		"assignees",
+		"author",
+		"body",
+		"closed",
+		"comments",
+		"closedByPullRequestsReferences",
+		"createdAt",
+		"closedAt",
+		"id",
+		"labels",
+		"milestone",
+		"number",
+		"projectCards",
+		"projectItems",
+		"reactionGroups",
+		"state",
+		"title",
+		"updatedAt",
+		"url",
+		"isPinned",
+		"stateReason",
+	})
+}
+
+func TestNewCmdView(t *testing.T) {
+	// Test shared parsing of issue number / URL.
+	argparsetest.TestArgParsing(t, NewCmdView)
+}
+
+func runCommand(rt http.RoundTripper, isTTY bool, cli string) (*test.CmdOut, error) {
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(isTTY)
+	ios.SetStdinTTY(isTTY)
+	ios.SetStderrTTY(isTTY)
+
+	factory := &cmdutil.Factory{
+		IOStreams: ios,
+		HttpClient: func() (*http.Client, error) {
+			return &http.Client{Transport: rt}, nil
+		},
+		Config: func() (gh.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+		BaseRepo: func() (ghrepo.Interface, error) {
+			return ghrepo.New("OWNER", "REPO"), nil
+		},
+	}
+
+	cmd := NewCmdView(factory, nil)
+
+	argv, err := shlex.Split(cli)
+	if err != nil {
+		return nil, err
+	}
+	cmd.SetArgs(argv)
+
+	cmd.SetIn(&bytes.Buffer{})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	_, err = cmd.ExecuteC()
+	return &test.CmdOut{
+		OutBuf: stdout,
+		ErrBuf: stderr,
+	}, err
+}
+
+func TestIssueView_web(t *testing.T) {
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(true)
+	ios.SetStderrTTY(true)
+	browser := &browser.Stub{}
+
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.GraphQL(`query IssueByNumber\b`),
+		httpmock.StringResponse(`
+			{ "data": { "repository": { "hasIssuesEnabled": true, "issue": {
+				"number": 123,
+				"url": "https://github.com/OWNER/REPO/issues/123"
+			} } } }
+		`))
+
+	_, cmdTeardown := run.Stub()
+	defer cmdTeardown(t)
+
+	err := viewRun(&ViewOptions{
+		IO:      ios,
+		Browser: browser,
+		HttpClient: func() (*http.Client, error) {
+			return &http.Client{Transport: reg}, nil
+		},
+		BaseRepo: func() (ghrepo.Interface, error) {
+			return ghrepo.New("OWNER", "REPO"), nil
+		},
+		WebMode:     true,
+		IssueNumber: 123,
+	})
+	if err != nil {
+		t.Errorf("error running command `issue view`: %v", err)
+	}
+
+	assert.Equal(t, "", stdout.String())
+	assert.Equal(t, "Opening https://github.com/OWNER/REPO/issues/123 in your browser.\n", stderr.String())
+	browser.Verify(t, "https://github.com/OWNER/REPO/issues/123")
+}
+
+func TestIssueView_nontty_Preview(t *testing.T) {
+	tests := map[string]struct {
+		httpStubs       func(*httpmock.Registry)
+		expectedOutputs []string
+	}{
+		"Open issue without metadata": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_preview.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`title:\tix of coins`,
+				`state:\tOPEN`,
+				`comments:\t9`,
+				`author:\tmarseilles`,
+				`assignees:`,
+				`number:\t123\n`,
+				`\*\*bold story\*\*`,
+			},
+		},
+		"Open issue with metadata": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewWithMetadata.json"))
+				mockV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`title:\tix of coins`,
+				`assignees:\tmarseilles, monaco`,
+				`author:\tmarseilles`,
+				`state:\tOPEN`,
+				`comments:\t9`,
+				`labels:\tClosed: Duplicate, Closed: Won't Fix, help wanted, Status: In Progress, Type: Bug`,
+				`projects:\tv2 Project 1 \(No Status\), v2 Project 2 \(Done\), Project 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\), Project 4 \(Awaiting triage\)\n`,
+				`milestone:\tuluru\n`,
+				`number:\t123\n`,
+				`\*\*bold story\*\*`,
+			},
+		},
+		"Open issue with empty body": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewWithEmptyBody.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`title:\tix of coins`,
+				`state:\tOPEN`,
+				`author:\tmarseilles`,
+				`labels:\ttarot`,
+				`number:\t123\n`,
+			},
+		},
+		"Closed issue": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewClosedState.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`title:\tix of coins`,
+				`state:\tCLOSED`,
+				`\*\*bold story\*\*`,
+				`author:\tmarseilles`,
+				`labels:\ttarot`,
+				`number:\t123\n`,
+				`\*\*bold story\*\*`,
+			},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			http := &httpmock.Registry{}
+			defer http.Verify(t)
+			if tc.httpStubs != nil {
+				tc.httpStubs(http)
+			}
+
+			output, err := runCommand(http, false, "123")
+			if err != nil {
+				t.Errorf("error running `issue view`: %v", err)
+			}
+
+			assert.Equal(t, "", output.Stderr())
+
+			//nolint:staticcheck // prefer exact matchers over ExpectLines
+			test.ExpectLines(t, output.String(), tc.expectedOutputs...)
+		})
+	}
+}
+
+func TestIssueView_tty_Preview(t *testing.T) {
+	tests := map[string]struct {
+		httpStubs       func(*httpmock.Registry)
+		expectedOutputs []string
+	}{
+		"Open issue without metadata": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_preview.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`ix of coins OWNER/REPO#123`,
+				`Open.*marseilles opened about 9 years ago.*9 comments`,
+				`bold story`,
+				`View this issue on GitHub: https://github.com/OWNER/REPO/issues/123`,
+			},
+		},
+		"Open issue with metadata": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewWithMetadata.json"))
+				mockV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`ix of coins OWNER/REPO#123`,
+				`Open.*marseilles opened about 9 years ago.*9 comments`,
+				`8 \x{1f615} • 7 \x{1f440} • 6 \x{2764}\x{fe0f} • 5 \x{1f389} • 4 \x{1f604} • 3 \x{1f680} • 2 \x{1f44e} • 1 \x{1f44d}`,
+				`Assignees:.*marseilles, monaco\n`,
+				`Labels:.*Closed: Duplicate, Closed: Won't Fix, help wanted, Status: In Progress, Type: Bug\n`,
+				`Projects:.*v2 Project 1 \(No Status\), v2 Project 2 \(Done\), Project 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\), Project 4 \(Awaiting triage\)\n`,
+				`Milestone:.*uluru\n`,
+				`bold story`,
+				`View this issue on GitHub: https://github.com/OWNER/REPO/issues/123`,
+			},
+		},
+		"Open issue with empty body": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewWithEmptyBody.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`ix of coins OWNER/REPO#123`,
+				`Open.*marseilles opened about 9 years ago.*9 comments`,
+				`No description provided`,
+				`View this issue on GitHub: https://github.com/OWNER/REPO/issues/123`,
+			},
+		},
+		"Closed issue": {
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewClosedState.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`ix of coins OWNER/REPO#123`,
+				`Closed.*marseilles opened about 9 years ago.*9 comments`,
+				`bold story`,
+				`View this issue on GitHub: https://github.com/OWNER/REPO/issues/123`,
+			},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(true)
+			ios.SetStdinTTY(true)
+			ios.SetStderrTTY(true)
+
+			httpReg := &httpmock.Registry{}
+			defer httpReg.Verify(t)
+			if tc.httpStubs != nil {
+				tc.httpStubs(httpReg)
+			}
+
+			opts := ViewOptions{
+				IO: ios,
+				Now: func() time.Time {
+					t, _ := time.Parse(time.RFC822, "03 Nov 20 15:04 UTC")
+					return t
+				},
+				HttpClient: func() (*http.Client, error) {
+					return &http.Client{Transport: httpReg}, nil
+				},
+				BaseRepo: func() (ghrepo.Interface, error) {
+					return ghrepo.New("OWNER", "REPO"), nil
+				},
+				IssueNumber: 123,
+			}
+
+			err := viewRun(&opts)
+			assert.NoError(t, err)
+
+			assert.Equal(t, "", stderr.String())
+
+			//nolint:staticcheck // prefer exact matchers over ExpectLines
+			test.ExpectLines(t, stdout.String(), tc.expectedOutputs...)
+		})
+	}
+}
+
+func TestIssueView_web_notFound(t *testing.T) {
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
+
+	http.Register(
+		httpmock.GraphQL(`query IssueByNumber\b`),
+		httpmock.StringResponse(`
+			{ "errors": [
+				{ "message": "Could not resolve to an Issue with the number of 9999." }
+			] }
+			`),
+	)
+
+	_, cmdTeardown := run.Stub()
+	defer cmdTeardown(t)
+
+	_, err := runCommand(http, true, "-w 9999")
+	if err == nil || err.Error() != "GraphQL: Could not resolve to an Issue with the number of 9999." {
+		t.Errorf("error running command `issue view`: %v", err)
+	}
+}
+
+func TestIssueView_disabledIssues(t *testing.T) {
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
+
+	http.Register(
+		httpmock.GraphQL(`query IssueByNumber\b`),
+		httpmock.StringResponse(`
+			{
+				"data":
+					{ "repository": {
+						"id": "REPOID",
+						"hasIssuesEnabled": false
+					}
+				},
+				"errors": [
+					{
+						"type": "NOT_FOUND",
+						"path": [
+							"repository",
+							"issue"
+						],
+						"message": "Could not resolve to an issue or pull request with the number of 6666."
+					}
+				]
+			}
+		`),
+	)
+
+	_, err := runCommand(http, true, `6666`)
+	if err == nil || err.Error() != "the 'OWNER/REPO' repository has disabled issues" {
+		t.Errorf("error running command `issue view`: %v", err)
+	}
+}
+
+func TestIssueView_tty_Comments(t *testing.T) {
+	tests := map[string]struct {
+		cli             string
+		httpStubs       func(*httpmock.Registry)
+		expectedOutputs []string
+		wantsErr        bool
+	}{
+		"without comments flag": {
+			cli: "123",
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewSingleComment.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`some title OWNER/REPO#123`,
+				`some body`,
+				`———————— Not showing 5 comments ————————`,
+				`marseilles \(Collaborator\) • Jan  1, 2020 • Newest comment`,
+				`Comment 5`,
+				`Use --comments to view the full conversation`,
+				`View this issue on GitHub: https://github.com/OWNER/REPO/issues/123`,
+			},
+		},
+		"with comments flag": {
+			cli: "123 --comments",
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewSingleComment.json"))
+				r.Register(httpmock.GraphQL(`query CommentsForIssue\b`), httpmock.FileResponse("./fixtures/issueView_previewFullComments.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`some title OWNER/REPO#123`,
+				`some body`,
+				`monalisa • Jan  1, 2020 • Edited`,
+				`1 \x{1f615} • 2 \x{1f440} • 3 \x{2764}\x{fe0f} • 4 \x{1f389} • 5 \x{1f604} • 6 \x{1f680} • 7 \x{1f44e} • 8 \x{1f44d}`,
+				`Comment 1`,
+				`johnnytest \(Contributor\) • Jan  1, 2020`,
+				`Comment 2`,
+				`elvisp \(Member\) • Jan  1, 2020`,
+				`Comment 3`,
+				`loislane \(Owner\) • Jan  1, 2020`,
+				`Comment 4`,
+				`sam-spam • This comment has been marked as spam`,
+				`marseilles \(Collaborator\) • Jan  1, 2020 • Newest comment`,
+				`Comment 5`,
+				`View this issue on GitHub: https://github.com/OWNER/REPO/issues/123`,
+			},
+		},
+		"with invalid comments flag": {
+			cli:      "123 --comments 3",
+			wantsErr: true,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			http := &httpmock.Registry{}
+			defer http.Verify(t)
+			if tc.httpStubs != nil {
+				tc.httpStubs(http)
+			}
+			output, err := runCommand(http, true, tc.cli)
+			if tc.wantsErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, "", output.Stderr())
+			//nolint:staticcheck // prefer exact matchers over ExpectLines
+			test.ExpectLines(t, output.String(), tc.expectedOutputs...)
+		})
+	}
+}
+
+func TestIssueView_nontty_Comments(t *testing.T) {
+	tests := map[string]struct {
+		cli             string
+		httpStubs       func(*httpmock.Registry)
+		expectedOutputs []string
+		wantsErr        bool
+	}{
+		"without comments flag": {
+			cli: "123",
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewSingleComment.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`title:\tsome title`,
+				`state:\tOPEN`,
+				`author:\tmarseilles`,
+				`comments:\t6`,
+				`number:\t123`,
+				`some body`,
+			},
+		},
+		"with comments flag": {
+			cli: "123 --comments",
+			httpStubs: func(r *httpmock.Registry) {
+				r.Register(httpmock.GraphQL(`query IssueByNumber\b`), httpmock.FileResponse("./fixtures/issueView_previewSingleComment.json"))
+				r.Register(httpmock.GraphQL(`query CommentsForIssue\b`), httpmock.FileResponse("./fixtures/issueView_previewFullComments.json"))
+				mockEmptyV2ProjectItems(t, r)
+			},
+			expectedOutputs: []string{
+				`author:\tmonalisa`,
+				`association:\t`,
+				`edited:\ttrue`,
+				`Comment 1`,
+				`author:\tjohnnytest`,
+				`association:\tcontributor`,
+				`edited:\tfalse`,
+				`Comment 2`,
+				`author:\telvisp`,
+				`association:\tmember`,
+				`edited:\tfalse`,
+				`Comment 3`,
+				`author:\tloislane`,
+				`association:\towner`,
+				`edited:\tfalse`,
+				`Comment 4`,
+				`author:\tmarseilles`,
+				`association:\tcollaborator`,
+				`edited:\tfalse`,
+				`Comment 5`,
+			},
+		},
+		"with invalid comments flag": {
+			cli:      "123 --comments 3",
+			wantsErr: true,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			http := &httpmock.Registry{}
+			defer http.Verify(t)
+			if tc.httpStubs != nil {
+				tc.httpStubs(http)
+			}
+			output, err := runCommand(http, false, tc.cli)
+			if tc.wantsErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, "", output.Stderr())
+			//nolint:staticcheck // prefer exact matchers over ExpectLines
+			test.ExpectLines(t, output.String(), tc.expectedOutputs...)
+		})
+	}
+}
+
+// TODO projectsV1Deprecation
+// Remove this test.
+func TestProjectsV1Deprecation(t *testing.T) {
+	t.Run("when projects v1 is supported, is included in query", func(t *testing.T) {
+		ios, _, _, _ := iostreams.Test()
+
+		reg := &httpmock.Registry{}
+		reg.Register(
+			httpmock.GraphQL(`projectCards`),
+			// Simulate a GraphQL error to early exit the test.
+			httpmock.StatusStringResponse(500, ""),
+		)
+
+		_, cmdTeardown := run.Stub()
+		defer cmdTeardown(t)
+
+		// Ignore the error because we have no way to really stub it without
+		// fully stubbing a GQL error structure in the request body.
+		_ = viewRun(&ViewOptions{
+			IO: ios,
+			HttpClient: func() (*http.Client, error) {
+				return &http.Client{Transport: reg}, nil
+			},
+			BaseRepo: func() (ghrepo.Interface, error) {
+				return ghrepo.New("OWNER", "REPO"), nil
+			},
+
+			Detector:    &fd.EnabledDetectorMock{},
+			IssueNumber: 123,
+		})
+
+		// Verify that our request contained projectCards
+		reg.Verify(t)
+	})
+
+	t.Run("when projects v1 is not supported, is not included in query", func(t *testing.T) {
+		ios, _, _, _ := iostreams.Test()
+
+		reg := &httpmock.Registry{}
+		reg.Exclude(t, httpmock.GraphQL(`projectCards`))
+
+		_, cmdTeardown := run.Stub()
+		defer cmdTeardown(t)
+
+		// Ignore the error because we're not really interested in it.
+		_ = viewRun(&ViewOptions{
+			IO: ios,
+			HttpClient: func() (*http.Client, error) {
+				return &http.Client{Transport: reg}, nil
+			},
+			BaseRepo: func() (ghrepo.Interface, error) {
+				return ghrepo.New("OWNER", "REPO"), nil
+			},
+
+			Detector:    &fd.DisabledDetectorMock{},
+			IssueNumber: 123,
+		})
+
+		// Verify that our request contained projectCards
+		reg.Verify(t)
+	})
+}
+
+// mockEmptyV2ProjectItems registers GraphQL queries to report an issue is not contained on any v2 projects.
+func mockEmptyV2ProjectItems(t *testing.T, r *httpmock.Registry) {
+	r.Register(httpmock.GraphQL(`query IssueProjectItems\b`), httpmock.StringResponse(`
+		{ "data": { "repository": { "issue": {
+			"projectItems": {
+				"totalCount": 0,
+				"nodes": []
+		} } } } }
+	`))
+}
+
+// mockV2ProjectItems registers GraphQL queries to report an issue on multiple v2 projects in various states
+// - `NO_STATUS_ITEM`: emulates this issue is on a project but is not given a status
+// - `DONE_STATUS_ITEM`: emulates this issue is on a project and considered done
+func mockV2ProjectItems(t *testing.T, r *httpmock.Registry) {
+	r.Register(httpmock.GraphQL(`query IssueProjectItems\b`), httpmock.StringResponse(`
+		{ "data": { "repository": { "issue": {
+			"projectItems": {
+				"totalCount": 2,
+				"nodes": [
+					{
+						"id": "NO_STATUS_ITEM",
+						"project": {
+							"id": "PROJECT1",
+							"title": "v2 Project 1"
+						},
+						"status": {
+							"optionId": "",
+							"name": ""
+						}
+					},
+					{
+						"id": "DONE_STATUS_ITEM",
+						"project": {
+							"id": "PROJECT2",
+							"title": "v2 Project 2"
+						},
+						"status": {
+							"optionId": "PROJECTITEMFIELD1",
+							"name": "Done"
+						}
+					}
+				]
+			} } } } }
+	`))
+}

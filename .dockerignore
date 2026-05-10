@@ -1,0 +1,11 @@
+.git
+.github/
+.agents/
+cli/
+docs/
+e2e/
+scripts/
+*.pem
+.env
+gitrepos/
+gh-server

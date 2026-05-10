@@ -1,0 +1,131 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Get current user info
+exec gh api user --jq .login
+stdout2env CURRENT_USER
+
+# Create a team
+# POST /orgs/{org}/teams
+exec gh api --method POST \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams" \
+  -f name='Test Team' \
+  -f description='Test team for acceptance tests' \
+  -f privacy='closed'
+stdout '"name":"Test Team"'
+stdout '"description":"Test team for acceptance tests"'
+stdout2env TEAM1_JSON
+exec bash -c 'echo "$TEAM1_JSON" | grep -oE "\"slug\":\"[^\"]+\"" | cut -d"\"" -f4'
+stdout2env TEAM1_SLUG
+
+# List teams
+# GET /orgs/{org}/teams
+exec gh api "/orgs/$ORG/teams"
+stdout '"slug":"'"$TEAM1_SLUG"'"'
+
+# Get team by slug
+# GET /orgs/{org}/teams/{slug}
+exec gh api "/orgs/$ORG/teams/$TEAM1_SLUG"
+stdout '"name":"Test Team"'
+stdout '"slug":"'"$TEAM1_SLUG"'"'
+
+# Update team
+# PATCH /orgs/{org}/teams/{slug}
+exec gh api --method PATCH \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams/$TEAM1_SLUG" \
+  -f name='Updated Team' \
+  -f description='Updated description'
+stdout '"name":"Updated Team"'
+stdout '"description":"Updated description"'
+
+# Create a second team for additional tests
+exec gh api --method POST \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams" \
+  -f name='Members Team' \
+  -f description='Team for member tests' \
+  -f privacy='secret'
+stdout2env TEAM2_JSON
+exec bash -c 'echo "$TEAM2_JSON" | grep -oE "\"slug\":\"[^\"]+\"" | cut -d"\"" -f4'
+stdout2env TEAM2_SLUG
+
+# Add user to team as member
+# PUT /orgs/{org}/teams/{team_slug}/memberships/{username}
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams/$TEAM2_SLUG/memberships/$CURRENT_USER" \
+  -f role='member'
+stdout '"role":"member"'
+
+# List team members
+# GET /orgs/{org}/teams/{team_slug}/members
+exec gh api "/orgs/$ORG/teams/$TEAM2_SLUG/members"
+stdout '"login":"'"$CURRENT_USER"'"'
+
+# Get membership status for user
+# GET /orgs/{org}/teams/{team_slug}/memberships/{username}
+exec gh api "/orgs/$ORG/teams/$TEAM2_SLUG/memberships/$CURRENT_USER"
+stdout '"role":"member"'
+stdout '"state":"active"'
+
+# Update user role from member to maintainer
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams/$TEAM2_SLUG/memberships/$CURRENT_USER" \
+  -f role='maintainer'
+stdout '"role":"maintainer"'
+
+# Verify role updated
+exec gh api "/orgs/$ORG/teams/$TEAM2_SLUG/memberships/$CURRENT_USER"
+stdout '"role":"maintainer"'
+
+# Remove user from team
+# DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}
+exec gh api --method DELETE \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams/$TEAM2_SLUG/memberships/$CURRENT_USER"
+
+# Verify removal
+exec gh api "/orgs/$ORG/teams/$TEAM2_SLUG/members"
+! stdout '"login":"'"$CURRENT_USER"'"'
+
+# Create a test repository for team repo access tests
+exec gh repo create $ORG/$SCRIPT_NAME-team-repo-$RANDOM_STRING --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-team-repo-$RANDOM_STRING
+
+# Add repository to team with permission
+# PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}
+exec gh api --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams/$TEAM2_SLUG/repos/$ORG/$SCRIPT_NAME-team-repo-$RANDOM_STRING" \
+  -f permission='push'
+
+# List team repositories
+# GET /orgs/{org}/teams/{team_slug}/repos
+exec gh api "/orgs/$ORG/teams/$TEAM2_SLUG/repos"
+stdout '"name":"'"$SCRIPT_NAME-team-repo-$RANDOM_STRING"'"'
+
+# Remove repository from team
+# DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}
+exec gh api --method DELETE \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams/$TEAM2_SLUG/repos/$ORG/$SCRIPT_NAME-team-repo-$RANDOM_STRING"
+
+# Verify removal
+exec gh api "/orgs/$ORG/teams/$TEAM2_SLUG/repos"
+! stdout '"name":"'"$SCRIPT_NAME-team-repo-$RANDOM_STRING"'"'
+
+# Delete team
+# DELETE /orgs/{org}/teams/{team_slug}
+exec gh api --method DELETE \
+  -H "Accept: application/vnd.github+json" \
+  "/orgs/$ORG/teams/$TEAM2_SLUG"
+
+# Verify deletion - should fail to get the deleted team
+! exec gh api "/orgs/$ORG/teams/$TEAM2_SLUG"
+
+# Final verification: list remaining teams
+exec gh api "/orgs/$ORG/teams"
+stdout '"slug":"'"$TEAM1_SLUG"'"'

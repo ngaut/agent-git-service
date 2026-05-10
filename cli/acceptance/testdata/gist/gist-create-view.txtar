@@ -1,0 +1,10 @@
+# Create a gist from a file
+exec gh gist create --public hello.txt
+stdout2env GIST_URL
+
+# View the gist
+exec gh gist view $GIST_URL
+stdout 'Hello from gist test'
+
+-- hello.txt --
+Hello from gist test

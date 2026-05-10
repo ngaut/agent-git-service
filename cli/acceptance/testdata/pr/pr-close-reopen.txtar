@@ -1,0 +1,35 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Prepare a branch to PR
+cd $SCRIPT_NAME-$RANDOM_STRING
+exec git config user.email "test@example.com"
+exec git config user.name "Test User"
+exec git checkout -b feature-branch
+exec git commit --allow-empty -m 'Empty Commit'
+exec git push -u origin feature-branch
+
+# Create the PR
+exec gh pr create --title 'Close Reopen Test' --body 'Body'
+stdout2env PR_URL
+
+# Close the PR
+exec gh pr close $PR_URL
+
+# Verify it's closed
+exec gh pr view $PR_URL
+stdout 'state:\tCLOSED'
+
+# Reopen the PR
+exec gh pr reopen $PR_URL
+
+# Verify it's open again
+exec gh pr view $PR_URL
+stdout 'state:\tOPEN'

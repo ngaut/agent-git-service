@@ -1,0 +1,20 @@
+# Create a gist with a file
+exec gh gist create --public hello.txt
+stdout2env GIST_URL
+
+# Verify the gist was created with the original filename
+exec gh gist view $GIST_URL
+stdout 'Hello from gist rename test'
+
+# Rename the file within the gist
+exec gh gist rename $GIST_URL hello.txt renamed.txt
+
+# Verify the rename worked - view should still show the content
+exec gh gist view $GIST_URL
+stdout 'Hello from gist rename test'
+
+# Clean up
+exec gh gist delete $GIST_URL --yes
+
+-- hello.txt --
+Hello from gist rename test

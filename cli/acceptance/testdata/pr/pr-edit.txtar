@@ -1,0 +1,35 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Prepare a branch to PR
+cd $SCRIPT_NAME-$RANDOM_STRING
+exec git config user.email "test@example.com"
+exec git config user.name "Test User"
+exec git checkout -b feature-branch
+exec git commit --allow-empty -m 'Empty Commit'
+exec git push -u origin feature-branch
+
+# Create the PR
+exec gh pr create --title 'Original PR Title' --body 'Original PR Body'
+stdout2env PR_URL
+
+# Edit the title
+exec gh pr edit $PR_URL --title 'Updated PR Title'
+
+# Verify the title changed
+exec gh pr view $PR_URL
+stdout 'title:\tUpdated PR Title'
+
+# Edit the body
+exec gh pr edit $PR_URL --body 'Updated PR Body'
+
+# Verify the body changed
+exec gh pr view $PR_URL
+stdout 'Updated PR Body'

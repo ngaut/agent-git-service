@@ -1,0 +1,99 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Prepare a branch to PR with actual file changes
+cd $SCRIPT_NAME-$RANDOM_STRING
+exec git config user.email "test@example.com"
+exec git config user.name "Test User"
+exec git checkout -b feature-branch
+
+# Create a file with multiple lines to comment on
+exec sh -c 'printf "%s\n" "line 1" "line 2" "line 3" "line 4" "line 5" > test.txt'
+
+exec git add test.txt
+exec git commit -m 'Add test file'
+exec git push -u origin feature-branch
+
+# Create the PR
+exec gh pr create --title 'Review Comments Test' --body 'Test PR for review comments'
+stdout2env PR_URL
+
+# Extract PR number from URL  
+exec bash -c 'echo "$PR_URL" | grep -oE "[0-9]+$"'
+stdout2env PR_NUMBER
+
+# Get the latest commit ID for the PR
+exec git rev-parse HEAD
+stdout2env COMMIT_ID
+
+# Test 1: Create inline comment on a specific line
+# POST /repos/{owner}/{repo}/pulls/{number}/comments
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments -f body='Comment on line 3' -f path='test.txt' -F line=3 -f commit_id=$COMMIT_ID
+stdout '"body":"Comment on line 3"'
+stdout '"path":"test.txt"'
+stdout '"line":3'
+stdout2env COMMENT1_JSON
+exec bash -c 'echo "$COMMENT1_JSON" | grep -oE "\"id\":[0-9]+" | grep -oE "[0-9]+"'
+stdout2env COMMENT1_ID
+
+# Test 2: List review comments on the PR
+# GET /repos/{owner}/{repo}/pulls/{number}/comments
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments
+stdout '"body":"Comment on line 3"'
+
+# Test 3: Create another inline comment
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments -f body='Comment on line 5' -f path='test.txt' -F line=5 -f commit_id=$COMMIT_ID
+stdout '"body":"Comment on line 5"'
+stdout2env COMMENT2_JSON
+exec bash -c 'echo "$COMMENT2_JSON" | grep -oE "\"id\":[0-9]+" | grep -oE "[0-9]+"'
+stdout2env COMMENT2_ID
+
+# Test 4: Reply to the first comment
+# POST /repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments/$COMMENT1_ID/replies -f body='Reply to comment'
+stdout '"body":"Reply to comment"'
+stdout '"in_reply_to_id":'
+stdout $COMMENT1_ID
+
+# Test 5: Update a comment
+# PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
+exec gh api --method PATCH /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/comments/$COMMENT1_ID -f body='Updated comment on line 3'
+stdout '"body":"Updated comment on line 3"'
+
+# Test 6: Create a review with inline comments
+# First create a pending review
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/reviews -f body='Review with inline comments' -f event='COMMENT'
+stdout2env REVIEW_JSON
+exec bash -c 'echo "$REVIEW_JSON" | grep -oE "\"id\":[0-9]+" | grep -oE "[0-9]+"'
+stdout2env REVIEW_ID
+
+# Add an inline comment linked to the review
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments -f body='Comment linked to review' -f path='test.txt' -F line=2 -f commit_id=$COMMIT_ID
+
+# Test 7: List PR comments and verify the linked comment exists
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments
+stdout '"body":"Comment linked to review"'
+
+# Test 8: Delete a comment
+# DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}
+exec gh api --method DELETE /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/comments/$COMMENT2_ID
+
+# Verify deletion - should fail to get the deleted comment
+! exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/comments/$COMMENT2_ID
+
+# Test 9: Create another line comment to verify typed numeric fields
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments -f body='Multi-line comment' -f path='test.txt' -F line=5 -f commit_id=$COMMIT_ID
+stdout '"line":5'
+
+# Final verification: list all comments and verify count
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/pulls/$PR_NUMBER/comments?per_page=100
+stdout '"body":"Updated comment on line 3"'
+stdout '"body":"Reply to comment"'
+stdout '"body":"Multi-line comment"'

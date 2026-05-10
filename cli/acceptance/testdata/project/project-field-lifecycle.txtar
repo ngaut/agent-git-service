@@ -1,0 +1,22 @@
+# Create a project
+env PROJECT_TITLE=$SCRIPT_NAME-$RANDOM_STRING
+exec gh project create --owner=$ORG --title=$PROJECT_TITLE --format='json' --jq='.number'
+stdout2env PROJECT_NUMBER
+
+# Defer project cleanup
+defer gh project delete --owner=$ORG $PROJECT_NUMBER
+
+# Create a TEXT field in the project
+exec gh project field-create $PROJECT_NUMBER --owner=$ORG --name 'TestField' --data-type 'TEXT' --format='json' --jq='.id'
+stdout2env FIELD_ID
+
+# List fields and verify the new field is present
+exec gh project field-list $PROJECT_NUMBER --owner=$ORG
+stdout 'TestField'
+
+# Delete the field
+exec gh project field-delete --id $FIELD_ID
+
+# Verify the field is gone
+exec gh project field-list $PROJECT_NUMBER --owner=$ORG
+! stdout 'TestField'

@@ -1,0 +1,127 @@
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Clone the repo
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+cd $SCRIPT_NAME-$RANDOM_STRING
+
+# Test 1: Create a milestone
+# POST /repos/{owner}/{repo}/milestones
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones -f title='v1.0 Release' -f description='Release milestone for v1.0' -f due_on='2026-12-31T23:59:59Z'
+stdout '"title":"v1.0 Release"'
+stdout '"description":"Release milestone for v1.0"'
+stdout2env MILESTONE1_JSON
+exec bash -c 'echo "$MILESTONE1_JSON" | jq -r ".number"'
+stdout2env MILESTONE1_NUMBER
+
+# Test 2: List milestones
+# GET /repos/{owner}/{repo}/milestones
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones
+stdout '"title":"v1.0 Release"'
+stdout '"state":"open"'
+
+# Test 3: Get milestone by number
+# GET /repos/{owner}/{repo}/milestones/{number}
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE1_NUMBER
+stdout '"title":"v1.0 Release"'
+stdout '"number":'$MILESTONE1_NUMBER
+
+# Test 4: Update milestone
+# PATCH /repos/{owner}/{repo}/milestones/{number}
+exec gh api --method PATCH /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE1_NUMBER -f title='v1.0 Release - Updated' -f description='Updated description'
+stdout '"title":"v1.0 Release - Updated"'
+stdout '"description":"Updated description"'
+
+# Test 5: Create another milestone for state transition tests
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones -f title='v0.9 Release' -f description='Previous release'
+stdout2env MILESTONE2_JSON
+exec bash -c 'echo "$MILESTONE2_JSON" | jq -r ".number"'
+stdout2env MILESTONE2_NUMBER
+
+# Test 6: Close milestone
+# PATCH /repos/{owner}/{repo}/milestones/{number} with state=closed
+exec gh api --method PATCH /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE2_NUMBER -f state='closed'
+stdout '"state":"closed"'
+
+# Test 7: List closed milestones
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones?state=closed
+stdout '"title":"v0.9 Release"'
+stdout '"state":"closed"'
+
+# Test 8: Reopen milestone
+exec gh api --method PATCH /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE2_NUMBER -f state='open'
+stdout '"state":"open"'
+
+# Test 9: Create an issue with milestone
+# POST /repos/{owner}/{repo}/issues
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/issues -f title='Issue for milestone' -f body='Test issue' -F milestone=$MILESTONE1_NUMBER
+stdout '"milestone":'
+stdout '"number":'$MILESTONE1_NUMBER
+stdout2env ISSUE1_JSON
+exec bash -c 'echo "$ISSUE1_JSON" | jq -r ".number"'
+stdout2env ISSUE1_NUMBER
+
+# Test 9b: List milestone labels
+# Use repo-local label names so the test stays stable even when new repos
+# already include GitHub's default labels (for example "bug").
+exec gh label create milestone-bug --color d73a4a --description 'Something is broken'
+exec gh label create milestone-docs --color 0075ca --description 'Documentation improvements'
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/issues/$ISSUE1_NUMBER/labels -f labels[]=milestone-bug -f labels[]=milestone-docs
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE1_NUMBER/labels
+stdout '"name":"milestone-bug"'
+stdout '"name":"milestone-docs"'
+
+# Test 10: Verify milestone issue count updated
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE1_NUMBER
+stdout '"open_issues":1'
+
+# Test 11: Update issue to change milestone
+exec gh api --method PATCH /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/issues/$ISSUE1_NUMBER -F milestone=$MILESTONE2_NUMBER
+stdout '"milestone":'
+stdout '"number":'$MILESTONE2_NUMBER
+
+# Verify old milestone count decreased
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE1_NUMBER
+stdout '"open_issues":0'
+
+# Verify new milestone count increased
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE2_NUMBER
+stdout '"open_issues":1'
+
+# Test 12: Unassign milestone from issue
+exec gh api --method PATCH /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/issues/$ISSUE1_NUMBER -F milestone=null
+stdout '"milestone":null'
+
+# Test 13: List issues filtered by milestone
+# First assign issue back to milestone
+exec gh api --method PATCH /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/issues/$ISSUE1_NUMBER -F milestone=$MILESTONE1_NUMBER
+
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/issues?milestone=$MILESTONE1_NUMBER
+stdout '"number":'$ISSUE1_NUMBER
+
+# Test 14: Delete milestone
+# First create a milestone to delete
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones -f title='To Delete' -f description='This will be deleted'
+stdout2env MILESTONE3_JSON
+exec bash -c 'echo "$MILESTONE3_JSON" | jq -r ".number"'
+stdout2env MILESTONE3_NUMBER
+
+# Delete the milestone
+exec gh api --method DELETE /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE3_NUMBER
+
+# Verify deletion - should fail to get the deleted milestone
+! exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones/$MILESTONE3_NUMBER
+
+# Test 15: Edge case - Create milestone with past due date (should work)
+exec gh api --method POST /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones -f title='Past Due Milestone' -f due_on='2020-01-01T00:00:00Z'
+stdout '"title":"Past Due Milestone"'
+
+# Final verification: list all milestones
+exec gh api /repos/$ORG/$SCRIPT_NAME-$RANDOM_STRING/milestones?state=all
+stdout '"title":"v1.0 Release - Updated"'
+stdout '"title":"v0.9 Release"'
+stdout '"title":"Past Due Milestone"'

@@ -1,0 +1,21 @@
+# Create a repo for the test
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --add-readme --private
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+# Create an issue
+exec gh issue create --title 'Close Reopen Test' --body 'Body' -R $ORG/$SCRIPT_NAME-$RANDOM_STRING
+stdout2env ISSUE_URL
+
+# Close the issue
+exec gh issue close $ISSUE_URL
+
+# Verify it's closed
+exec gh issue view $ISSUE_URL
+stdout 'state:\tCLOSED'
+
+# Reopen the issue
+exec gh issue reopen $ISSUE_URL
+
+# Verify it's open again
+exec gh issue view $ISSUE_URL
+stdout 'state:\tOPEN'
