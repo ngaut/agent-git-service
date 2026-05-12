@@ -265,6 +265,7 @@ func Migrate(database *gorm.DB) error {
 		&IssueComment{},
 		&Attachment{},
 		&IssueEvent{},
+		&IssueReference{},
 		&PagesConfig{},
 		&PagesBuild{},
 		&AuditLogEntry{},

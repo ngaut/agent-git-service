@@ -299,10 +299,16 @@ func (s *Service) UpdateIssueComment(ctx context.Context, id uint, body string) 
 	if err := validateBodyFitsMediumText(body); err != nil {
 		return err
 	}
-	if _, err := s.GetIssueCommentByID(ctx, id); err != nil {
+	comment, err := s.GetIssueCommentByID(ctx, id)
+	if err != nil {
 		return err
 	}
-	return checkAffected(s.DBForCtx(ctx).Model(&db.IssueComment{}).Where("id = ?", id).Update("body", body))
+	if err := checkAffected(s.DBForCtx(ctx).Model(&db.IssueComment{}).Where("id = ?", id).Update("body", body)); err != nil {
+		return err
+	}
+	comment.Body = db.LargeText(body)
+	comment.UpdatedAt = time.Now()
+	return s.syncIssueCommentReferences(ctx, comment)
 }
 
 // DeleteIssueComment deletes an issue comment by its DB ID.
@@ -310,7 +316,13 @@ func (s *Service) DeleteIssueComment(ctx context.Context, id uint) error {
 	if _, err := s.GetIssueCommentByID(ctx, id); err != nil {
 		return err
 	}
-	return deleteByID[db.IssueComment](s, ctx, id)
+	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("source_type = ? AND source_comment_id = ?", issueReferenceSourceIssueComment, id).
+			Delete(&db.IssueReference{}).Error; err != nil {
+			return err
+		}
+		return checkAffected(tx.Delete(&db.IssueComment{}, id))
+	})
 }
 
 // ReplyToIssueComment creates a reply to an existing issue comment.
@@ -347,6 +359,9 @@ func (s *Service) ReplyToIssueComment(ctx context.Context, repoID uint, issueNum
 	}
 	if err := s.DBForCtx(ctx).Preload("Author").First(&reply, reply.ID).Error; err != nil {
 		return reply, wrapErr(err)
+	}
+	if err := s.syncIssueCommentReferences(ctx, reply); err != nil {
+		return reply, err
 	}
 	// Create notifications
 	var subjectType string
@@ -415,6 +430,9 @@ func (s *Service) addComment(ctx context.Context, repoID uint, issueNumber int, 
 	}
 	if err := s.DBForCtx(ctx).Preload("Author").First(&c, c.ID).Error; err != nil {
 		return c, wrapErr(err)
+	}
+	if err := s.syncIssueCommentReferences(ctx, c); err != nil {
+		return c, err
 	}
 	var subjectType string
 	var subjectID uint

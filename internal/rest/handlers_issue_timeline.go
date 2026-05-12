@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
+	"gh-server/internal/service"
 )
 
 // --- Issues: Timeline & Events ---
@@ -26,6 +28,7 @@ func (d *Deps) GetIssueTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	// Transform to GitHub timeline event shape
 	out := make([]any, len(events))
+	resolver := d.userResolver(r.Context())
 	var assoc transform.AuthorAssociationChecks
 	var assocSet bool
 	for i, e := range events {
@@ -47,6 +50,8 @@ func (d *Deps) GetIssueTimeline(w http.ResponseWriter, r *http.Request) {
 			rv := transform.PRReview(*e.Review, full, num)
 			rv["event"] = "reviewed"
 			out[i] = rv
+		} else if e.Event == "cross-referenced" && e.CrossRef != nil {
+			out[i] = d.crossReferencedTimelineEvent(r.Context(), e, resolver)
 		} else {
 			ev := map[string]any{
 				"event":      e.Event,
@@ -93,6 +98,8 @@ func (d *Deps) ListIssueEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		if e.EventRec != nil {
 			eventID = e.EventRec.ID
+		} else if e.CrossRef != nil {
+			eventID = e.CrossRef.Reference.ID
 		} else if e.Comment != nil {
 			eventID = fmt.Sprintf("event-comment-%d", e.Comment.ID)
 		} else if e.Review != nil {
@@ -112,12 +119,59 @@ func (d *Deps) ListIssueEvents(w http.ResponseWriter, r *http.Request) {
 		if e.EventRec != nil {
 			applyIssueEventData(ev, e.EventRec)
 		}
+		if e.CrossRef != nil {
+			applyCrossReferencedSource(r.Context(), d, ev, e, d.userResolver(r.Context()))
+		}
 		out = append(out, ev)
 	}
 	if out == nil {
 		out = []any{}
 	}
 	respond.JSON(w, 200, out)
+}
+
+func (d *Deps) crossReferencedTimelineEvent(ctx context.Context, e service.TimelineEvent, resolver transform.UserResolver) map[string]any {
+	eventID := any(fmt.Sprintf("event-cross-referenced-%d", e.CreatedAt.Unix()))
+	var updatedAt any
+	if e.CrossRef != nil {
+		eventID = e.CrossRef.Reference.ID
+		updatedAt = e.CrossRef.Reference.UpdatedAt.Format(time.RFC3339)
+	}
+	ev := map[string]any{
+		"id":         eventID,
+		"node_id":    transform.NodeID("IssueEvent", eventID),
+		"event":      "cross-referenced",
+		"created_at": e.CreatedAt.Format(time.RFC3339),
+		"updated_at": updatedAt,
+	}
+	if e.Actor != "" {
+		ev["actor"] = map[string]any{"login": e.Actor, "type": db.TypeUser}
+	}
+	applyCrossReferencedSource(ctx, d, ev, e, resolver)
+	return ev
+}
+
+func applyCrossReferencedSource(ctx context.Context, d *Deps, out map[string]any, e service.TimelineEvent, resolver transform.UserResolver) {
+	if e.CrossRef == nil {
+		return
+	}
+	source := map[string]any{}
+	if e.CrossRef.Issue != nil {
+		assoc := d.authorAssociationChecks(ctx, e.CrossRef.Issue.Repository)
+		source["type"] = "issue"
+		source["issue"] = transform.Issue(*e.CrossRef.Issue, resolver, assoc)
+	} else if e.CrossRef.PullRequest != nil {
+		assoc := d.authorAssociationChecks(ctx, e.CrossRef.PullRequest.Repository)
+		source["type"] = "pull_request"
+		source["pull_request"] = transform.PR(*e.CrossRef.PullRequest, resolver, assoc, nil)
+	}
+	if e.CrossRef.Comment != nil {
+		assoc := d.authorAssociationChecks(ctx, e.CrossRef.Comment.Repository)
+		source["comment"] = transform.IssueComment(*e.CrossRef.Comment, assoc)
+	}
+	if len(source) > 0 {
+		out["source"] = source
+	}
 }
 
 func applyIssueEventData(out map[string]any, ev *db.IssueEvent) {
