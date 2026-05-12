@@ -1,9 +1,8 @@
 # Quick Start
 
 This guide runs `agent-git-service` locally from source on
-`http://localhost:8080` with a free
-[TiDB Cloud Starter](https://www.pingcap.com/tidb-cloud-starter/) instance for
-metadata.
+`http://localhost:8080` with a disposable [TiDB Zero](https://zero.tidbcloud.com/)
+database for metadata.
 
 The local development credentials are:
 
@@ -18,25 +17,31 @@ ADMIN_TOKEN=local-dev-token
 - Git
 - curl and jq
 - GitHub CLI, if you want to try the `gh` examples
-- A free TiDB Cloud Starter instance
 
-## Prepare TiDB Cloud Starter
+## Prepare TiDB Zero
 
-1. Open [TiDB Cloud Starter](https://www.pingcap.com/tidb-cloud-starter/).
-2. Sign in or create an account.
-3. Create or open a Starter instance.
-4. Open **SQL Editor** and run:
+Run this in the same terminal where you will start the server:
 
-```sql
-CREATE DATABASE IF NOT EXISTS `gh-server`;
+```bash
+ZERO_INSTANCE="$(
+  curl -fsS -X POST https://zero.tidbapi.com/v1beta1/instances \
+    -H "Content-Type: application/json" \
+    -d '{"tag":"agent-git-service-quickstart"}'
+)"
+export DB_DSN="$(
+  printf '%s' "$ZERO_INSTANCE" | jq -r '
+    .instance.connection as $c |
+    "\($c.username):\($c.password)@tcp(\($c.host):\($c.port))/test?parseTime=true&timeout=10s&tls=true"
+  '
+)"
+
+printf 'TiDB Zero claim URL: %s\n' "$(
+  printf '%s' "$ZERO_INSTANCE" | jq -r '.instance.claimInfo.claimUrl'
+)"
 ```
 
-Open **Connect**, choose the **Public** connection type, and copy the host,
-port, username, and password. TiDB Cloud Starter public connections require
-`tls=true` in the DSN.
-
-Current free-tier details are listed on
-[TiDB pricing](https://www.pingcap.com/pricing/).
+The quickstart uses the default `test` database that TiDB Zero creates for the
+temporary instance.
 
 ## Start The Server
 
@@ -46,14 +51,8 @@ cd agent-git-service
 cp .env.example .env
 ```
 
-The required quick-start settings are at the top of `.env`. Edit `DB_DSN`
-from the TiDB Cloud Connect dialog:
-
-```env
-DB_DSN=<prefix>.root:<password>@tcp(<tidb-cloud-host>:4000)/gh-server?parseTime=true&timeout=10s&tls=true
-```
-
-Then start the server:
+The `.env` file supplies local listener and seed-user defaults. The exported
+`DB_DSN` points the server at TiDB Zero.
 
 ```bash
 go run .
@@ -72,7 +71,7 @@ export AGS_TOKEN=local-dev-token
 ```
 
 Wait for readiness. The first start can take a few minutes while
-`agent-git-service` creates tables in TiDB Cloud.
+`agent-git-service` creates tables in TiDB Zero.
 
 ```bash
 for i in $(seq 1 300); do
@@ -194,11 +193,14 @@ You should see a commit hash followed by `refs/heads/main`.
 
 ### `required environment variable not set: DB_DSN`
 
-Make sure you created `.env` and set `DB_DSN`.
+Make sure `DB_DSN` is exported in the terminal running `go run .`, or set it in
+`.env`.
 
 ### `Access denied` or connection timeout
 
-Check that:
+For TiDB Zero, create a fresh instance and export the new `DB_DSN`.
+
+If you are using a TiDB Cloud Starter instance instead of TiDB Zero, check that:
 
 - `DB_DSN` includes `tls=true`.
 - The TiDB Cloud public endpoint firewall allows your current IP address.
@@ -212,3 +214,10 @@ Use the local development token from `.env`:
 ```text
 Authorization: Bearer local-dev-token
 ```
+
+## Next Steps
+
+The TiDB Zero response includes a claim URL if you want to keep the temporary
+database for longer local evaluation. For a production deployment, create a
+TiDB Cloud Starter instance and follow
+[`production-deployment.md`](production-deployment.md).

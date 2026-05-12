@@ -5,7 +5,7 @@ file.
 
 ## Run Locally
 
-- [Quick Start](quickstart.md) - run `agent-git-service` locally with TiDB Cloud Starter.
+- [Quick Start](quickstart.md) - run `agent-git-service` locally with TiDB Zero.
 - [Configuration Reference](../.env.example) - canonical environment variable reference.
 
 ## Architecture
@@ -42,6 +42,7 @@ accepted direction, or incremental work that has not fully landed yet.
 
 ## Testing And Operations
 
+- [Production Deployment](production-deployment.md)
 - [CI](ci.md)
 - [Token Lifecycle Test Coverage](testing/token-lifecycle.md)
 - [Dependency Licensing](governance/dependency-licensing.md)
