@@ -46,25 +46,39 @@ Known GitHub-compatibility gaps are tracked in
 
 ## Quick Start
 
-1. Create a free [TiDB Cloud Starter](https://www.pingcap.com/tidb-cloud-starter/)
-   instance.
-2. Open **SQL Editor** for the cluster and create the metadata database:
+This local path uses [TiDB Zero](https://zero.tidbcloud.com/)
+for a disposable TiDB database.
 
-```sql
-CREATE DATABASE IF NOT EXISTS `gh-server`;
-```
-
-3. Open the TiDB Cloud **Connect** dialog and copy the public MySQL connection
-   string. Keep `tls=true` in the DSN.
-4. Start the service:
+Install `curl` and `jq` before running this quickstart. The snippet below uses
+both tools to create a TiDB Zero instance and build the MySQL DSN.
 
 ```bash
 git clone https://github.com/ngaut/agent-git-service.git
 cd agent-git-service
 cp .env.example .env
-# Edit .env and set DB_DSN to the TiDB Cloud connection string.
+
+ZERO_INSTANCE="$(
+  curl -fsS -X POST https://zero.tidbapi.com/v1beta1/instances \
+    -H "Content-Type: application/json" \
+    -d '{"tag":"agent-git-service-quickstart"}'
+)"
+export DB_DSN="$(
+  printf '%s' "$ZERO_INSTANCE" | jq -r '
+    .instance.connection as $c |
+    "\($c.username):\($c.password)@tcp(\($c.host):\($c.port))/test?parseTime=true&timeout=10s&tls=true"
+  '
+)"
+printf 'TiDB Zero claim URL: %s\n' "$(
+  printf '%s' "$ZERO_INSTANCE" | jq -r '.instance.claimInfo.claimUrl'
+)"
+
 go run .
 ```
+
+Claim the TiDB Zero instance from its claim URL if you want to keep the database
+after evaluation. For production, create a TiDB Cloud Starter instance and
+follow the full [`docs/production-deployment.md`](docs/production-deployment.md)
+guide.
 
 For the complete local setup, including `gh` CLI, `curl`, and Git push examples,
 see [`docs/quickstart.md`](docs/quickstart.md).
