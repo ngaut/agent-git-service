@@ -111,7 +111,13 @@ func (s *Service) CreatePR(ctx context.Context, in CreatePRInput) (db.PullReques
 				State:               db.StateOpen,
 				AuthorID:            author.ID,
 			}
-			return tx.Create(&pr).Error
+			if err := tx.Create(&pr).Error; err != nil {
+				return err
+			}
+			if err := s.syncPullRequestBodyReferences(ContextWithDB(ctx, tx), pr); err != nil {
+				return fmt.Errorf("sync pull request references: %w", err)
+			}
+			return nil
 		}); err != nil {
 			if isDuplicateErr(err) || isSQLiteLockErr(err) {
 				time.Sleep(retryDelay(attempt))
@@ -441,6 +447,11 @@ func (s *Service) UpdatePR(ctx context.Context, repoFullName string, number int,
 	if err := s.DBForCtx(ctx).Save(&pr).Error; err != nil {
 		return pr, err
 	}
+	if in.Body != nil && pr.Body != origBody {
+		if err := s.syncPullRequestBodyReferences(ctx, pr); err != nil {
+			return pr, err
+		}
+	}
 	// Re-embed if title or body actually changed.
 	if pr.Title != origTitle || pr.Body != origBody {
 		s.EmbedPR(ctx, pr.ID, pr.Title, string(pr.Body))
@@ -487,8 +498,16 @@ func (s *Service) UpdatePRFields(ctx context.Context, id uint, updates map[strin
 		if v, ok := updates["assignee_logins"].(string); ok {
 			newAssigneeLogins = v
 		}
+		newBody, bodyChanged := issueReferenceBodyUpdate(updates["body"], pr.Body)
 		if err := s.DBForCtx(ctx).Model(&db.PullRequest{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 			return err
+		}
+		if bodyChanged {
+			pr.Body = db.LargeText(newBody)
+			pr.UpdatedAt = time.Now()
+			if err := s.syncPullRequestBodyReferences(ctx, pr); err != nil {
+				return err
+			}
 		}
 		if newAssigneeLogins != origAssigneeLogins {
 			origSet := loginSet(origAssigneeLogins)

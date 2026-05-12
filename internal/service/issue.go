@@ -201,6 +201,10 @@ func (s *Service) CreateIssue(ctx context.Context, in CreateIssueInput) (db.Issu
 				}
 			}
 
+			if err := s.syncIssueBodyReferences(ContextWithDB(ctx, tx), issue); err != nil {
+				return fmt.Errorf("sync issue references: %w", err)
+			}
+
 			return nil
 		}); err != nil {
 			if isDuplicateErr(err) || isSQLiteLockErr(err) {
@@ -295,6 +299,11 @@ func (s *Service) UpdateIssue(ctx context.Context, repoFullName string, number i
 	}
 	if err := s.DBForCtx(ctx).Save(&issue).Error; err != nil {
 		return issue, err
+	}
+	if in.Body != nil && issue.Body != origBody {
+		if err := s.syncIssueBodyReferences(ctx, issue); err != nil {
+			return issue, err
+		}
 	}
 	var events []struct {
 		typ  string
@@ -576,9 +585,17 @@ func (s *Service) UpdateIssueFields(ctx context.Context, id uint, updates map[st
 	if v, ok := updates["assignee_logins"].(string); ok {
 		newAssigneeLogins = v
 	}
+	newBody, bodyChanged := issueReferenceBodyUpdate(updates["body"], issue.Body)
 
 	if err := s.DBForCtx(ctx).Model(&db.Issue{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		return err
+	}
+	if bodyChanged {
+		issue.Body = db.LargeText(newBody)
+		issue.UpdatedAt = time.Now()
+		if err := s.syncIssueBodyReferences(ctx, issue); err != nil {
+			return err
+		}
 	}
 	if newTitle != origTitle {
 		if err := s.recordIssueEvent(ctx, id, issueEventRenamed, issueEventData{
@@ -667,6 +684,9 @@ func (s *Service) DeleteIssueByID(ctx context.Context, id uint) error {
 			return err
 		}
 		if err := tx.Where("issue_id = ?", id).Delete(&db.IssueEvent{}).Error; err != nil {
+			return err
+		}
+		if err := s.deleteIssueReferencesForIssueNumber(ContextWithDB(ctx, tx), issue.RepositoryID, issue.Number); err != nil {
 			return err
 		}
 		// Cascade delete reactions, project_items, and linked_branches
@@ -758,6 +778,9 @@ func (s *Service) CreateIssueComment(ctx context.Context, repoFullName string, i
 	}
 	if err := preloadIssueComment(s.DBForCtx(ctx)).First(&c, c.ID).Error; err != nil {
 		return c, wrapErr(err)
+	}
+	if err := s.syncIssueCommentReferences(ctx, c); err != nil {
+		return c, err
 	}
 	var subjectType string
 	var subjectID uint
