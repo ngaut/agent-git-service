@@ -35,8 +35,8 @@ func TestGraphQLResponses_IncludeGraphQLRateLimitHeaders(t *testing.T) {
 	if got := w.Header().Get("X-RateLimit-Resource"); got != "graphql" {
 		t.Fatalf("resource: got %q want graphql", got)
 	}
-	if got := w.Header().Get("X-RateLimit-Limit"); got != "5000" {
-		t.Fatalf("limit: got %q want 5000", got)
+	if got := w.Header().Get("X-RateLimit-Limit"); got != "1000" {
+		t.Fatalf("limit: got %q want 1000", got)
 	}
 	used, err := strconv.Atoi(w.Header().Get("X-RateLimit-Used"))
 	if err != nil {
@@ -49,7 +49,7 @@ func TestGraphQLResponses_IncludeGraphQLRateLimitHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse remaining: %v", err)
 	}
-	if remaining != 4999 {
-		t.Fatalf("remaining: got %d want 4999", remaining)
+	if remaining != 999 {
+		t.Fatalf("remaining: got %d want 999", remaining)
 	}
 }
