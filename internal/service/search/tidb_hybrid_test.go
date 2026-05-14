@@ -61,20 +61,33 @@ func TestBuildIssueLexicalTokenQuery_UsesFullTextForMultilingualTokens(t *testin
 			}
 			for idx, wantField := range tt.wantFields {
 				query := got[idx]
-				if !strings.Contains(query.where, "FTS_MATCH_WORD(?, "+wantField+")") {
+				wantExpr := "FTS_MATCH_WORD(" + mysqlStringLiteral(tt.token) + ", " + wantField + ")"
+				if !strings.Contains(query.where, wantExpr) {
 					t.Fatalf("expected FTS where clause on %s, got %q", wantField, query.where)
 				}
 				if strings.Contains(query.where, "LIKE ?") {
 					t.Fatalf("expected full-text query for %q, got LIKE clause %q", tt.token, query.where)
 				}
-				if len(query.args) != 1 || query.args[0] != tt.token {
-					t.Fatalf("expected token args [%q], got %#v", tt.token, query.args)
+				if len(query.args) != 0 {
+					t.Fatalf("expected FTS token to be emitted as a literal, got args %#v", query.args)
 				}
-				if !strings.Contains(query.scoreExpr, "FTS_MATCH_WORD(?, "+wantField+")") {
+				if !strings.Contains(query.scoreExpr, wantExpr) {
 					t.Fatalf("expected FTS score expression on %s, got %q", wantField, query.scoreExpr)
 				}
 			}
 		})
+	}
+}
+
+func TestBuildFTSLexicalTokenQuery_EmitsEscapedLiteral(t *testing.T) {
+	got := buildFTSLexicalTokenQuery("issues.title", "wiki's \\ draft", 1)
+
+	want := `FTS_MATCH_WORD('wiki''s \\ draft', issues.title)`
+	if got.where != want {
+		t.Fatalf("expected escaped FTS expression %q, got %q", want, got.where)
+	}
+	if len(got.args) != 0 || len(got.scoreArgs) != 0 {
+		t.Fatalf("expected escaped FTS expression to avoid bound args, got args=%#v scoreArgs=%#v", got.args, got.scoreArgs)
 	}
 }
 
@@ -84,7 +97,7 @@ func TestBuildIssueLexicalTokenQuery_CommentsStayLexicalOnly(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected title FTS and comment LIKE queries, got %#v", got)
 	}
-	if !strings.Contains(got[0].where, "FTS_MATCH_WORD(?, issues.title)") {
+	if !strings.Contains(got[0].where, "FTS_MATCH_WORD('검색', issues.title)") {
 		t.Fatalf("expected title full-text clause, got %q", got[0].where)
 	}
 	if !strings.Contains(got[1].where, "issue_comments.body LIKE ?") {
@@ -188,7 +201,8 @@ func TestBuildPRLexicalTokenQuery_TargetsExpectedFullTextColumns(t *testing.T) {
 			}
 			for idx, wantField := range tt.wantFields {
 				query := got[idx]
-				if !strings.Contains(query.where, "FTS_MATCH_WORD(?, "+wantField+")") {
+				wantExpr := "FTS_MATCH_WORD(" + mysqlStringLiteral(tt.token) + ", " + wantField + ")"
+				if !strings.Contains(query.where, wantExpr) {
 					t.Fatalf("expected FTS where clause on %s, got %q", wantField, query.where)
 				}
 				if strings.Contains(query.where, "LIKE ?") {
@@ -228,8 +242,8 @@ func TestBuildExplicitSortLexicalWhere_PreservesPerTokenDisjunctions(t *testing.
 	})
 
 	wantParts := []string{
-		"((FTS_MATCH_WORD(?, pull_requests.title)) OR (FTS_MATCH_WORD(?, pull_requests.body)))",
-		"((FTS_MATCH_WORD(?, pull_requests.title)) OR (pull_requests.commit_messages LIKE ?))",
+		"((FTS_MATCH_WORD('alpha', pull_requests.title)) OR (FTS_MATCH_WORD('alpha', pull_requests.body)))",
+		"((FTS_MATCH_WORD('beta', pull_requests.title)) OR (pull_requests.commit_messages LIKE ?))",
 	}
 	for _, want := range wantParts {
 		if !strings.Contains(gotWhere, want) {
@@ -239,8 +253,8 @@ func TestBuildExplicitSortLexicalWhere_PreservesPerTokenDisjunctions(t *testing.
 	if strings.Count(gotWhere, " AND ") != 1 {
 		t.Fatalf("expected token groups to be intersected once, got %q", gotWhere)
 	}
-	if len(gotArgs) != 4 {
-		t.Fatalf("expected four bound args, got %#v", gotArgs)
+	if len(gotArgs) != 1 {
+		t.Fatalf("expected one bound LIKE arg, got %#v", gotArgs)
 	}
 }
 
