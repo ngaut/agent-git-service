@@ -78,14 +78,42 @@ func buildLikeLexicalTokenQuery(
 }
 
 func buildFTSLexicalTokenQuery(fieldExpr string, token string, weight float64) lexicalTokenQuery {
-	ftsExpr := "FTS_MATCH_WORD(?, " + fieldExpr + ")"
+	// TiDB full-text search rejects prepared parameter markers here because the
+	// search phrase must be a constant, so emit a safely escaped string literal.
+	ftsExpr := "FTS_MATCH_WORD(" + mysqlStringLiteral(token) + ", " + fieldExpr + ")"
 	return lexicalTokenQuery{
 		where:     ftsExpr,
-		args:      []any{token},
+		args:      nil,
 		scoreExpr: ftsExpr,
-		scoreArgs: []any{token},
+		scoreArgs: nil,
 		weight:    weight,
 	}
+}
+
+func mysqlStringLiteral(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case 0:
+			b.WriteString(`\0`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\'':
+			b.WriteString(`''`)
+		case 0x1a:
+			b.WriteString(`\Z`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 func buildWhereLexicalTokenQuery(where string, args []any, weight float64) lexicalTokenQuery {
