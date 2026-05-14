@@ -101,9 +101,9 @@ func TestRESTResponses_IncludeRateLimitHeaders(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
 	limit, used, remaining, reset, resource := requireRateLimitHeaders(t, w)
-	require.Equal(t, 5000, limit)
+	require.Equal(t, 1000, limit)
 	require.Equal(t, 1, used)
-	require.Equal(t, 4999, remaining)
+	require.Equal(t, 999, remaining)
 	require.Greater(t, reset, time.Now().Unix())
 	require.Equal(t, "core", resource)
 }
@@ -124,7 +124,7 @@ func TestRateLimitEndpoint_HeadersMatchPayload(t *testing.T) {
 	require.Equal(t, float64(remaining), rate["remaining"])
 	require.Equal(t, float64(reset), rate["reset"])
 	require.Equal(t, resource, rate["resource"])
-	require.Equal(t, 60, limit)
+	require.Equal(t, 100, limit)
 	require.Equal(t, "core", resource)
 
 	resources, ok := body["resources"].(map[string]any)
@@ -134,15 +134,15 @@ func TestRateLimitEndpoint_HeadersMatchPayload(t *testing.T) {
 	require.Equal(t, rate, core)
 	search, ok := resources["search"].(map[string]any)
 	require.True(t, ok, "search resource missing")
-	require.Equal(t, float64(10), search["limit"])
+	require.Equal(t, float64(30), search["limit"])
 	require.Equal(t, "search", search["resource"])
 	codeSearch, ok := resources["code_search"].(map[string]any)
 	require.True(t, ok, "code_search resource missing")
-	require.Equal(t, float64(60), codeSearch["limit"])
+	require.Equal(t, float64(10), codeSearch["limit"])
 	require.Equal(t, "code_search", codeSearch["resource"])
 	graphql, ok := resources["graphql"].(map[string]any)
 	require.True(t, ok, "graphql resource missing")
-	require.Equal(t, float64(0), graphql["limit"])
+	require.Equal(t, float64(100), graphql["limit"])
 	require.Equal(t, "graphql", graphql["resource"])
 }
 

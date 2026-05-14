@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	compatibilityLimit  = 5000
-	compatibilityWindow = time.Hour
+	compatibilityLimit  = 1000
+	compatibilityWindow = time.Minute
 )
 
 type actorKey struct{}
@@ -495,9 +495,9 @@ func resourceOrderForReport(resources map[Resource]Snapshot) []Resource {
 
 func authenticatedPolicies() policySet {
 	return policySet{
-		ResourceCore:                      {limit: 5000, window: time.Hour, bucket: ResourceCore},
+		ResourceCore:                      {limit: 1000, window: time.Minute, bucket: ResourceCore},
 		ResourceSearch:                    {limit: 300, window: time.Minute, bucket: ResourceSearch},
-		ResourceGraphQL:                   {limit: 5000, window: time.Hour, bucket: ResourceGraphQL},
+		ResourceGraphQL:                   {limit: 1000, window: time.Minute, bucket: ResourceGraphQL},
 		ResourceIntegrationManifest:       {limit: 5000, window: time.Hour, bucket: ResourceIntegrationManifest},
 		ResourceSourceImport:              {limit: 100, window: time.Minute, bucket: ResourceSourceImport},
 		ResourceCodeScanningUpload:        {limit: 5000, window: time.Hour, bucket: ResourceCodeScanningUpload},
@@ -508,17 +508,17 @@ func authenticatedPolicies() policySet {
 		ResourceDependencySBOM:            {limit: 100, window: time.Minute, bucket: ResourceDependencySBOM},
 		ResourceAuditLog:                  {limit: 1750, window: time.Hour, bucket: ResourceAuditLog},
 		ResourceAuditLogStreaming:         {limit: 15, window: time.Hour, bucket: ResourceAuditLogStreaming},
-		ResourceCodeSearch:                {limit: 10, window: time.Minute, bucket: ResourceCodeSearch},
+		ResourceCodeSearch:                {limit: 100, window: time.Minute, bucket: ResourceCodeSearch},
 	}
 }
 
 func anonymousPolicies() policySet {
 	return policySet{
-		ResourceCore:                {limit: 60, window: time.Hour, bucket: ResourceCore},
-		ResourceCodeSearch:          {limit: 60, window: time.Hour, bucket: ResourceCore},
-		ResourceGraphQL:             {limit: 0, window: time.Hour, bucket: ResourceGraphQL},
+		ResourceCore:                {limit: 100, window: time.Minute, bucket: ResourceCore},
+		ResourceCodeSearch:          {limit: 10, window: time.Minute, bucket: ResourceCodeSearch},
+		ResourceGraphQL:             {limit: 100, window: time.Minute, bucket: ResourceGraphQL},
 		ResourceIntegrationManifest: {limit: 5000, window: time.Hour, bucket: ResourceIntegrationManifest},
-		ResourceSearch:              {limit: 10, window: time.Minute, bucket: ResourceSearch},
+		ResourceSearch:              {limit: 30, window: time.Minute, bucket: ResourceSearch},
 	}
 }
 
