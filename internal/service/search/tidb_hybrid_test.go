@@ -91,6 +91,79 @@ func TestBuildFTSLexicalTokenQuery_EmitsEscapedLiteral(t *testing.T) {
 	}
 }
 
+func TestBuildFullTextLexicalSubquery_UsesFTSOnlyWhere(t *testing.T) {
+	gdb := newDryRunMySQLDB(t)
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		baseQ := tx.Model(&modeldb.Issue{}).
+			Where("issues.repository_id = ?", 42).
+			Where("issues.state = ?", "open")
+		tokenQuery := buildFTSLexicalTokenQuery("issues.title", "alpha", 1)
+		var rows []struct {
+			ID       uint
+			FTSScore float64
+		}
+		return buildFullTextLexicalSubquery(baseQ, tokenQuery, "issues").Find(&rows)
+	})
+
+	if !strings.Contains(sql, "WHERE FTS_MATCH_WORD('alpha', issues.title)") {
+		t.Fatalf("expected FTS-only subquery WHERE clause, got %q", sql)
+	}
+	if strings.Contains(sql, "repository_id") || strings.Contains(sql, "state") {
+		t.Fatalf("expected qualifiers to be kept out of FTS subquery, got %q", sql)
+	}
+	if !strings.Contains(sql, "FTS_MATCH_WORD('alpha', issues.title) AS fts_score") {
+		t.Fatalf("expected FTS score projection, got %q", sql)
+	}
+}
+
+func TestBuildFullTextLexicalMatchQuery_AppliesQualifiersOutsideFTSWhere(t *testing.T) {
+	gdb := newDryRunMySQLDB(t)
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		baseQ := tx.Model(&modeldb.Issue{}).
+			Where("issues.repository_id = ?", 42).
+			Where("issues.state = ?", "open")
+		tokenQuery := buildFTSLexicalTokenQuery("issues.title", "alpha", 1)
+		var ids []uint
+		return buildFullTextLexicalMatchQuery(baseQ, tokenQuery, "issues", 100).
+			Pluck("issues.id", &ids)
+	})
+
+	ftsWhere := "WHERE FTS_MATCH_WORD('alpha', issues.title)"
+	if strings.Count(sql, ftsWhere) != 1 {
+		t.Fatalf("expected exactly one FTS-only WHERE clause, got %q", sql)
+	}
+	outerWhere := sql[strings.LastIndex(sql, ") AS fts_matches"):]
+	if strings.Contains(outerWhere, "FTS_MATCH_WORD") {
+		t.Fatalf("expected outer qualifier query to avoid FTS predicate, got %q", sql)
+	}
+	for _, want := range []string{
+		"JOIN (SELECT issues.id AS id, FTS_MATCH_WORD('alpha', issues.title) AS fts_score FROM `issues` WHERE FTS_MATCH_WORD('alpha', issues.title)) AS fts_matches ON fts_matches.id = issues.id",
+		"issues.repository_id = 42",
+		"issues.state = 'open'",
+		"ORDER BY fts_matches.fts_score DESC, issues.id DESC",
+		"LIMIT 800",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected filter query to contain %q, got %q", want, sql)
+		}
+	}
+}
+
+func TestHasFullTextLexicalToken(t *testing.T) {
+	if !hasFullTextLexicalToken([][]lexicalTokenQuery{{
+		buildFTSLexicalTokenQuery("issues.title", "alpha", 1),
+	}}) {
+		t.Fatal("expected FTS token group to be detected")
+	}
+	if hasFullTextLexicalToken([][]lexicalTokenQuery{{
+		buildWhereLexicalTokenQuery("issues.title LIKE ?", []any{"%alpha%"}, 1),
+	}}) {
+		t.Fatal("expected LIKE-only token group to avoid FTS detection")
+	}
+}
+
 func TestBuildIssueLexicalTokenQuery_CommentsStayLexicalOnly(t *testing.T) {
 	got := buildIssueLexicalTokenQueries([]string{"title", "comments"}, "검색", true)
 
@@ -230,31 +303,38 @@ func TestBuildPRLexicalTokenQuery_TargetsExpectedFullTextColumns(t *testing.T) {
 }
 
 func TestBuildExplicitSortLexicalWhere_PreservesPerTokenDisjunctions(t *testing.T) {
-	gotWhere, gotArgs := buildExplicitSortLexicalWhere([][]lexicalTokenQuery{
-		{
-			buildFTSLexicalTokenQuery("pull_requests.title", "alpha", 1),
-			buildFTSLexicalTokenQuery("pull_requests.body", "alpha", 1),
-		},
-		{
-			buildFTSLexicalTokenQuery("pull_requests.title", "beta", 1),
-			buildWhereLexicalTokenQuery("pull_requests.commit_messages LIKE ?", []any{"%beta%"}, auxiliaryLexicalScoreWeight),
-		},
+	gdb := newDryRunMySQLDB(t)
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		baseQ := tx.Model(&modeldb.PullRequest{}).Where("pull_requests.repository_id = ?", 42)
+		whereClause, whereArgs := buildExplicitSortLexicalWhere(baseQ, [][]lexicalTokenQuery{
+			{
+				buildFTSLexicalTokenQuery("pull_requests.title", "alpha", 1),
+				buildFTSLexicalTokenQuery("pull_requests.body", "alpha", 1),
+			},
+			{
+				buildFTSLexicalTokenQuery("pull_requests.title", "beta", 1),
+				buildWhereLexicalTokenQuery("pull_requests.commit_messages LIKE ?", []any{"%beta%"}, auxiliaryLexicalScoreWeight),
+			},
+		}, "pull_requests")
+		var ids []uint
+		return baseQ.Where(whereClause, whereArgs...).Pluck("pull_requests.id", &ids)
 	})
 
 	wantParts := []string{
-		"((FTS_MATCH_WORD('alpha', pull_requests.title)) OR (FTS_MATCH_WORD('alpha', pull_requests.body)))",
-		"((FTS_MATCH_WORD('beta', pull_requests.title)) OR (pull_requests.commit_messages LIKE ?))",
+		"((EXISTS (SELECT 1 FROM (SELECT pull_requests.id AS id FROM `pull_requests` WHERE FTS_MATCH_WORD('alpha', pull_requests.title)) AS fts_matches WHERE fts_matches.id = pull_requests.id)) OR (EXISTS (SELECT 1 FROM (SELECT pull_requests.id AS id FROM `pull_requests` WHERE FTS_MATCH_WORD('alpha', pull_requests.body)) AS fts_matches WHERE fts_matches.id = pull_requests.id)))",
+		"((EXISTS (SELECT 1 FROM (SELECT pull_requests.id AS id FROM `pull_requests` WHERE FTS_MATCH_WORD('beta', pull_requests.title)) AS fts_matches WHERE fts_matches.id = pull_requests.id)) OR (pull_requests.commit_messages LIKE '%beta%'))",
 	}
 	for _, want := range wantParts {
-		if !strings.Contains(gotWhere, want) {
-			t.Fatalf("expected exact-sort where clause to contain %q, got %q", want, gotWhere)
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected exact-sort SQL to contain %q, got %q", want, sql)
 		}
 	}
-	if strings.Count(gotWhere, " AND ") != 1 {
-		t.Fatalf("expected token groups to be intersected once, got %q", gotWhere)
+	if strings.Count(sql, " AND ") < 2 {
+		t.Fatalf("expected token groups and base qualifier to be intersected, got %q", sql)
 	}
-	if len(gotArgs) != 1 {
-		t.Fatalf("expected one bound LIKE arg, got %#v", gotArgs)
+	if !strings.Contains(sql, "pull_requests.repository_id = 42") {
+		t.Fatalf("expected base qualifier to be preserved, got %q", sql)
 	}
 }
 
@@ -267,7 +347,7 @@ func TestPluckExplicitSortLexicalMatchIDs_UsesSingleOrderedQuery(t *testing.T) {
 			buildPRLexicalTokenQueries(nil, "alpha", true),
 			buildPRLexicalTokenQueries(nil, "beta", true),
 		}
-		whereClause, whereArgs := buildExplicitSortLexicalWhere(tokenGroups)
+		whereClause, whereArgs := buildExplicitSortLexicalWhere(baseQ, tokenGroups, "pull_requests")
 		var ids []uint
 		return baseQ.Where(whereClause, whereArgs...).Order(SortOrder("updated-desc", "pull_requests")).Limit(10).Pluck("pull_requests.id", &ids)
 	})
@@ -283,6 +363,9 @@ func TestPluckExplicitSortLexicalMatchIDs_UsesSingleOrderedQuery(t *testing.T) {
 	}
 	if strings.Count(sql, "FTS_MATCH_WORD") < 4 {
 		t.Fatalf("expected all token predicates to stay in a single SQL query, got %q", sql)
+	}
+	if strings.Contains(sql, "fts_score DESC") {
+		t.Fatalf("expected explicit-sort path to avoid ranked FTS ordering, got %q", sql)
 	}
 }
 
