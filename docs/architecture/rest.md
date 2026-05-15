@@ -174,6 +174,7 @@ Wiki path-slug hierarchy rules:
 - `GET/POST/PUT/DELETE /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` attaches repo-scoped labels to wiki pages; labels are metadata, not git-tracked page content
 - `POST /api/v3/repos/{owner}/{repo}/wiki/move` atomically renames every page whose slug equals `from` or starts with `from/`, requires an `if_match` SHA map that covers the full source set, and returns one commit for the entire move
 - `POST /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move` performs an atomic rename with `new_slug` and `if_match`, rewrites eligible inbound wiki references in the same commit, and returns `{ moved, rewrites, skipped }`
+- wiki page get/list/search/backlink response `title` values are deterministically derived from the page slug leaf, not from the markdown body heading; for example `guides/plain-page` returns `Plain Page`
 - wiki page get/list/search responses include `labels`, shaped with the existing repository label JSON contract
 - wiki write endpoints reject `ref` because historical revision edits are out of scope for the current REST contract
 - only the exact single-segment routes `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
