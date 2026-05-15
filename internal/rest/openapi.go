@@ -214,7 +214,7 @@ func buildRESTOpenAPIPaths() map[string]any {
 			"get": operation("getWikiPage", "Get a wiki page by slug, optionally at a full commit SHA from that page's history.", nil, nil, append(pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), queryParams(
 				map[string]any{
 					"name":        "ref",
@@ -230,14 +230,14 @@ func buildRESTOpenAPIPaths() map[string]any {
 			}, []string{"body"}), pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(200, "Wiki page written")),
 			"delete": operation("deleteWikiPage", "Delete a wiki page by slug.", auth(), jsonBody(false, map[string]any{
 				"message": stringSchema("Optional commit message recorded for the wiki deletion."),
 			}, nil), pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(204, "Wiki page deleted")),
 		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move": map[string]any{
@@ -248,40 +248,40 @@ func buildRESTOpenAPIPaths() map[string]any {
 			}, []string{"new_slug", "if_match"}), pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(200, "Wiki page moved and inbound references rewritten")),
 		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels": map[string]any{
 			"get": operation("listWikiPageLabels", "List labels attached to a wiki page.", nil, nil, pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(200, "Wiki page labels returned")),
 			"post": operation("addWikiPageLabels", "Add labels to a wiki page.", auth(), jsonBody(true, map[string]any{
 				"labels": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Repository label names to attach."},
 			}, []string{"labels"}), pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(200, "Wiki page labels returned")),
 			"put": operation("setWikiPageLabels", "Replace labels attached to a wiki page.", auth(), jsonBody(true, map[string]any{
 				"labels": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Repository label names that should remain attached."},
 			}, []string{"labels"}), pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(200, "Wiki page labels returned")),
 			"delete": operation("removeAllWikiPageLabels", "Remove all labels from a wiki page.", auth(), nil, pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(204, "Wiki page labels removed")),
 		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels/{name}": map[string]any{
 			"delete": operation("removeWikiPageLabel", "Remove one label from a wiki page.", auth(), nil, pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 				param("name", "string"),
 			), response(200, "Remaining wiki page labels returned")),
 		},
@@ -289,7 +289,7 @@ func buildRESTOpenAPIPaths() map[string]any {
 			"get": operation("listWikiPageHistory", "List paginated revision history for a wiki page slug.", nil, nil, append(pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), queryParams(
 				param("page", "integer"),
 				param("per_page", "integer"),
@@ -299,7 +299,7 @@ func buildRESTOpenAPIPaths() map[string]any {
 			"get": operation("listWikiBacklinks", "List inbound wiki links for a page slug.", nil, nil, pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-				param("slug", "string"),
+				wikiSlugParamSpec(),
 			), response(200, "Wiki backlinks returned")),
 		},
 	}
@@ -351,6 +351,12 @@ func param(name, typ string) map[string]any {
 		"name":   name,
 		"schema": schema,
 	}
+}
+
+func wikiSlugParamSpec() map[string]any {
+	p := param("slug", "string")
+	p["description"] = "Wiki page slug as one path parameter. Encode nested slug separators as %2F, for example guides%2Fsetup."
+	return p
 }
 
 func stringSchema(description string) map[string]any {

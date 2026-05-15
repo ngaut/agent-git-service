@@ -459,10 +459,6 @@ func registerRepoWikiRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move", handlers.MoveWikiPage)
 	r.Put("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.PutWikiPage)
 	r.Delete("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.DeleteWikiPage)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages/*", handlers.GetWikiPage)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/pages/*", handlers.MoveWikiPage)
-	r.Put("/api/v3/repos/{owner}/{repo}/wiki/pages/*", handlers.PutWikiPage)
-	r.Delete("/api/v3/repos/{owner}/{repo}/wiki/pages/*", handlers.DeleteWikiPage)
 }
 
 func registerRepoCoreRoutes(r chi.Router, handlers *rest.Deps) {
@@ -942,6 +938,9 @@ func registerHostMux(r chi.Router) http.Handler {
 				req.URL.Path = "/api/graphql"
 			} else if !strings.HasPrefix(p, "/api/") {
 				req.URL.Path = "/api/v3" + p
+				if req.URL.RawPath != "" {
+					req.URL.RawPath = "/api/v3" + req.URL.RawPath
+				}
 			}
 		}
 		r.ServeHTTP(w, req)

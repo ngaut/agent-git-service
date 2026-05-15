@@ -44,7 +44,7 @@ func buildLinkHeader(r *http.Request, baseURL string, totalItems, page, perPage 
 	makeLink := func(p int, rel string) string {
 		query.Set("page", strconv.Itoa(p))
 		query.Set("per_page", strconv.Itoa(perPage))
-		u := baseURL + r.URL.Path + "?" + query.Encode()
+		u := baseURL + r.URL.EscapedPath() + "?" + query.Encode()
 		return fmt.Sprintf("<%s>; rel=\"%s\"", u, rel)
 	}
 

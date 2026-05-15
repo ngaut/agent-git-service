@@ -2,6 +2,7 @@ package router_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -53,7 +54,7 @@ func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps,
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}, &db.DeviceCodeAuditLog{}, &db.AuthorizationCode{}, &db.Repository{}, &db.RepoRedirect{}); err != nil {
+	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}, &db.DeviceCodeAuditLog{}, &db.AuthorizationCode{}, &db.Repository{}, &db.RepoRedirect{}, &db.Label{}, &db.WikiPageLabel{}, &db.WikiSearchDocument{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -732,6 +733,40 @@ func TestHostRewrite_REST(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if _, ok := resp["installed_version"]; !ok {
 		t.Errorf("expected 'installed_version' field in /meta response")
+	}
+}
+
+func TestHostRewrite_WikiNestedSlugPreservesEncodedSlash(t *testing.T) {
+	svc, mux := setupRouterTest(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "admin",
+		Name:       "host-wiki",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, "admin/host-wiki", "guides/setup", "# Setup\n", "create setup", ""); err != nil {
+		t.Fatalf("seed wiki page: %v", err)
+	}
+	svc.Wg.Wait()
+
+	req := httptest.NewRequest("GET", "/repos/admin/host-wiki/wiki/pages/guides%2Fsetup", nil)
+	req.Host = "api.github.localhost"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := resp["slug"]; got != "guides/setup" {
+		t.Fatalf("slug = %v, want guides/setup", got)
 	}
 }
 

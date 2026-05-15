@@ -167,6 +167,7 @@ Handlers follow a consistent pattern:
 Wiki path-slug hierarchy rules:
 
 - page slugs are lowercase canonical paths such as `guides/setup`
+- wiki page routes treat `{slug}` as one percent-encoded path parameter; clients must request nested slugs such as `guides/setup` as `guides%2Fsetup` when the slug is followed by a subresource, for example `/wiki/pages/guides%2Fsetup/history`
 - `GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}` accepts an optional `ref` query parameter to read the page body and blob SHA at a full commit SHA from that page's history; omitted `ref` still reads HEAD
 - `GET /api/v3/repos/{owner}/{repo}/wiki/pages` accepts `path`, `recursive`, `label`/`labels`, and `exclude_label`/`exclude_labels` query parameters for prefix-scoped and label-scoped listing
 - `GET /api/v3/repos/{owner}/{repo}/wiki/search` accepts `q`, `limit`, `offset`, `label`/`labels`, and `exclude_label`/`exclude_labels`, returns `{results, query, method, elapsed_ms}`, and caps `limit` server-side at 50
@@ -175,8 +176,7 @@ Wiki path-slug hierarchy rules:
 - `POST /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move` performs an atomic rename with `new_slug` and `if_match`, rewrites eligible inbound wiki references in the same commit, and returns `{ moved, rewrites, skipped }`
 - wiki page get/list/search responses include `labels`, shaped with the existing repository label JSON contract
 - wiki write endpoints reject `ref` because historical revision edits are out of scope for the current REST contract
-- only the exact single-segment routes `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
-- greedy nested wiki page routes still read an existing page first; if no page exists, suffixes such as `/backlinks` and `/labels` dispatch to the corresponding wiki subresource
+- only the exact single-segment routes `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
 - read/list/backlink operations also surface legacy on-disk wiki filenames that still contain uppercase letters, underscores, or dots
 - wiki search indexing is asynchronous after successful put/move/delete/label writes, so clients must tolerate short freshness lag; when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
 
