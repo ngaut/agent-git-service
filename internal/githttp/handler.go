@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/cgi"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,8 +91,8 @@ func (h *Handler) ensureRepo(ctx context.Context, fullName, defaultBranch string
 // It handles repo lookup, ensures repo exists, and fetches repo path information.
 // Returns repoContext on success, or writes error response and returns false on failure.
 func (h *Handler) resolveRepoContext(w http.ResponseWriter, r *http.Request, action string, required service.RepoPermission) (*repoContext, bool) {
-	owner := chi.URLParam(r, "owner")
-	repo := strings.TrimSuffix(chi.URLParam(r, "repo"), ".git")
+	owner := pathParam(r, "owner")
+	repo := strings.TrimSuffix(pathParam(r, "repo"), ".git")
 	requested := owner + "/" + repo
 	applog.AddAttrs(r.Context(), slog.String("repo", requested))
 
@@ -161,6 +162,17 @@ func (h *Handler) resolveRepoContext(w http.ResponseWriter, r *http.Request, act
 		repoFullName:  fullName,
 		defaultBranch: rep.DefaultBranch,
 	}, true
+}
+
+func pathParam(r *http.Request, key string) string {
+	raw := chi.URLParam(r, key)
+	if r.URL.RawPath != "" {
+		decoded, err := url.PathUnescape(raw)
+		if err == nil {
+			return decoded
+		}
+	}
+	return raw
 }
 
 // InfoRefs handles GET /{owner}/{repo}.git/info/refs?service=git-*

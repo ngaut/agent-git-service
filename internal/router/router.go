@@ -198,18 +198,18 @@ func registerGitHTTPRoutes(r chi.Router, gitHandler *githttp.Handler, handlers *
 
 func consoleRedirectHandler(consoleBaseURL string, isIssue bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		owner := chi.URLParam(r, "owner")
-		repo := strings.TrimSuffix(chi.URLParam(r, "repo"), ".git")
+		owner := pathParam(r, "owner")
+		repo := strings.TrimSuffix(pathParam(r, "repo"), ".git")
 		if owner == "" || repo == "" {
 			http.NotFound(w, r)
 			return
 		}
 		base := strings.TrimRight(consoleBaseURL, "/")
-		target := base + "/vault/" + owner + "/" + repo
+		target := base + "/vault/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
 		if isIssue {
-			issueID := chi.URLParam(r, "issue_id")
+			issueID := pathParam(r, "issue_id")
 			if issueID != "" {
-				target += "/memories/" + issueID
+				target += "/memories/" + url.PathEscape(issueID)
 			}
 		}
 		if raw := strings.TrimSpace(r.URL.RawQuery); raw != "" {
@@ -217,6 +217,17 @@ func consoleRedirectHandler(consoleBaseURL string, isIssue bool) http.HandlerFun
 		}
 		http.Redirect(w, r, target, http.StatusFound)
 	}
+}
+
+func pathParam(r *http.Request, key string) string {
+	raw := chi.URLParam(r, key)
+	if r.URL.RawPath != "" {
+		decoded, err := url.PathUnescape(raw)
+		if err == nil {
+			return decoded
+		}
+	}
+	return raw
 }
 
 func registerAPIDiscoveryRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw func(http.Handler) http.Handler) {

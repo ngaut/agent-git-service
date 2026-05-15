@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 	"gh-server/internal/service"
@@ -99,7 +97,7 @@ func (d *Deps) DeleteRelease(w http.ResponseWriter, r *http.Request) {
 // GetReleaseByTag handles GET /api/v3/repos/{owner}/{repo}/releases/tags/{tag}
 func (d *Deps) GetReleaseByTag(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	tag := chi.URLParam(r, "tag")
+	tag := pathParam(r, "tag")
 	rel, err := d.Svc.GetReleaseByTag(r.Context(), full, tag)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -146,7 +144,7 @@ func (d *Deps) UpdateRelease(w http.ResponseWriter, r *http.Request) {
 // HeadReleaseByTag handles HEAD /api/v3/repos/{owner}/{repo}/releases/tags/{tag}
 func (d *Deps) HeadReleaseByTag(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	tag := chi.URLParam(r, "tag")
+	tag := pathParam(r, "tag")
 	_, err := d.Svc.GetReleaseByTag(r.Context(), full, tag)
 	if err != nil {
 		w.WriteHeader(404)
@@ -177,9 +175,9 @@ func (d *Deps) GenerateReleaseNotes(w http.ResponseWriter, r *http.Request) {
 // DownloadArchiveByTag handles GET /api/v3/repos/{owner}/{repo}/archive/refs/tags/{tagfile}
 // e.g., /repos/testorg/myrepo/archive/refs/tags/v1.2.3.zip
 func (d *Deps) DownloadArchiveByTag(w http.ResponseWriter, r *http.Request) {
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
-	tagfile := chi.URLParam(r, "tagfile") // e.g., "v1.2.3.zip" or "v1.2.3.tar.gz"
+	owner := pathParam(r, "owner")
+	repo := pathParam(r, "repo")
+	tagfile := pathParam(r, "tagfile") // e.g., "v1.2.3.zip" or "v1.2.3.tar.gz"
 	fullName := owner + "/" + repo
 
 	var tag, format string
@@ -297,10 +295,10 @@ func (d *Deps) DownloadReleaseAssetContent(w http.ResponseWriter, r *http.Reques
 
 // DownloadReleaseArchive handles GET /api/v3/repos/{owner}/{repo}/releases/{release_id}/archive/{format}
 func (d *Deps) DownloadReleaseArchive(w http.ResponseWriter, r *http.Request) {
-	repo := chi.URLParam(r, "repo")
-	owner := chi.URLParam(r, "owner")
+	repo := pathParam(r, "repo")
+	owner := pathParam(r, "owner")
 	fullName := owner + "/" + repo
-	format := chi.URLParam(r, "format") // zipball or tarball
+	format := pathParam(r, "format") // zipball or tarball
 	releaseID, ok := mustIntParam(w, r, "release_id")
 	if !ok {
 		return

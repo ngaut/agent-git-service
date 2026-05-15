@@ -3,6 +3,7 @@ package rest_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"testing"
 
 	"gh-server/internal/testharness"
@@ -125,6 +126,48 @@ func TestRemoveIssueLabel_URLEncodedName(t *testing.T) {
 		if label["name"].(string) == "topic:test" {
 			t.Fatal("label should have been removed but still exists")
 		}
+	}
+}
+
+func TestRemoveIssueLabel_EncodedRepoAndSlashLabelName(t *testing.T) {
+	h := testharness.New(t)
+	repoName := "F1 Tracks and Tastes"
+	compatSeedRepo(t, h, repoName)
+
+	labelName := "area/ui"
+	fullPath := url.PathEscape(h.User.Login) + "/" + url.PathEscape(repoName)
+	w := h.DoRESTJSON(t, "POST", "/api/v3/repos/"+fullPath+"/labels", map[string]any{
+		"name":        labelName,
+		"color":       "aabbcc",
+		"description": "UI work",
+	})
+	assertStatusCode(t, w, 201)
+
+	w = h.DoRESTJSON(t, "POST", "/api/v3/repos/"+fullPath+"/issues", map[string]any{
+		"title": "Encoded path issue",
+		"body":  "Test body",
+	})
+	assertStatusCode(t, w, 201)
+	var issueResp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &issueResp); err != nil {
+		t.Fatalf("failed to unmarshal issue response: %v", err)
+	}
+	issueNum := int(issueResp["number"].(float64))
+
+	w = h.DoRESTJSON(t, "POST", fmt.Sprintf("/api/v3/repos/%s/issues/%d/labels", fullPath, issueNum), map[string]any{
+		"labels": []string{labelName},
+	})
+	assertStatusCode(t, w, 200)
+
+	removeLabelPath := fmt.Sprintf("/api/v3/repos/%s/issues/%d/labels/%s", fullPath, issueNum, url.PathEscape(labelName))
+	w = h.DoREST(t, "DELETE", removeLabelPath, nil)
+	assertStatusCode(t, w, 200)
+	var remaining []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &remaining); err != nil {
+		t.Fatalf("failed to unmarshal remaining labels response: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("expected no remaining labels, got %d", len(remaining))
 	}
 }
 

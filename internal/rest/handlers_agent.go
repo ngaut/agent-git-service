@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 )
@@ -100,7 +98,7 @@ func (d *Deps) ResetAgentToken(w http.ResponseWriter, r *http.Request) {
 		respond.ServiceErrorRequest(r, w, err)
 		return
 	}
-	agentLogin := chi.URLParam(r, "agent_login")
+	agentLogin := pathParam(r, "agent_login")
 	tok, err := d.Svc.ResetAgentToken(r.Context(), u.ID, agentLogin)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -134,7 +132,7 @@ func (d *Deps) ListIssueAttachments(w http.ResponseWriter, r *http.Request) {
 
 // DownloadIssueAttachment handles GET /api/v3/attachments/{uuid}.
 func (d *Deps) DownloadIssueAttachment(w http.ResponseWriter, r *http.Request) {
-	uuid := strings.TrimSpace(chi.URLParam(r, "uuid"))
+	uuid := strings.TrimSpace(pathParam(r, "uuid"))
 	if uuid == "" {
 		respond.NotFound(w)
 		return
@@ -161,7 +159,7 @@ func (d *Deps) DownloadIssueAttachment(w http.ResponseWriter, r *http.Request) {
 
 // DeleteIssueAttachment handles DELETE /api/v3/attachments/{uuid}.
 func (d *Deps) DeleteIssueAttachment(w http.ResponseWriter, r *http.Request) {
-	uuid := strings.TrimSpace(chi.URLParam(r, "uuid"))
+	uuid := strings.TrimSpace(pathParam(r, "uuid"))
 	if uuid == "" {
 		respond.NotFound(w)
 		return

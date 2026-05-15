@@ -3,8 +3,6 @@ package rest
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -58,7 +56,7 @@ func (d *Deps) ListEnvVariablesByRepoID(w http.ResponseWriter, r *http.Request) 
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.listVariables(w, r, repo.ID, env)
 }
 
@@ -69,7 +67,7 @@ func (d *Deps) CreateEnvVariableByRepoID(w http.ResponseWriter, r *http.Request)
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.createVariable(w, r, &repo.ID, repo.OwnerID, env)
 }
 
@@ -80,7 +78,7 @@ func (d *Deps) GetEnvVariableByRepoID(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.getVariable(w, r, repo.ID, env)
 }
 
@@ -91,7 +89,7 @@ func (d *Deps) UpdateEnvVariableByRepoID(w http.ResponseWriter, r *http.Request)
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.updateVariable(w, r, repo.ID, env)
 }
 
@@ -102,7 +100,7 @@ func (d *Deps) DeleteEnvVariableByRepoID(w http.ResponseWriter, r *http.Request)
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.deleteVariable(w, r, repo.ID, env)
 }
 
@@ -111,7 +109,7 @@ func (d *Deps) ListEnvSecretsByRepoID(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.listSecrets(w, r, repo.ID, env)
 }
 
@@ -124,7 +122,7 @@ func (d *Deps) CreateOrUpdateEnvSecretByRepoID(w http.ResponseWriter, r *http.Re
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.upsertSecret(w, r, &repo.ID, repo.OwnerID, env)
 }
 
@@ -133,7 +131,7 @@ func (d *Deps) DeleteEnvSecretByRepoID(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.deleteSecret(w, r, repo.ID, env)
 }
 
@@ -186,7 +184,7 @@ func (d *Deps) listEnvironments(w http.ResponseWriter, r *http.Request, repo *db
 }
 
 func (d *Deps) getEnvironment(w http.ResponseWriter, r *http.Request, repo *db.Repository) {
-	envName := chi.URLParam(r, "environment_name")
+	envName := pathParam(r, "environment_name")
 	env, err := d.Svc.GetEnvironment(r.Context(), repo.ID, envName)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -196,7 +194,7 @@ func (d *Deps) getEnvironment(w http.ResponseWriter, r *http.Request, repo *db.R
 }
 
 func (d *Deps) deleteEnvironment(w http.ResponseWriter, r *http.Request, repo *db.Repository) {
-	envName := chi.URLParam(r, "environment_name")
+	envName := pathParam(r, "environment_name")
 	if err := d.Svc.DeleteEnvironment(r.Context(), repo.ID, envName); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -205,7 +203,7 @@ func (d *Deps) deleteEnvironment(w http.ResponseWriter, r *http.Request, repo *d
 }
 
 func (d *Deps) upsertEnvironment(w http.ResponseWriter, r *http.Request, repo *db.Repository) {
-	envName := chi.URLParam(r, "environment_name")
+	envName := pathParam(r, "environment_name")
 	var body struct {
 		WaitTimer              *int                       `json:"wait_timer"`
 		Reviewers              []map[string]any           `json:"reviewers"`

@@ -3,8 +3,6 @@ package rest
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 )
@@ -265,7 +263,7 @@ func (d *Deps) DeleteSSHSigningKey(w http.ResponseWriter, r *http.Request) {
 
 // ListUserPublicKeys handles GET /api/v3/users/{username}/keys
 func (d *Deps) ListUserPublicKeys(w http.ResponseWriter, r *http.Request) {
-	u, err := d.Svc.GetUser(r.Context(), chi.URLParam(r, "username"))
+	u, err := d.Svc.GetUser(r.Context(), pathParam(r, "username"))
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -284,7 +282,7 @@ func (d *Deps) ListUserPublicKeys(w http.ResponseWriter, r *http.Request) {
 
 // ListUserSigningKeys handles GET /api/v3/users/{username}/ssh_signing_keys
 func (d *Deps) ListUserSigningKeys(w http.ResponseWriter, r *http.Request) {
-	u, err := d.Svc.GetUser(r.Context(), chi.URLParam(r, "username"))
+	u, err := d.Svc.GetUser(r.Context(), pathParam(r, "username"))
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -303,7 +301,7 @@ func (d *Deps) ListUserSigningKeys(w http.ResponseWriter, r *http.Request) {
 
 // ListUserGPGKeys handles GET /api/v3/users/{username}/gpg_keys
 func (d *Deps) ListUserGPGKeys(w http.ResponseWriter, r *http.Request) {
-	u, err := d.Svc.GetUser(r.Context(), chi.URLParam(r, "username"))
+	u, err := d.Svc.GetUser(r.Context(), pathParam(r, "username"))
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return

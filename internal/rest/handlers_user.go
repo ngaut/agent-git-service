@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -27,7 +25,7 @@ func (d *Deps) GetAuthenticatedUser(w http.ResponseWriter, r *http.Request) {
 
 // GetUser handles GET /api/v3/users/{username}
 func (d *Deps) GetUser(w http.ResponseWriter, r *http.Request) {
-	login := chi.URLParam(r, "username")
+	login := pathParam(r, "username")
 	u, err := d.Svc.GetUser(r.Context(), login)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -40,7 +38,7 @@ func (d *Deps) GetUser(w http.ResponseWriter, r *http.Request) {
 // GET /api/v3/user/repos (when the username param is absent, falls back to
 // the authenticated user).
 func (d *Deps) ListUserRepos(w http.ResponseWriter, r *http.Request) {
-	login := chi.URLParam(r, "username")
+	login := pathParam(r, "username")
 	if login == "" {
 		repos, err := d.Svc.ListViewerRepos(r.Context())
 		if err != nil {
@@ -134,7 +132,7 @@ func (d *Deps) ListStarredRepos(w http.ResponseWriter, r *http.Request) {
 
 // ListUserStarredRepos handles GET /api/v3/users/{username}/starred.
 func (d *Deps) ListUserStarredRepos(w http.ResponseWriter, r *http.Request) {
-	login := chi.URLParam(r, "username")
+	login := pathParam(r, "username")
 	u, err := d.Svc.GetUser(r.Context(), login)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)

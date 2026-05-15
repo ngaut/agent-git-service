@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/gitstore"
 	"gh-server/internal/rest/respond"
@@ -107,7 +105,7 @@ func (d *Deps) CheckBranchRules(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	branch := chi.URLParam(r, "*")
+	branch := pathParam(r, "*")
 	rulesets, err := d.Svc.ListBranchRulesets(r.Context(), repo.FullName)
 	if err != nil {
 		rulesets = []db.Ruleset{}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -548,6 +549,23 @@ func TestClone(t *testing.T) {
 	cloneDir := filepath.Join(t.TempDir(), "clone")
 
 	runGit(t, t.TempDir(), "clone", env.RepoURL, cloneDir)
+
+	readmePath := filepath.Join(cloneDir, "README.md")
+	data, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("README.md not found in clone: %v", err)
+	}
+	if !strings.Contains(string(data), "README") {
+		t.Errorf("expected README content, got: %s", data)
+	}
+}
+
+func TestClone_LiteralPercentRepoName(t *testing.T) {
+	env := setupTestServer(t, "testowner", "foo%20bar", "main", true)
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+	repoURL := fmt.Sprintf("%s/%s/%s.git", env.Server.URL, "testowner", url.PathEscape("foo%20bar"))
+
+	runGit(t, t.TempDir(), "clone", repoURL, cloneDir)
 
 	readmePath := filepath.Join(cloneDir, "README.md")
 	data, err := os.ReadFile(readmePath)

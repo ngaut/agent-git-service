@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/crypto"
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
@@ -37,7 +35,7 @@ func (d *Deps) GetRepoSecret(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	secret, err := d.Svc.GetSecret(r.Context(), repo.ID, "", name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -104,7 +102,7 @@ func (d *Deps) GetOrgSecret(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	s, err := d.Svc.GetOrgSecret(r.Context(), org.ID, name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -119,7 +117,7 @@ func (d *Deps) GetOrgSecretRepos(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	s, err := d.Svc.GetOrgSecret(r.Context(), org.ID, name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -135,7 +133,7 @@ func (d *Deps) SetOrgSecretRepos(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	var body struct {
 		SelectedRepositoryIDs []uint `json:"selected_repository_ids"`
 	}
@@ -163,7 +161,7 @@ func (d *Deps) ListEnvSecrets(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.listSecrets(w, r, repo.ID, env)
 }
 
@@ -178,7 +176,7 @@ func (d *Deps) CreateOrUpdateEnvSecret(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.upsertSecret(w, r, &repo.ID, repo.OwnerID, env)
 }
 
@@ -188,7 +186,7 @@ func (d *Deps) DeleteEnvSecret(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.deleteSecret(w, r, repo.ID, env)
 }
 
@@ -231,7 +229,7 @@ func (d *Deps) CreateOrUpdateUserCodespacesSecret(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	var body struct {
 		EncryptedValue        string `json:"encrypted_value"`
 		KeyID                 string `json:"key_id"`
@@ -290,7 +288,7 @@ func (d *Deps) DeleteUserCodespacesSecret(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	if err := d.Svc.DeleteOrgSecret(r.Context(), user.ID, name); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -364,13 +362,13 @@ func (d *Deps) listOrgSecrets(w http.ResponseWriter, r *http.Request, orgID uint
 	}
 	out := make([]map[string]any, len(secrets))
 	for i, s := range secrets {
-		out[i] = transform.OrgSecret(s, chi.URLParam(r, "org"))
+		out[i] = transform.OrgSecret(s, pathParam(r, "org"))
 	}
 	respond.JSON(w, 200, map[string]any{"total_count": len(out), "secrets": out})
 }
 
 func (d *Deps) upsertSecret(w http.ResponseWriter, r *http.Request, repoID *uint, ownerID uint, env string) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	var body struct {
 		EncryptedValue string `json:"encrypted_value"`
 		KeyID          string `json:"key_id"`
@@ -419,7 +417,7 @@ func (d *Deps) upsertSecret(w http.ResponseWriter, r *http.Request, repoID *uint
 }
 
 func (d *Deps) upsertOrgSecret(w http.ResponseWriter, r *http.Request, orgID uint) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	var body struct {
 		EncryptedValue        string `json:"encrypted_value"`
 		KeyID                 string `json:"key_id"`
@@ -475,7 +473,7 @@ func (d *Deps) upsertOrgSecret(w http.ResponseWriter, r *http.Request, orgID uin
 }
 
 func (d *Deps) deleteSecret(w http.ResponseWriter, r *http.Request, repoID uint, env string) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	if err := d.Svc.DeleteSecret(r.Context(), repoID, env, name); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -484,7 +482,7 @@ func (d *Deps) deleteSecret(w http.ResponseWriter, r *http.Request, repoID uint,
 }
 
 func (d *Deps) deleteOrgSecret(w http.ResponseWriter, r *http.Request, orgID uint) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	if err := d.Svc.DeleteOrgSecret(r.Context(), orgID, name); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -532,7 +530,7 @@ func (d *Deps) currentUserCodespacesSecret(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return db.User{}, db.Secret{}, false
 	}
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	secret, err := d.Svc.GetOrgSecret(r.Context(), user.ID, name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -546,7 +544,7 @@ func (d *Deps) updateUserCodespacesSecretRepo(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	repoID := strings.TrimSpace(chi.URLParam(r, "repository_id"))
+	repoID := strings.TrimSpace(pathParam(r, "repository_id"))
 	if _, err := strconv.ParseUint(repoID, 10, 64); err != nil || repoID == "" {
 		respond.ValidationFailed(w, "invalid repository_id")
 		return

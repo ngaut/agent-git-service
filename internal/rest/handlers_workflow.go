@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 )
@@ -43,7 +41,7 @@ func (d *Deps) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	workflowIDOrName := chi.URLParam(r, "workflow_id")
+	workflowIDOrName := pathParam(r, "workflow_id")
 	if workflowIDOrName == "" {
 		respond.ValidationFailed(w, "workflow_id is required")
 		return
@@ -64,7 +62,7 @@ func (d *Deps) EnableWorkflow(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	workflowIDOrName := chi.URLParam(r, "workflow_id")
+	workflowIDOrName := pathParam(r, "workflow_id")
 	if workflowIDOrName == "" {
 		respond.ValidationFailed(w, "workflow_id is required")
 		return
@@ -92,7 +90,7 @@ func (d *Deps) DisableWorkflow(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	workflowIDOrName := chi.URLParam(r, "workflow_id")
+	workflowIDOrName := pathParam(r, "workflow_id")
 	if workflowIDOrName == "" {
 		respond.ValidationFailed(w, "workflow_id is required")
 		return
@@ -120,7 +118,7 @@ func (d *Deps) DispatchWorkflow(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	workflowIDOrName := chi.URLParam(r, "workflow_id")
+	workflowIDOrName := pathParam(r, "workflow_id")
 	if workflowIDOrName == "" {
 		respond.ValidationFailed(w, "workflow_id is required")
 		return
