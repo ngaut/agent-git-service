@@ -896,8 +896,10 @@ func TestWiki_BacklinksPathResolution_Issue1355(t *testing.T) {
 	}{
 		{slug: "home", body: "# Home\n\nStart here.\n"},
 		{slug: "guides/setup", body: "# Setup\n\nNested page.\n"},
+		{slug: "plain-page", body: "# Plain Page\n\nTop-level page with a hyphenated slug.\n"},
 		{slug: "faq", body: "# FAQ\n\nSee [[home]] and [Home](home.md).\n"},
 		{slug: "guide-index", body: "# Guide Index\n\nUse [[guides/setup]].\n"},
+		{slug: "plain-ref", body: "# Plain Ref\n\nUse [[Plain Page]].\n"},
 		{slug: "shortcut-miss", body: "# Shortcut Miss\n\nUse [[Setup]].\n"},
 		{slug: "assets", body: "# Assets\n\n![Architecture](home.md)\n"},
 	} {
@@ -917,6 +919,13 @@ func TestWiki_BacklinksPathResolution_Issue1355(t *testing.T) {
 	rows = testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 || rows[0]["slug"] != "guide-index" {
 		t.Fatalf("nested backlinks = %+v, want guide-index only", rows)
+	}
+
+	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/plain-page/backlinks", nil)
+	assertStatusCode(t, w, http.StatusOK)
+	rows = testharness.DecodeJSONArray(t, w)
+	if len(rows) != 1 || rows[0]["slug"] != "plain-ref" {
+		t.Fatalf("hyphenated backlinks = %+v, want plain-ref only", rows)
 	}
 }
 

@@ -168,15 +168,9 @@ func (e *WikiBulkMoveConflictError) Error() string {
 
 func (e *WikiBulkMoveConflictError) Unwrap() error { return ErrConflict }
 
-type wikiBacklinkIndex struct {
+type wikiBacklinkCacheEntry struct {
 	HeadSHA   string
-	Backlinks map[string][]WikiBacklink
-}
-
-type wikiIndexedPage struct {
-	Slug  string
-	Title string
-	Body  string
+	Backlinks []WikiBacklink
 }
 
 type wikiLinkMatch struct {
@@ -330,11 +324,12 @@ func canonicalWikiLookupSlug(slug string) string {
 		if part == "" {
 			return ""
 		}
+		part = strings.ReplaceAll(part, "_", "-")
 		part = strings.Join(strings.Fields(part), "-")
 		parts[i] = strings.ToLower(part)
 	}
 	canonical := strings.Join(parts, "/")
-	if err := validateWikiSlug(canonical); err != nil {
+	if err := validateReadableWikiSlug(canonical); err != nil {
 		return ""
 	}
 	return canonical
@@ -460,25 +455,196 @@ func (s *Service) invalidateWikiBacklinks(repoFullName string) {
 	delete(s.wikiBacklinksCache, repoFullName)
 }
 
-func (s *Service) loadWikiBacklinkIndex(ctx context.Context, repoFullName string) (wikiBacklinkIndex, error) {
+func copyWikiBacklinks(backlinks []WikiBacklink) []WikiBacklink {
+	if len(backlinks) == 0 {
+		return []WikiBacklink{}
+	}
+	out := make([]WikiBacklink, len(backlinks))
+	copy(out, backlinks)
+	return out
+}
+
+func (s *Service) cachedWikiBacklinks(repoFullName, slug, headSHA string) ([]WikiBacklink, bool) {
+	s.wikiBacklinksMu.RLock()
+	defer s.wikiBacklinksMu.RUnlock()
+	if s.wikiBacklinksCache == nil {
+		return nil, false
+	}
+	repoCache := s.wikiBacklinksCache[repoFullName]
+	if repoCache == nil {
+		return nil, false
+	}
+	entry, ok := repoCache[slug]
+	if !ok || entry.HeadSHA != headSHA {
+		return nil, false
+	}
+	return copyWikiBacklinks(entry.Backlinks), true
+}
+
+func (s *Service) storeCachedWikiBacklinks(repoFullName, slug, headSHA string, backlinks []WikiBacklink) {
+	s.wikiBacklinksMu.Lock()
+	defer s.wikiBacklinksMu.Unlock()
+	if s.wikiBacklinksCache == nil {
+		s.wikiBacklinksCache = map[string]map[string]wikiBacklinkCacheEntry{}
+	}
+	if s.wikiBacklinksCache[repoFullName] == nil {
+		s.wikiBacklinksCache[repoFullName] = map[string]wikiBacklinkCacheEntry{}
+	}
+	s.wikiBacklinksCache[repoFullName][slug] = wikiBacklinkCacheEntry{
+		HeadSHA:   headSHA,
+		Backlinks: copyWikiBacklinks(backlinks),
+	}
+}
+
+func wikiBacklinkGrepPatterns(slug string) []string {
+	seen := map[string]struct{}{}
+	var patterns []string
+	addPattern := func(pattern string) {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			return
+		}
+		if _, ok := seen[pattern]; ok {
+			return
+		}
+		seen[pattern] = struct{}{}
+		patterns = append(patterns, pattern)
+	}
+
+	addPattern(slug)
+	canonical := canonicalWikiLookupSlug(slug)
+	if canonical != "" {
+		addPattern(canonical)
+	}
+
+	variants, overflow := wikiSlugSeparatorVariants(slug, wikiBacklinkGrepPatternLimit-len(patterns))
+	if overflow {
+		return nil
+	}
+	for _, variant := range variants {
+		addPattern(variant)
+	}
+	if canonical != "" {
+		variants, overflow = wikiSlugSeparatorVariants(canonical, wikiBacklinkGrepPatternLimit-len(patterns))
+		if overflow {
+			return nil
+		}
+		for _, variant := range variants {
+			addPattern(variant)
+		}
+	}
+	return patterns
+}
+
+const wikiBacklinkGrepPatternLimit = 256
+
+func wikiSlugSeparatorVariants(slug string, limit int) ([]string, bool) {
+	if limit <= 0 {
+		return nil, true
+	}
+	parts := strings.Split(slug, "/")
+	segmentVariants := make([][]string, len(parts))
+	for i, part := range parts {
+		segmentVariants[i] = wikiSegmentSeparatorVariants(part)
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	overflow := false
+	var build func(int, []string)
+	build = func(idx int, acc []string) {
+		if overflow {
+			return
+		}
+		if idx == len(segmentVariants) {
+			joined := strings.Join(acc, "/")
+			if joined == "" {
+				return
+			}
+			if _, ok := seen[joined]; ok {
+				return
+			}
+			if len(out) == limit {
+				overflow = true
+				return
+			}
+			seen[joined] = struct{}{}
+			out = append(out, joined)
+			return
+		}
+		for _, variant := range segmentVariants[idx] {
+			build(idx+1, append(acc, variant))
+		}
+	}
+	build(0, nil)
+	return out, overflow
+}
+
+func wikiSegmentSeparatorVariants(segment string) []string {
+	seen := map[string]struct{}{}
+	var variants []string
+	add := func(v string) {
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		variants = append(variants, v)
+	}
+
+	add(segment)
+	add(strings.ReplaceAll(segment, "-", " "))
+	add(strings.ReplaceAll(segment, "-", "_"))
+	add(strings.ReplaceAll(segment, "_", " "))
+	add(strings.ReplaceAll(segment, "_", "-"))
+	return variants
+}
+
+func resolveWikiBacklinkTarget(match wikiLinkMatch, pages, topLevelPages map[string]struct{}, canonicalPages, canonicalTopLevelPages map[string]string) (string, bool) {
+	resolvedTarget := match.targetSlug
+	if match.literal {
+		if _, ok := pages[resolvedTarget]; ok {
+			return resolvedTarget, true
+		}
+		canonical := canonicalWikiLookupSlug(match.targetSlug)
+		if canonical == "" {
+			return "", false
+		}
+		resolvedTarget = canonicalPages[canonical]
+		return resolvedTarget, resolvedTarget != ""
+	}
+
+	if strings.Contains(resolvedTarget, "/") {
+		return "", false
+	}
+	if _, ok := topLevelPages[resolvedTarget]; ok {
+		return resolvedTarget, true
+	}
+	canonical := canonicalWikiLookupSlug(match.targetSlug)
+	if canonical == "" {
+		return "", false
+	}
+	resolvedTarget = canonicalTopLevelPages[canonical]
+	return resolvedTarget, resolvedTarget != ""
+}
+
+func (s *Service) loadWikiBacklinksForSlug(ctx context.Context, repoFullName, targetSlug string) ([]WikiBacklink, error) {
 	full := wikiRepoFullName(repoFullName)
 	headSHA, err := s.Git.HeadSHA(ctx, full, wikiDefaultBranch)
 	if err != nil {
-		return wikiBacklinkIndex{}, err
+		return nil, err
 	}
 
-	s.wikiBacklinksMu.RLock()
-	if cached, ok := s.wikiBacklinksCache[repoFullName]; ok && cached.HeadSHA == headSHA {
-		s.wikiBacklinksMu.RUnlock()
+	if cached, ok := s.cachedWikiBacklinks(repoFullName, targetSlug, headSHA); ok {
 		return cached, nil
 	}
-	s.wikiBacklinksMu.RUnlock()
 
-	paths, err := s.Git.ListTreeFiles(ctx, full)
+	paths, err := s.Git.ListTreeFilesAtRef(ctx, full, headSHA)
 	if err != nil {
-		return wikiBacklinkIndex{}, err
+		return nil, err
 	}
-	pages := make(map[string]wikiIndexedPage, len(paths))
+	pages := make(map[string]struct{}, len(paths))
 	topLevelPages := make(map[string]struct{}, len(paths))
 	canonicalPages := make(map[string]string, len(paths))
 	canonicalTopLevelPages := make(map[string]string, len(paths))
@@ -487,16 +653,7 @@ func (s *Service) loadWikiBacklinkIndex(ctx context.Context, repoFullName string
 		if slug == "" {
 			continue
 		}
-		body, err := s.Git.ReadFile(ctx, full, p)
-		if err != nil {
-			return wikiBacklinkIndex{}, err
-		}
-		bodyStr := string(body)
-		pages[slug] = wikiIndexedPage{
-			Slug:  slug,
-			Title: titleFromBody(slug, bodyStr),
-			Body:  bodyStr,
-		}
+		pages[slug] = struct{}{}
 		if !strings.Contains(slug, "/") {
 			topLevelPages[slug] = struct{}{}
 		}
@@ -507,65 +664,47 @@ func (s *Service) loadWikiBacklinkIndex(ctx context.Context, repoFullName string
 			}
 		}
 	}
-
-	index := wikiBacklinkIndex{
-		HeadSHA:   headSHA,
-		Backlinks: make(map[string][]WikiBacklink),
+	if _, ok := pages[targetSlug]; !ok {
+		return nil, ErrNotFound
 	}
-	for _, page := range pages {
-		seenTargets := map[string]bool{}
-		for _, match := range extractWikiLinkMatches(page.Body) {
-			if seenTargets[match.targetSlug] {
-				continue
-			}
-			resolvedTarget := match.targetSlug
-			if match.literal {
-				if _, ok := pages[resolvedTarget]; !ok {
-					canonical := canonicalWikiLookupSlug(match.targetSlug)
-					if canonical == "" {
-						continue
-					}
-					resolvedTarget = canonicalPages[canonical]
-					if resolvedTarget == "" {
-						continue
-					}
-				}
-			} else {
-				if strings.Contains(resolvedTarget, "/") {
-					continue
-				}
-				if _, ok := topLevelPages[resolvedTarget]; !ok {
-					canonical := canonicalWikiLookupSlug(match.targetSlug)
-					if canonical == "" {
-						continue
-					}
-					resolvedTarget = canonicalTopLevelPages[canonical]
-					if resolvedTarget == "" {
-						continue
-					}
-				}
-			}
-			index.Backlinks[resolvedTarget] = append(index.Backlinks[resolvedTarget], WikiBacklink{
-				Slug:    page.Slug,
-				Title:   page.Title,
-				Snippet: match.snippet,
-			})
-			seenTargets[resolvedTarget] = true
+
+	candidatePaths := paths
+	if patterns := wikiBacklinkGrepPatterns(targetSlug); len(patterns) > 0 {
+		candidatePaths, err = s.Git.GrepFilesAtRef(ctx, full, headSHA, patterns)
+		if err != nil {
+			return nil, err
 		}
 	}
-	for slug := range index.Backlinks {
-		sort.Slice(index.Backlinks[slug], func(i, j int) bool {
-			return index.Backlinks[slug][i].Slug < index.Backlinks[slug][j].Slug
-		})
-	}
+	sort.Strings(candidatePaths)
 
-	s.wikiBacklinksMu.Lock()
-	defer s.wikiBacklinksMu.Unlock()
-	if s.wikiBacklinksCache == nil {
-		s.wikiBacklinksCache = map[string]wikiBacklinkIndex{}
+	backlinks := make([]WikiBacklink, 0)
+	for _, path := range candidatePaths {
+		sourceSlug := wikiPathToSlug(path)
+		if sourceSlug == "" {
+			continue
+		}
+		body, err := s.Git.ReadFileAtRef(ctx, full, path, headSHA)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range extractWikiLinkMatches(string(body)) {
+			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages, canonicalPages, canonicalTopLevelPages)
+			if !ok || resolvedTarget != targetSlug {
+				continue
+			}
+			backlinks = append(backlinks, WikiBacklink{
+				Slug:    sourceSlug,
+				Title:   titleFromBody(sourceSlug, string(body)),
+				Snippet: match.snippet,
+			})
+			break
+		}
 	}
-	s.wikiBacklinksCache[repoFullName] = index
-	return index, nil
+	sort.Slice(backlinks, func(i, j int) bool {
+		return backlinks[i].Slug < backlinks[j].Slug
+	})
+	s.storeCachedWikiBacklinks(repoFullName, targetSlug, headSHA, backlinks)
+	return copyWikiBacklinks(backlinks), nil
 }
 
 // ensureWikiRepo lazily creates the sibling wiki repo on first write.
@@ -1039,16 +1178,9 @@ func (s *Service) ListWikiBacklinks(ctx context.Context, repoFullName, slug stri
 	if !s.Git.Exists(ctx, full) {
 		return nil, ErrNotFound
 	}
-	if _, err := s.Git.ReadFile(ctx, full, wikiSlugToPath(slug)); err != nil {
-		return nil, ErrNotFound
-	}
-	index, err := s.loadWikiBacklinkIndex(ctx, repoFullName)
+	backlinks, err := s.loadWikiBacklinksForSlug(ctx, repoFullName, slug)
 	if err != nil {
 		return nil, err
-	}
-	backlinks := index.Backlinks[slug]
-	if backlinks == nil {
-		backlinks = []WikiBacklink{}
 	}
 	return backlinks, nil
 }
@@ -1146,15 +1278,29 @@ func (s *Service) DeleteWikiPage(ctx context.Context, repoFullName, slug, messag
 	if !s.Git.Exists(ctx, full) {
 		return ErrNotFound
 	}
-	if _, err := s.Git.ReadFile(ctx, full, wikiSlugToPath(slug)); err != nil {
-		return ErrNotFound
-	}
 	if message == "" {
 		message = "Delete " + slug
 	}
-	_, err = s.Git.DeleteFileFromRepo(ctx, full, wikiDefaultBranch, wikiSlugToPath(slug), message)
-	if err != nil {
-		return err
+	path := wikiSlugToPath(slug)
+	const maxDeleteAttempts = 5
+	for attempt := 0; attempt < maxDeleteAttempts; attempt++ {
+		err = s.Git.WithRepoLock(ctx, full, func() error {
+			if _, err := s.Git.ReadFile(ctx, full, path); err != nil {
+				return ErrNotFound
+			}
+			_, err := s.Git.DeleteFileFromRepo(ctx, full, wikiDefaultBranch, path, message)
+			return err
+		})
+		if errors.Is(err, gitstore.ErrRefChanged) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		break
+	}
+	if errors.Is(err, gitstore.ErrRefChanged) {
+		return fmt.Errorf("delete wiki page %q: %w", slug, err)
 	}
 	if err := s.deleteWikiPageLabels(ctx, rep.ID, slug); err != nil {
 		return err

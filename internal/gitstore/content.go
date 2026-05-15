@@ -141,6 +141,69 @@ func (s *Store) ListTreeFilesAtRef(ctx context.Context, fullName, ref string) ([
 	return files, nil
 }
 
+// GrepFilesAtRef returns paths whose contents match any fixed string pattern at
+// ref. Git grep returns exit 1 for no matches; callers receive an empty slice.
+func (s *Store) GrepFilesAtRef(ctx context.Context, fullName, ref string, patterns []string) ([]string, error) {
+	dir, err := s.repoPath(ctx, fullName)
+	if err != nil {
+		return nil, err
+	}
+	commit, err := s.resolveContentCommit(ctx, dir, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	seenPatterns := make(map[string]struct{}, len(patterns))
+	args := []string{"-C", dir, "grep", "-I", "-i", "-l", "-F"}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seenPatterns[pattern]; ok {
+			continue
+		}
+		seenPatterns[pattern] = struct{}{}
+		args = append(args, "-e", pattern)
+	}
+	if len(seenPatterns) == 0 {
+		return []string{}, nil
+	}
+	args = append(args, commit, "--")
+
+	out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("git grep files failed: %w, output: %s", err, out)
+	}
+
+	seenPaths := make(map[string]struct{})
+	var paths []string
+	prefix := commit + ":"
+	for _, raw := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if raw == "" {
+			continue
+		}
+		path := raw
+		if strings.HasPrefix(path, prefix) {
+			path = strings.TrimPrefix(path, prefix)
+		} else if idx := strings.IndexByte(path, ':'); idx >= 0 {
+			path = path[idx+1:]
+		}
+		if path == "" {
+			continue
+		}
+		if _, ok := seenPaths[path]; ok {
+			continue
+		}
+		seenPaths[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
 // TreeEntry represents an entry in a git tree (file or directory).
 type TreeEntry struct {
 	Type string // "blob" or "tree"
@@ -482,8 +545,12 @@ func (s *Store) commitTree(ctx context.Context, dir, treeSHA, parentSHA, message
 }
 
 func (s *Store) updateRef(ctx context.Context, dir, ref, commitSHA string) error {
-	if err := exec.CommandContext(ctx, "git", "-C", dir, "update-ref", ref, commitSHA).Run(); err != nil {
-		return fmt.Errorf("update-ref failed: %w", err)
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "update-ref", ref, commitSHA).CombinedOutput()
+	if err != nil {
+		if isRefChangedOutput(string(out)) {
+			return ErrRefChanged
+		}
+		return fmt.Errorf("update-ref failed: %w, output: %s", err, out)
 	}
 	return nil
 }
@@ -492,12 +559,16 @@ func (s *Store) updateRefCAS(ctx context.Context, dir, ref, commitSHA, expectedO
 	args := []string{"-C", dir, "update-ref", ref, commitSHA, expectedOldSHA}
 	out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
 	if err != nil {
-		if strings.Contains(string(out), "cannot lock ref") {
+		if isRefChangedOutput(string(out)) {
 			return ErrRefChanged
 		}
 		return fmt.Errorf("update-ref failed: %w, output: %s", err, out)
 	}
 	return nil
+}
+
+func isRefChangedOutput(out string) bool {
+	return strings.Contains(out, "cannot lock ref")
 }
 
 // WriteFile creates or updates a file in the repository by creating a commit on the given branch.
@@ -687,8 +758,8 @@ func (s *Store) DeleteFileFromRepo(ctx context.Context, fullName, branch, path, 
 		return "", err
 	}
 
-	// 7. Update the ref
-	if err := s.updateRef(ctx, dir, ref, commitSHA); err != nil {
+	// 7. Update the ref only if no concurrent writer moved the branch.
+	if err := s.updateRefCAS(ctx, dir, ref, commitSHA, parentSHA); err != nil {
 		return "", err
 	}
 
