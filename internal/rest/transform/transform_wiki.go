@@ -2,6 +2,7 @@ package transform
 
 import (
 	"fmt"
+	"net/url"
 	"time"
 
 	"gh-server/internal/db"
@@ -13,12 +14,13 @@ import (
 // (slug, title, body, html_url, sha) so future GitHub-compat work
 // doesn't churn clients.
 func WikiPage(repoFullName string, p service.WikiPage) map[string]any {
+	apiSlug := url.PathEscape(p.Slug)
 	out := map[string]any{
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"body":     p.Body,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, p.Slug),
+		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
 		"sha":      p.SHA,
 		"labels":   WikiLabels(p.Labels),
 	}
@@ -35,11 +37,12 @@ func WikiPage(repoFullName string, p service.WikiPage) map[string]any {
 
 // WikiPageSummary shapes a service.WikiPageSummary for list responses.
 func WikiPageSummary(repoFullName string, p service.WikiPageSummary) map[string]any {
+	apiSlug := url.PathEscape(p.Slug)
 	out := map[string]any{
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, p.Slug),
+		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
 		"labels":   WikiLabels(p.Labels),
 	}
 	if p.SHA != "" {
@@ -58,12 +61,13 @@ func WikiPageSummary(repoFullName string, p service.WikiPageSummary) map[string]
 
 // WikiBacklink shapes a service.WikiBacklink for backlink responses.
 func WikiBacklink(repoFullName string, p service.WikiBacklink) map[string]any {
+	apiSlug := url.PathEscape(p.Slug)
 	return map[string]any{
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"snippet":  p.Snippet,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, p.Slug),
+		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
 	}
 }
 
@@ -71,13 +75,14 @@ func WikiBacklink(repoFullName string, p service.WikiBacklink) map[string]any {
 func WikiSearchResponse(repoFullName string, resp service.WikiSearchResponse) map[string]any {
 	results := make([]any, 0, len(resp.Results))
 	for _, row := range resp.Results {
+		apiSlug := url.PathEscape(row.Slug)
 		results = append(results, map[string]any{
 			"slug":     row.Slug,
 			"title":    row.Title,
 			"score":    row.Score,
 			"snippet":  row.Snippet,
 			"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, row.Slug),
-			"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, row.Slug),
+			"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
 			"labels":   WikiLabels(row.Labels),
 		})
 	}
