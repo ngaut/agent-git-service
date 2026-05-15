@@ -117,7 +117,7 @@ func TestListWikiPages_LeavesLastAuthorNilWhenCommitIdentityDoesNotMatch_Issue13
 	}
 }
 
-func TestListWikiPages_PrefersBodyHeadingTitles(t *testing.T) {
+func TestListWikiPages_DerivesStableTitlesFromSlug(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -139,9 +139,9 @@ func TestListWikiPages_PrefersBodyHeadingTitles(t *testing.T) {
 		body  string
 		title string
 	}{
-		{slug: "home", body: "\n\n# Body Title Wins\n\nBody.", title: "Body Title Wins"},
-		{slug: "guides/plain-page", body: "\nplain opening\n# Nested Heading Wins\n", title: "guides/plain page"},
-		{slug: "empty-page", body: "\n\n", title: "empty page"},
+		{slug: "home", body: "\n\n# Body Title Should Not Win\n\nBody.", title: "Home"},
+		{slug: "guides/plain-page", body: "\nplain opening\n# Ignored H1\n", title: "Plain Page"},
+		{slug: "empty-page", body: "\n\n", title: "Empty Page"},
 	}
 	for _, tc := range cases {
 		if _, err := svc.PutWikiPage(ctx, full, tc.slug, tc.body, "put "+tc.slug, ""); err != nil {
@@ -167,8 +167,8 @@ func TestListWikiPages_PrefersBodyHeadingTitles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWikiPage(home): %v", err)
 	}
-	if page.Title != "Body Title Wins" {
-		t.Fatalf("GetWikiPage title = %q, want Body Title Wins", page.Title)
+	if page.Title != "Home" {
+		t.Fatalf("GetWikiPage title = %q, want Home", page.Title)
 	}
 }
 

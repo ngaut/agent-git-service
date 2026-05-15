@@ -61,6 +61,9 @@ func TestWikiSearchLifecycleAndFallback_Issue1362(t *testing.T) {
 	if len(resp.Results) != 1 || resp.Results[0].Slug != "tutorial/auth" {
 		t.Fatalf("results after create = %#v, want tutorial/auth", resp.Results)
 	}
+	if resp.Results[0].Title != "Auth" {
+		t.Fatalf("search title = %q, want Auth", resp.Results[0].Title)
+	}
 
 	page, err = svc.PutWikiPage(ctx, full, "tutorial/auth", "# Authentication\n\nRefresh tokens rotate automatically; expiry wording removed.", "update auth", page.SHA)
 	if err != nil {
@@ -143,6 +146,9 @@ func TestWikiSearchFallsBackToGitScanWhenIndexUnavailable(t *testing.T) {
 	if len(resp.Results) != 1 || resp.Results[0].Slug != "tutorial/auth" {
 		t.Fatalf("fallback results = %#v, want tutorial/auth", resp.Results)
 	}
+	if resp.Results[0].Title != "Auth" {
+		t.Fatalf("fallback title = %q, want Auth", resp.Results[0].Title)
+	}
 }
 
 func TestWikiSearchSemanticAndReindex_Issue1362(t *testing.T) {
@@ -213,5 +219,62 @@ func TestWikiSearchSemanticAndReindex_Issue1362(t *testing.T) {
 	}
 	if len(resp.Results) == 0 {
 		t.Fatal("expected results after reindex")
+	}
+}
+
+func TestWikiSearchSelfHealsStaleStoredTitlesFromSlug(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-stale-title",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-stale-title"
+
+	if _, err := svc.PutWikiPage(ctx, full, "guides/plain-page", "# Legacy Heading\n\nBody text.", "create page", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	if err := svc.DB.Model(&db.WikiSearchDocument{}).
+		Where("repository_id = ? AND slug = ?", repo.ID, "guides/plain-page").
+		Update("title", "Legacy Heading").
+		Error; err != nil {
+		t.Fatalf("force stale title: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "plain page", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Slug != "guides/plain-page" {
+		t.Fatalf("results = %#v, want guides/plain-page", resp.Results)
+	}
+	if resp.Results[0].Title != "Plain Page" {
+		t.Fatalf("result title = %q, want Plain Page", resp.Results[0].Title)
+	}
+
+	var stored db.WikiSearchDocument
+	if err := svc.DB.Where("repository_id = ? AND slug = ?", repo.ID, "guides/plain-page").First(&stored).Error; err != nil {
+		t.Fatalf("reload stored doc: %v", err)
+	}
+	if stored.Title != "Plain Page" {
+		t.Fatalf("stored title = %q, want Plain Page", stored.Title)
 	}
 }
