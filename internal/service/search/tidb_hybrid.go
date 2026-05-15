@@ -13,11 +13,13 @@ import (
 )
 
 type lexicalTokenQuery struct {
-	where     string
-	args      []any
-	scoreExpr string
-	scoreArgs []any
-	weight    float64
+	where          string
+	args           []any
+	scoreExpr      string
+	scoreArgs      []any
+	weight         float64
+	fullTextField  string
+	fullTextPhrase string
 }
 
 type semanticMode int
@@ -82,11 +84,13 @@ func buildFTSLexicalTokenQuery(fieldExpr string, token string, weight float64) l
 	// search phrase must be a constant, so emit a safely escaped string literal.
 	ftsExpr := "FTS_MATCH_WORD(" + mysqlStringLiteral(token) + ", " + fieldExpr + ")"
 	return lexicalTokenQuery{
-		where:     ftsExpr,
-		args:      nil,
-		scoreExpr: ftsExpr,
-		scoreArgs: nil,
-		weight:    weight,
+		where:          ftsExpr,
+		args:           nil,
+		scoreExpr:      ftsExpr,
+		scoreArgs:      nil,
+		weight:         weight,
+		fullTextField:  fieldExpr,
+		fullTextPhrase: token,
 	}
 }
 
@@ -219,7 +223,7 @@ func collectLexicalMatchIDs(baseQ *gorm.DB, tokenGroups [][]lexicalTokenQuery, t
 	return ids, nil
 }
 
-func buildExplicitSortLexicalWhere(tokenGroups [][]lexicalTokenQuery) (string, []any) {
+func buildExplicitSortLexicalWhere(baseQ *gorm.DB, tokenGroups [][]lexicalTokenQuery, tableName string) (string, []any) {
 	groupClauses := make([]string, 0, len(tokenGroups))
 	args := make([]any, 0, len(tokenGroups))
 	for _, group := range tokenGroups {
@@ -228,6 +232,15 @@ func buildExplicitSortLexicalWhere(tokenGroups [][]lexicalTokenQuery) (string, [
 		}
 		tokenClauses := make([]string, 0, len(group))
 		for _, tokenQuery := range group {
+			if tokenQuery.isFullText() {
+				subQ := baseQ.Session(&gorm.Session{NewDB: true}).
+					Table(tableName).
+					Select(tableName+".id AS id").
+					Where(tokenQuery.where, tokenQuery.args...)
+				tokenClauses = append(tokenClauses, "(EXISTS (SELECT 1 FROM (?) AS fts_matches WHERE fts_matches.id = "+tableName+".id))")
+				args = append(args, subQ)
+				continue
+			}
 			tokenClauses = append(tokenClauses, "("+tokenQuery.where+")")
 			args = append(args, tokenQuery.args...)
 		}
@@ -240,7 +253,7 @@ func buildExplicitSortLexicalWhere(tokenGroups [][]lexicalTokenQuery) (string, [
 }
 
 func pluckExplicitSortLexicalMatchIDs(baseQ *gorm.DB, tokenGroups [][]lexicalTokenQuery, tableName string, sortQualifier string, limit int) ([]uint, error) {
-	whereClause, whereArgs := buildExplicitSortLexicalWhere(tokenGroups)
+	whereClause, whereArgs := buildExplicitSortLexicalWhere(baseQ, tokenGroups, tableName)
 	if whereClause == "" {
 		return nil, nil
 	}
@@ -259,6 +272,9 @@ func pluckExplicitSortLexicalMatchIDs(baseQ *gorm.DB, tokenGroups [][]lexicalTok
 }
 
 func pluckLexicalTokenMatchIDs(baseQ *gorm.DB, tokenQuery lexicalTokenQuery, tableName string, limit int) ([]uint, error) {
+	if tokenQuery.isFullText() {
+		return pluckFullTextLexicalTokenMatchIDs(baseQ, tokenQuery, tableName, limit)
+	}
 	q := baseQ.Session(&gorm.Session{NewDB: false}).Where(tokenQuery.where, tokenQuery.args...)
 	if tokenQuery.scoreExpr != "" {
 		q = q.Clauses(clause.OrderBy{
@@ -274,6 +290,54 @@ func pluckLexicalTokenMatchIDs(baseQ *gorm.DB, tokenQuery lexicalTokenQuery, tab
 
 	var ids []uint
 	if err := q.Pluck(tableName+".id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (q lexicalTokenQuery) isFullText() bool {
+	return q.fullTextField != "" && q.fullTextPhrase != ""
+}
+
+func hasFullTextLexicalToken(tokenGroups [][]lexicalTokenQuery) bool {
+	for _, group := range tokenGroups {
+		for _, tokenQuery := range group {
+			if tokenQuery.isFullText() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TiDB requires FTS_MATCH_WORD to be the only predicate in its WHERE clause.
+// Keep FTS in a derived table, then apply repo/state/label qualifiers outside.
+func buildFullTextLexicalSubquery(baseQ *gorm.DB, tokenQuery lexicalTokenQuery, tableName string) *gorm.DB {
+	return baseQ.Session(&gorm.Session{NewDB: true}).
+		Table(tableName).
+		Select(tableName+".id AS id, "+tokenQuery.scoreExpr+" AS fts_score", tokenQuery.scoreArgs...).
+		Where(tokenQuery.where, tokenQuery.args...)
+}
+
+func buildFullTextLexicalMatchQuery(baseQ *gorm.DB, tokenQuery lexicalTokenQuery, tableName string, limit int) *gorm.DB {
+	subQ := buildFullTextLexicalSubquery(baseQ, tokenQuery, tableName)
+	q := baseQ.Session(&gorm.Session{NewDB: false}).
+		Joins("JOIN (?) AS fts_matches ON fts_matches.id = "+tableName+".id", subQ).
+		Clauses(clause.OrderBy{
+			Expression: clause.Expr{
+				SQL: "fts_matches.fts_score DESC, " + tableName + ".id DESC",
+			},
+		})
+	if limit > 0 {
+		q = q.Limit(lexicalCandidateLimit(limit))
+	}
+	return q
+}
+
+func pluckFullTextLexicalTokenMatchIDs(baseQ *gorm.DB, tokenQuery lexicalTokenQuery, tableName string, limit int) ([]uint, error) {
+	var ids []uint
+	if err := buildFullTextLexicalMatchQuery(baseQ, tokenQuery, tableName, limit).
+		Pluck(tableName+".id", &ids).Error; err != nil {
 		return nil, err
 	}
 	return ids, nil
