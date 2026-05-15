@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -1690,6 +1691,71 @@ func TestGitHandlers(t *testing.T) {
 			t.Errorf("file response content: expected base64 content")
 		}
 		assertContentFileShape(t, fileResp, "main.go", "src/main.go", "main", true)
+	})
+
+	t.Run("EncodedRepoAndContentsPath", func(t *testing.T) {
+		h := testharness.New(t)
+		_ = createGitRepo(t, h, "F1 Tracks and Tastes", "main", true)
+
+		contentPath := "tracks/monaco.md"
+		requestPath := "/api/v3/repos/" + url.PathEscape(h.User.Login) + "/" + url.PathEscape("F1 Tracks and Tastes") + "/contents/" + url.PathEscape(contentPath)
+		w := h.DoRESTJSON(t, "PUT", requestPath, map[string]any{
+			"message": "add monaco notes",
+			"content": base64.StdEncoding.EncodeToString([]byte("# Monaco\n")),
+		})
+		assertStatusCode(t, w, 201)
+		body := testharness.DecodeJSON(t, w)
+		content := body["content"].(map[string]any)
+		if content["path"] != contentPath {
+			t.Fatalf("created content path = %v, want %s", content["path"], contentPath)
+		}
+
+		w = h.DoREST(t, "GET", requestPath, nil)
+		assertStatusCode(t, w, 200)
+		body = testharness.DecodeJSON(t, w)
+		if body["path"] != contentPath {
+			t.Fatalf("fetched content path = %v, want %s", body["path"], contentPath)
+		}
+	})
+
+	t.Run("LiteralPercentRepoNameStaysAddressable", func(t *testing.T) {
+		h := testharness.New(t)
+		const repoName = "foo%20bar"
+		_ = createGitRepo(t, h, repoName, "main", true)
+
+		requestPath := "/api/v3/repos/" + url.PathEscape(h.User.Login) + "/" + url.PathEscape(repoName)
+		w := h.DoREST(t, "GET", requestPath, nil)
+		assertStatusCode(t, w, 200)
+		body := testharness.DecodeJSON(t, w)
+		if body["name"] != repoName {
+			t.Fatalf("repo name = %v, want %s", body["name"], repoName)
+		}
+	})
+
+	t.Run("LiteralEscapedSlashRepoNameWithEncodedContentsPath", func(t *testing.T) {
+		h := testharness.New(t)
+		const repoName = "foo%2Fbar"
+		_ = createGitRepo(t, h, repoName, "main", true)
+
+		contentPath := "tracks/monaco.md"
+		requestPath := "/api/v3/repos/" + url.PathEscape(h.User.Login) + "/" + url.PathEscape(repoName) + "/contents/" + url.PathEscape(contentPath)
+		w := h.DoRESTJSON(t, "PUT", requestPath, map[string]any{
+			"message": "add monaco notes",
+			"content": base64.StdEncoding.EncodeToString([]byte("# Monaco\n")),
+		})
+		assertStatusCode(t, w, 201)
+		body := testharness.DecodeJSON(t, w)
+		content := body["content"].(map[string]any)
+		if content["path"] != contentPath {
+			t.Fatalf("created content path = %v, want %s", content["path"], contentPath)
+		}
+
+		w = h.DoREST(t, "GET", requestPath, nil)
+		assertStatusCode(t, w, 200)
+		body = testharness.DecodeJSON(t, w)
+		if body["path"] != contentPath {
+			t.Fatalf("fetched content path = %v, want %s", body["path"], contentPath)
+		}
 	})
 
 	t.Run("GetCommitDiffHeader", func(t *testing.T) {

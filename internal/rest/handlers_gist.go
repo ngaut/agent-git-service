@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/randutil"
 	"gh-server/internal/rest/respond"
@@ -48,7 +46,7 @@ func (d *Deps) CreateGist(w http.ResponseWriter, r *http.Request) {
 
 // GetGist handles GET /gists/{gist_id}
 func (d *Deps) GetGist(w http.ResponseWriter, r *http.Request) {
-	gist, err := d.Svc.GetGist(r.Context(), chi.URLParam(r, "gist_id"))
+	gist, err := d.Svc.GetGist(r.Context(), pathParam(r, "gist_id"))
 	if err != nil {
 		respond.NotFound(w)
 		return
@@ -58,7 +56,7 @@ func (d *Deps) GetGist(w http.ResponseWriter, r *http.Request) {
 
 // UpdateGist handles PATCH|POST /gists/{gist_id}
 func (d *Deps) UpdateGist(w http.ResponseWriter, r *http.Request) {
-	gist, err := d.Svc.GetGist(r.Context(), chi.URLParam(r, "gist_id"))
+	gist, err := d.Svc.GetGist(r.Context(), pathParam(r, "gist_id"))
 	if err != nil {
 		respond.NotFound(w)
 		return
@@ -82,7 +80,7 @@ func (d *Deps) UpdateGist(w http.ResponseWriter, r *http.Request) {
 
 // DeleteGist handles DELETE /gists/{gist_id}
 func (d *Deps) DeleteGist(w http.ResponseWriter, r *http.Request) {
-	if err := d.Svc.DeleteGist(r.Context(), chi.URLParam(r, "gist_id")); err != nil {
+	if err := d.Svc.DeleteGist(r.Context(), pathParam(r, "gist_id")); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
 	}

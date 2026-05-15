@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/gitstore"
 	"gh-server/internal/rest/respond"
@@ -55,7 +53,7 @@ func (d *Deps) ListBranches(w http.ResponseWriter, r *http.Request) {
 func (d *Deps) GetBranch(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	// Wildcard captures everything after /branches/, including slashes
-	branchPath := chi.URLParam(r, "*")
+	branchPath := pathParam(r, "*")
 
 	if branchPath == "" {
 		respond.NotFound(w)
@@ -131,7 +129,7 @@ func (d *Deps) ListCommits(w http.ResponseWriter, r *http.Request) {
 // GetCommit handles GET /api/v3/repos/{owner}/{repo}/commits/{sha}
 // Supports Accept: application/vnd.github.diff (or application/vnd.github.v3.diff) for raw diff output.
 func (d *Deps) GetCommit(w http.ResponseWriter, r *http.Request) {
-	sha := chi.URLParam(r, "sha")
+	sha := pathParam(r, "sha")
 	full := repoFullName(r)
 	if d.mustGetRepo(w, r) == nil {
 		return
@@ -234,7 +232,7 @@ func (d *Deps) GetCommit(w http.ResponseWriter, r *http.Request) {
 // or a JSON array of file/directory objects for directories.
 func (d *Deps) GetRepoContents(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	rawPath := chi.URLParam(r, "*")
+	rawPath := pathParam(r, "*")
 	ref := r.URL.Query().Get("ref")
 	path := rawPath
 	if rawPath == "/" {
@@ -290,7 +288,7 @@ func contentName(path string) string {
 // Creates or updates a file in the repository.
 func (d *Deps) PutRepoContents(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	path := chi.URLParam(r, "*")
+	path := pathParam(r, "*")
 	if path == "" || strings.Contains(path, "..") || strings.HasPrefix(path, "/") {
 		respond.ValidationFailed(w, "invalid path")
 		return
@@ -363,7 +361,7 @@ func (d *Deps) PutRepoContents(w http.ResponseWriter, r *http.Request) {
 // Deletes a file from the repository.
 func (d *Deps) DeleteRepoContents(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	path := chi.URLParam(r, "*")
+	path := pathParam(r, "*")
 	if path == "" || strings.Contains(path, "..") || strings.HasPrefix(path, "/") {
 		respond.ValidationFailed(w, "invalid path")
 		return
@@ -655,7 +653,7 @@ func (d *Deps) CreateTag(w http.ResponseWriter, r *http.Request) {
 func (d *Deps) CompareCommitsReal(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	// Wildcard captures "base...head" - parse to extract base and head
-	comparePath := chi.URLParam(r, "*")
+	comparePath := pathParam(r, "*")
 	if comparePath == "" {
 		respond.ValidationFailed(w, "base and head revisions are required (format: base...head)")
 		return
@@ -864,7 +862,7 @@ type gitCommitActorPayload struct {
 // GetGitCommit handles GET /api/v3/repos/{owner}/{repo}/git/commits/{sha}
 func (d *Deps) GetGitCommit(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	sha := chi.URLParam(r, "sha")
+	sha := pathParam(r, "sha")
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}
@@ -941,7 +939,7 @@ func (d *Deps) CreateGitCommit(w http.ResponseWriter, r *http.Request) {
 // GetGitTree handles GET /api/v3/repos/{owner}/{repo}/git/trees/{sha}
 func (d *Deps) GetGitTree(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	sha := chi.URLParam(r, "sha")
+	sha := pathParam(r, "sha")
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}
@@ -1009,7 +1007,7 @@ func mergeGitCommitSignature(payload *gitCommitActorPayload, fallback gitstore.G
 // GetGitRef handles GET /api/v3/repos/{owner}/{repo}/git/refs/heads/{branch}
 func (d *Deps) GetGitRef(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	branch := chi.URLParam(r, "*")
+	branch := pathParam(r, "*")
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}
@@ -1030,7 +1028,7 @@ func (d *Deps) GetGitRef(w http.ResponseWriter, r *http.Request) {
 // DeleteGitRef handles DELETE /api/v3/repos/{owner}/{repo}/git/refs/heads/{branch}
 func (d *Deps) DeleteGitRef(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	branch := chi.URLParam(r, "*")
+	branch := pathParam(r, "*")
 	repo := d.mustGetRepo(w, r)
 	if repo == nil {
 		return
@@ -1050,7 +1048,7 @@ func (d *Deps) DeleteGitRef(w http.ResponseWriter, r *http.Request) {
 // GetGitTagRef handles GET /api/v3/repos/{owner}/{repo}/git/refs/tags/{tag}
 func (d *Deps) GetGitTagRef(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	tag := chi.URLParam(r, "*")
+	tag := pathParam(r, "*")
 	if _, err := d.Svc.GetRepo(r.Context(), full); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -1078,7 +1076,7 @@ func (d *Deps) GetGitTagRef(w http.ResponseWriter, r *http.Request) {
 // DeleteGitTagRef handles DELETE /api/v3/repos/{owner}/{repo}/git/refs/tags/{tag}
 func (d *Deps) DeleteGitTagRef(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	tag := chi.URLParam(r, "*")
+	tag := pathParam(r, "*")
 	repo := d.mustGetRepo(w, r)
 	if repo == nil {
 		return
@@ -1097,7 +1095,7 @@ func (d *Deps) DeleteGitTagRef(w http.ResponseWriter, r *http.Request) {
 // UpdateGitRef handles PATCH /api/v3/repos/{owner}/{repo}/git/refs/heads/{branch}
 func (d *Deps) UpdateGitRef(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	branch := chi.URLParam(r, "*")
+	branch := pathParam(r, "*")
 	repo := d.mustGetRepo(w, r)
 	if repo == nil {
 		return
@@ -1148,7 +1146,7 @@ func normalizeGenericGitRef(rest string) (string, bool) {
 // through to this one, which resolves the ref with git show-ref.
 func (d *Deps) GetGitRefGeneric(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	refName, ok := normalizeGenericGitRef(chi.URLParam(r, "*"))
+	refName, ok := normalizeGenericGitRef(pathParam(r, "*"))
 	if !ok {
 		respond.Error(w, 422, "invalid ref")
 		return
@@ -1168,7 +1166,7 @@ func (d *Deps) GetGitRefGeneric(w http.ResponseWriter, r *http.Request) {
 // for any ref namespace outside refs/heads and refs/tags.
 func (d *Deps) UpdateGitRefGeneric(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	refName, ok := normalizeGenericGitRef(chi.URLParam(r, "*"))
+	refName, ok := normalizeGenericGitRef(pathParam(r, "*"))
 	if !ok {
 		respond.Error(w, 422, "invalid ref")
 		return
@@ -1205,7 +1203,7 @@ func (d *Deps) UpdateGitRefGeneric(w http.ResponseWriter, r *http.Request) {
 // for any ref namespace outside refs/heads and refs/tags.
 func (d *Deps) DeleteGitRefGeneric(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	refName, ok := normalizeGenericGitRef(chi.URLParam(r, "*"))
+	refName, ok := normalizeGenericGitRef(pathParam(r, "*"))
 	if !ok {
 		respond.Error(w, 422, "invalid ref")
 		return
@@ -1232,7 +1230,7 @@ func (d *Deps) DeleteGitRefGeneric(w http.ResponseWriter, r *http.Request) {
 // non-404 response.
 func (d *Deps) ListMatchingRefs(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	rest := chi.URLParam(r, "*")
+	rest := pathParam(r, "*")
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}
@@ -1307,7 +1305,7 @@ func (d *Deps) CreateGitRef(w http.ResponseWriter, r *http.Request) {
 // Returns the blob's bytes base64-encoded, matching GitHub's REST contract.
 func (d *Deps) GetGitBlob(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	sha := chi.URLParam(r, "sha")
+	sha := pathParam(r, "sha")
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}
@@ -1383,7 +1381,7 @@ func (d *Deps) CreateGitBlob(w http.ResponseWriter, r *http.Request) {
 // GetGitTag handles GET /api/v3/repos/{owner}/{repo}/git/tags/{sha}.
 func (d *Deps) GetGitTag(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	sha := chi.URLParam(r, "sha")
+	sha := pathParam(r, "sha")
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}

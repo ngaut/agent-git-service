@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/service"
@@ -129,7 +127,7 @@ func (h *PresenceHandlers) GetIssuePresence(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	issueIDStr := chi.URLParam(r, "issue_id")
+	issueIDStr := pathParam(r, "issue_id")
 	if issueIDStr == "" {
 		respond.Error(w, http.StatusBadRequest, "issue_id is required")
 		return
@@ -228,7 +226,7 @@ func (h *PresenceHandlers) GetUserLastSeen(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	userIDStr := chi.URLParam(r, "user_id")
+	userIDStr := pathParam(r, "user_id")
 	if userIDStr == "" {
 		respond.Error(w, http.StatusBadRequest, "user_id is required")
 		return

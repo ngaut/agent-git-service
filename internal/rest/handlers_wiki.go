@@ -8,19 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 	"gh-server/internal/service"
 )
 
 func wikiSlugParam(r *http.Request) string {
-	slug, err := url.PathUnescape(chi.URLParam(r, "slug"))
-	if err != nil {
-		return chi.URLParam(r, "slug")
-	}
-	return slug
+	return pathParam(r, "slug")
 }
 
 func wikiLabelFiltersFromQuery(q url.Values) (labels, excludeLabels []string) {
@@ -139,11 +133,7 @@ func (d *Deps) SetWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 func (d *Deps) RemoveWikiPageLabel(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
-	name, err := url.PathUnescape(chi.URLParam(r, "name"))
-	if err != nil {
-		respond.ValidationFailed(w, "invalid label name encoding")
-		return
-	}
+	name := pathParam(r, "name")
 	d.removeWikiPageLabel(w, r, full, slug, name)
 }
 

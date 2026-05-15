@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -51,7 +49,7 @@ func (d *Deps) ListPendingTeamInvitations(w http.ResponseWriter, r *http.Request
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -136,7 +134,7 @@ func (d *Deps) GetTeam(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -157,7 +155,7 @@ func (d *Deps) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 	if !d.requireOrgAdmin(w, r, org) {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -197,7 +195,7 @@ func (d *Deps) DeleteTeam(w http.ResponseWriter, r *http.Request) {
 	if !d.requireOrgAdmin(w, r, org) {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -314,7 +312,7 @@ func (d *Deps) DeleteOrgMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := chi.URLParam(r, "username")
+	username := pathParam(r, "username")
 	if err := d.Svc.RemoveOrgMember(r.Context(), org.ID, username); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -338,7 +336,7 @@ func (d *Deps) SetOrgMembership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := chi.URLParam(r, "username")
+	username := pathParam(r, "username")
 	role := strings.TrimSpace(requestBodyValue(r, "role"))
 	membership, err := d.Svc.SetOrgMembership(r.Context(), org.ID, username, role, viewer.ID)
 	if err != nil {
@@ -366,7 +364,7 @@ func (d *Deps) GetOrgMembership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := chi.URLParam(r, "username")
+	username := pathParam(r, "username")
 	membership, err := d.Svc.GetOrgMembership(r.Context(), org.ID, username)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -385,7 +383,7 @@ func (d *Deps) DeleteOrgMembership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := chi.URLParam(r, "username")
+	username := pathParam(r, "username")
 	if err := d.Svc.RemoveOrgMembership(r.Context(), org.ID, username); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -399,7 +397,7 @@ func (d *Deps) ListTeamMembers(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -433,8 +431,8 @@ func (d *Deps) AddTeamMember(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
-	username := chi.URLParam(r, "username")
+	slug := pathParam(r, "team_slug")
+	username := pathParam(r, "username")
 
 	role := strings.TrimSpace(requestBodyValue(r, "role"))
 	role, ok := normalizeTeamMemberRole(role)
@@ -477,8 +475,8 @@ func (d *Deps) RemoveTeamMember(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
-	username := chi.URLParam(r, "username")
+	slug := pathParam(r, "team_slug")
+	username := pathParam(r, "username")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -522,8 +520,8 @@ func (d *Deps) GetTeamMembership(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
-	username := chi.URLParam(r, "username")
+	slug := pathParam(r, "team_slug")
+	username := pathParam(r, "username")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -552,7 +550,7 @@ func (d *Deps) AddTeamRepo(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -591,7 +589,7 @@ func (d *Deps) ListTeamRepos(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {
@@ -628,7 +626,7 @@ func (d *Deps) RemoveTeamRepo(w http.ResponseWriter, r *http.Request) {
 	if org == nil {
 		return
 	}
-	slug := chi.URLParam(r, "team_slug")
+	slug := pathParam(r, "team_slug")
 
 	team, err := d.Svc.GetTeam(r.Context(), org.ID, slug)
 	if err != nil {

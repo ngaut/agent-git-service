@@ -3,9 +3,6 @@ package rest
 import (
 	"errors"
 	"net/http"
-	"net/url"
-
-	"github.com/go-chi/chi/v5"
 
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -54,13 +51,8 @@ func (d *Deps) CreateLabel(w http.ResponseWriter, r *http.Request) {
 // DeleteLabel handles DELETE /api/v3/repos/{owner}/{repo}/labels/{name}
 func (d *Deps) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	nameRaw := chi.URLParam(r, "name")
-	name, err := url.PathUnescape(nameRaw)
-	if err != nil {
-		respond.ValidationFailed(w, "invalid label name encoding")
-		return
-	}
-	err = d.Svc.DeleteLabel(r.Context(), full, name)
+	name := pathParam(r, "name")
+	err := d.Svc.DeleteLabel(r.Context(), full, name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -71,12 +63,7 @@ func (d *Deps) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 // EditLabel handles PATCH /api/v3/repos/{owner}/{repo}/labels/{name}
 func (d *Deps) EditLabel(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	oldNameRaw := chi.URLParam(r, "name")
-	oldName, err := url.PathUnescape(oldNameRaw)
-	if err != nil {
-		respond.ValidationFailed(w, "invalid label name encoding")
-		return
-	}
+	oldName := pathParam(r, "name")
 	var body struct {
 		NewName     *string `json:"new_name"`
 		Color       *string `json:"color"`
@@ -102,12 +89,8 @@ func (d *Deps) RemoveIssueLabel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nameRaw := chi.URLParam(r, "name")
-	name, err := url.PathUnescape(nameRaw)
-	if err != nil {
-		respond.ValidationFailed(w, "invalid label name encoding")
-		return
-	}
+	name := pathParam(r, "name")
+	var err error
 	remaining, err := d.Svc.RemoveIssueLabel(r.Context(), full, issueNum, name)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
@@ -131,12 +114,7 @@ func (d *Deps) RemoveIssueLabel(w http.ResponseWriter, r *http.Request) {
 // GetLabel handles GET /api/v3/repos/{owner}/{repo}/labels/{name}
 func (d *Deps) GetLabel(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	nameRaw := chi.URLParam(r, "name")
-	name, err := url.PathUnescape(nameRaw)
-	if err != nil {
-		respond.ValidationFailed(w, "invalid label name encoding")
-		return
-	}
+	name := pathParam(r, "name")
 	label, err := d.Svc.GetLabel(r.Context(), full, name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)

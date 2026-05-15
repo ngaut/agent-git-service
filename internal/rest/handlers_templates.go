@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/rest/respond"
 )
 
@@ -51,7 +49,7 @@ func (d *Deps) ListLicenses(w http.ResponseWriter, r *http.Request) {
 
 // GetLicense handles GET /licenses/{license}
 func (d *Deps) GetLicense(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "license")
+	key := pathParam(r, "license")
 	l, ok := licenseMap[key]
 	if !ok {
 		respond.NotFound(w)
@@ -80,7 +78,7 @@ func (d *Deps) ListGitignoreTemplates(w http.ResponseWriter, r *http.Request) {
 
 // GetGitignoreTemplate handles GET /gitignore/templates/{name}
 func (d *Deps) GetGitignoreTemplate(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	source, err := gitignoreFS.ReadFile("templates/gitignore/" + name + ".gitignore")
 	if err != nil {
 		respond.NotFound(w)
