@@ -3,6 +3,7 @@ package rest
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -87,5 +88,20 @@ func TestSetLinkHeader(t *testing.T) {
 
 	if link != expected {
 		t.Errorf("\ngot:  %s\nwant: %s", link, expected)
+	}
+}
+
+func TestSetLinkHeaderPreservesEscapedPath(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/v3/repos/a/b/wiki/pages/guides%2Fsetup/history?per_page=1", nil)
+	w := httptest.NewRecorder()
+
+	setLinkHeader(w, r, "http://localhost:8080", 3, 1, 1)
+
+	link := w.Header().Get("Link")
+	if !strings.Contains(link, "/wiki/pages/guides%2Fsetup/history?") {
+		t.Fatalf("expected Link header to preserve encoded wiki slug, got %q", link)
+	}
+	if strings.Contains(link, "/wiki/pages/guides/setup/history?") {
+		t.Fatalf("Link header decoded nested wiki slug into an unusable path: %q", link)
 	}
 }
