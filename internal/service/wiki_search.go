@@ -124,6 +124,9 @@ func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query stri
 	if err != nil {
 		return nil, err
 	}
+	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
+		return nil, err
+	}
 	labelsBySlug, err := s.wikiSearchLabelsBySlug(ctx, repoID, docs)
 	if err != nil {
 		return nil, err
@@ -225,6 +228,9 @@ func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query str
 	if len(docs) == 0 {
 		return nil, false, nil
 	}
+	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
+		return nil, false, err
+	}
 	labelsBySlug, err := s.wikiSearchLabelsBySlug(ctx, repoID, docs)
 	if err != nil {
 		return nil, false, err
@@ -278,7 +284,7 @@ func paginateWikiSearchResults(scored []wikiScoredDocument, query string, limit,
 	for _, row := range scored[offset:end] {
 		out = append(out, WikiSearchResult{
 			Slug:    row.doc.Slug,
-			Title:   row.doc.Title,
+			Title:   titleFromSlug(row.doc.Slug),
 			Score:   roundWikiScore(row.score),
 			Snippet: buildWikiSnippet(string(row.doc.Body), query),
 			Labels:  row.labels,
@@ -303,8 +309,8 @@ func (s *Service) wikiSearchDocuments(ctx context.Context, repoID uint, query st
 			for _, token := range tokens {
 				like := "%" + escapeWikiSearchLike(token) + "%"
 				q = q.Where(
-					"(wiki_search_documents.title LIKE ?"+likeEscape+" OR wiki_search_documents.body LIKE ?"+likeEscape+" OR labels.name LIKE ?"+likeEscape+" OR labels.description LIKE ?"+likeEscape+")",
-					like, like, like, like,
+					"(wiki_search_documents.title LIKE ?"+likeEscape+" OR wiki_search_documents.slug LIKE ?"+likeEscape+" OR wiki_search_documents.body LIKE ?"+likeEscape+" OR labels.name LIKE ?"+likeEscape+" OR labels.description LIKE ?"+likeEscape+")",
+					like, like, like, like, like,
 				)
 			}
 			q = q.Distinct(
@@ -344,6 +350,24 @@ func (s *Service) wikiSearchDocuments(ctx context.Context, repoID uint, query st
 		}
 	}
 	return filtered, nil
+}
+
+func (s *Service) refreshStaleWikiSearchTitles(ctx context.Context, docs []db.WikiSearchDocument) error {
+	for i := range docs {
+		title := titleFromSlug(docs[i].Slug)
+		if docs[i].Title == title {
+			continue
+		}
+		if err := s.DBForCtx(ctx).
+			Model(&db.WikiSearchDocument{}).
+			Where("id = ?", docs[i].ID).
+			Update("title", title).
+			Error; err != nil {
+			return err
+		}
+		docs[i].Title = title
+	}
+	return nil
 }
 
 func wikiSearchLikeEscapeClause(database *gorm.DB) string {
@@ -533,16 +557,17 @@ func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName str
 	if err != nil {
 		return err
 	}
+	title := titleFromSlug(page.Slug)
 	doc := db.WikiSearchDocument{
 		RepositoryID: repo.ID,
 		Slug:         page.Slug,
-		Title:        page.Title,
+		Title:        title,
 		Body:         db.LargeText(page.Body),
 		RevisionSHA:  page.SHA,
 		Embedding:    "",
 	}
 	if s.Embedder != nil && !embedding.IsNop(s.Embedder) {
-		text := page.Title + "\n" + wikiPageLabelsText(page.Labels) + "\n" + page.Body
+		text := title + "\n" + wikiPageLabelsText(page.Labels) + "\n" + page.Body
 		if len(text) > 32000 {
 			text = text[:32000]
 		}

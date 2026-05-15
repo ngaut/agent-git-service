@@ -192,6 +192,7 @@ var (
 	wikiMarkdownLinkRE = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 	wikiBracketLinkRE  = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	wikiCommitSHARE    = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+	wikiTitleReplacer  = strings.NewReplacer("-", " ", "_", " ")
 )
 
 // wikiRepoFullName returns the sibling repo name where wiki pages are stored.
@@ -335,21 +336,31 @@ func canonicalWikiLookupSlug(slug string) string {
 	return canonical
 }
 
-// titleFromBody extracts the first markdown H1 ("# Title") if present;
-// otherwise falls back to the slug with hyphens spaced. Used so list
-// responses carry a human-readable title without a separate metadata
-// store.
-func titleFromBody(slug, body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "# ") {
-			return strings.TrimSpace(strings.TrimPrefix(t, "# "))
-		}
-		if t != "" {
-			break
-		}
+// titleFromSlug derives the stable display title returned by wiki APIs. It is
+// intentionally independent from page body contents so title responses are
+// deterministic and list responses do not need to read every page body.
+func titleFromSlug(slug string) string {
+	parts := strings.Split(strings.Trim(slug, "/"), "/")
+	leaf := slug
+	if len(parts) > 0 && parts[len(parts)-1] != "" {
+		leaf = parts[len(parts)-1]
 	}
-	return strings.ReplaceAll(slug, "-", " ")
+	leaf = wikiTitleReplacer.Replace(leaf)
+	words := strings.Fields(leaf)
+	if len(words) == 0 {
+		return slug
+	}
+	for i, word := range words {
+		if word == "" {
+			continue
+		}
+		b := []byte(word)
+		if b[0] >= 'a' && b[0] <= 'z' {
+			b[0] -= 'a' - 'A'
+		}
+		words[i] = string(b)
+	}
+	return strings.Join(words, " ")
 }
 
 func normalizeWikiReference(raw string) string {
@@ -694,7 +705,7 @@ func (s *Service) loadWikiBacklinksForSlug(ctx context.Context, repoFullName, ta
 			}
 			backlinks = append(backlinks, WikiBacklink{
 				Slug:    sourceSlug,
-				Title:   titleFromBody(sourceSlug, string(body)),
+				Title:   titleFromSlug(sourceSlug),
 				Snippet: match.snippet,
 			})
 			break
@@ -797,13 +808,9 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 				continue
 			}
 		}
-		body, err := s.Git.ReadFileAtRef(ctx, full, p, snapshot)
-		if err != nil {
-			return nil, err
-		}
 		summary := WikiPageSummary{
 			Slug:   slug,
-			Title:  titleFromBody(slug, string(body)),
+			Title:  titleFromSlug(slug),
 			SHA:    blobSHAs[p],
 			Labels: labelsBySlug[slug],
 		}
@@ -1059,7 +1066,7 @@ func (s *Service) GetWikiPageAtRef(ctx context.Context, repoFullName, slug, ref 
 	meta := metadata[path]
 	return WikiPage{
 		Slug:       slug,
-		Title:      titleFromBody(slug, bodyStr),
+		Title:      titleFromSlug(slug),
 		Body:       bodyStr,
 		UpdatedAt:  meta.UpdatedAt,
 		SHA:        blobSHA,
@@ -1750,7 +1757,7 @@ func (s *Service) getWikiPageAtRef(ctx context.Context, repoFullName, slug, ref 
 	bodyStr := string(body)
 	return WikiPage{
 		Slug:       slug,
-		Title:      titleFromBody(slug, bodyStr),
+		Title:      titleFromSlug(slug),
 		Body:       bodyStr,
 		SHA:        blobSHA,
 		LastAuthor: nil,
@@ -1844,7 +1851,7 @@ func (s *Service) wikiSummariesForBodies(ctx context.Context, wikiRepoFullName s
 		}
 		summary := WikiPageSummary{
 			Slug:  slug,
-			Title: titleFromBody(slug, bodies[slug]),
+			Title: titleFromSlug(slug),
 			SHA:   blobSHAs[path],
 		}
 		if meta, ok := metadata[path]; ok {
