@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,6 +114,61 @@ func TestListWikiPages_LeavesLastAuthorNilWhenCommitIdentityDoesNotMatch_Issue13
 	}
 	if pages[0].UpdatedAt.IsZero() {
 		t.Fatalf("updated_at must be populated from git history")
+	}
+}
+
+func TestListWikiPages_PrefersBodyHeadingTitles(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{Login: "wiki-title-owner", Name: "wiki-title-owner", Type: db.TypeUser}).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "wiki-title-owner",
+		Name:       "wiki-titles",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	full := "wiki-title-owner/wiki-titles"
+
+	cases := []struct {
+		slug  string
+		body  string
+		title string
+	}{
+		{slug: "home", body: "\n\n# Body Title Wins\n\nBody.", title: "Body Title Wins"},
+		{slug: "guides/plain-page", body: "\nplain opening\n# Nested Heading Wins\n", title: "guides/plain page"},
+		{slug: "empty-page", body: "\n\n", title: "empty page"},
+	}
+	for _, tc := range cases {
+		if _, err := svc.PutWikiPage(ctx, full, tc.slug, tc.body, "put "+tc.slug, ""); err != nil {
+			t.Fatalf("PutWikiPage(%s): %v", tc.slug, err)
+		}
+	}
+
+	pages, err := svc.ListWikiPages(ctx, full, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages: %v", err)
+	}
+	got := map[string]string{}
+	for _, page := range pages {
+		got[page.Slug] = page.Title
+	}
+	for _, tc := range cases {
+		if got[tc.slug] != tc.title {
+			t.Fatalf("title[%s] = %q, want %q", tc.slug, got[tc.slug], tc.title)
+		}
+	}
+
+	page, err := svc.GetWikiPage(ctx, full, "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage(home): %v", err)
+	}
+	if page.Title != "Body Title Wins" {
+		t.Fatalf("GetWikiPage title = %q, want Body Title Wins", page.Title)
 	}
 }
 
@@ -370,6 +426,9 @@ func TestWiki_ReadsListsAndIndexesLegacyStoredSlugs_Issue1355(t *testing.T) {
 	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guide/Legacy_Move.md", "add legacy referrer", []byte("# Referrer\n\nSee [Legacy](Legacy_Page.v2.md).\n")); err != nil {
 		t.Fatalf("write legacy referrer: %v", err)
 	}
+	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guide/legacy-normalized.md", "add normalized referrer", []byte("# Referrer\n\nSee [[Legacy Page.v2]].\n")); err != nil {
+		t.Fatalf("write normalized legacy referrer: %v", err)
+	}
 
 	page, err := svc.GetWikiPage(ctx, full, "Legacy_Page.v2")
 	if err != nil {
@@ -383,11 +442,11 @@ func TestWiki_ReadsListsAndIndexesLegacyStoredSlugs_Issue1355(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWikiPages: %v", err)
 	}
-	if len(pages) != 2 {
-		t.Fatalf("expected 2 legacy-compatible pages, got %d", len(pages))
+	if len(pages) != 3 {
+		t.Fatalf("expected 3 legacy-compatible pages, got %d", len(pages))
 	}
-	joined := pages[0].Slug + "," + pages[1].Slug
-	if !strings.Contains(joined, "Legacy_Page.v2") || !strings.Contains(joined, "guide/Legacy_Move") {
+	joined := pages[0].Slug + "," + pages[1].Slug + "," + pages[2].Slug
+	if !strings.Contains(joined, "Legacy_Page.v2") || !strings.Contains(joined, "guide/Legacy_Move") || !strings.Contains(joined, "guide/legacy-normalized") {
 		t.Fatalf("listed slugs = %q, want legacy slugs preserved", joined)
 	}
 
@@ -395,8 +454,51 @@ func TestWiki_ReadsListsAndIndexesLegacyStoredSlugs_Issue1355(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWikiBacklinks legacy: %v", err)
 	}
-	if len(backlinks) != 1 || backlinks[0].Slug != "guide/Legacy_Move" {
-		t.Fatalf("legacy backlinks = %+v, want guide/Legacy_Move only", backlinks)
+	if len(backlinks) != 2 {
+		t.Fatalf("legacy backlinks len = %d, want 2 (%+v)", len(backlinks), backlinks)
+	}
+	if backlinks[0].Slug != "guide/Legacy_Move" || backlinks[1].Slug != "guide/legacy-normalized" {
+		t.Fatalf("legacy backlinks = %+v, want guide/Legacy_Move and guide/legacy-normalized", backlinks)
+	}
+}
+
+func TestListWikiBacklinks_MatchesUnderscoreSlugVariants(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	owner := db.User{Login: "wiki-backlink-owner", Name: "wiki-backlink-owner", Type: db.TypeUser}
+	if err := svc.DB.Create(&owner).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "wiki-backlinks",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	full := owner.Login + "/wiki-backlinks"
+
+	if _, err := svc.PutWikiPage(ctx, full, "plain-page", "# Plain Page\n", "create target", ""); err != nil {
+		t.Fatalf("PutWikiPage(target): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "markdown-ref", "# Markdown Ref\n\nSee [Plain](plain_page.md).\n", "create markdown ref", ""); err != nil {
+		t.Fatalf("PutWikiPage(markdown-ref): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "bracket-ref", "# Bracket Ref\n\nSee [[plain_page]].\n", "create bracket ref", ""); err != nil {
+		t.Fatalf("PutWikiPage(bracket-ref): %v", err)
+	}
+
+	backlinks, err := svc.ListWikiBacklinks(ctx, full, "plain-page")
+	if err != nil {
+		t.Fatalf("ListWikiBacklinks: %v", err)
+	}
+	if len(backlinks) != 2 {
+		t.Fatalf("backlinks len = %d, want 2 (%+v)", len(backlinks), backlinks)
+	}
+	if backlinks[0].Slug != "bracket-ref" || backlinks[1].Slug != "markdown-ref" {
+		t.Fatalf("backlink slugs = %+v, want bracket-ref then markdown-ref", backlinks)
 	}
 }
 
@@ -610,6 +712,61 @@ func TestListWikiPageHistory_DeleteThenRecreate_Issue1346(t *testing.T) {
 	}
 	if history[1].Date.IsZero() {
 		t.Fatalf("delete commit date must be populated")
+	}
+}
+
+func TestDeleteWikiPage_ConcurrentDeletesSerialize(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{Login: "wiki-delete-owner", Name: "wiki-delete-owner", Type: db.TypeUser}).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "wiki-delete-owner",
+		Name:       "wiki-delete-concurrent",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	full := "wiki-delete-owner/wiki-delete-concurrent"
+
+	const pages = 16
+	for i := 0; i < pages; i++ {
+		slug := fmt.Sprintf("accounts/page-%02d", i)
+		if _, err := svc.PutWikiPage(ctx, full, slug, "# "+slug+"\n", "put "+slug, ""); err != nil {
+			t.Fatalf("PutWikiPage(%s): %v", slug, err)
+		}
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, pages)
+	var wg sync.WaitGroup
+	for i := 0; i < pages; i++ {
+		slug := fmt.Sprintf("accounts/page-%02d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- svc.DeleteWikiPage(ctx, full, slug, "delete "+slug)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("DeleteWikiPage concurrent: %v", err)
+		}
+	}
+
+	remaining, err := svc.ListWikiPages(ctx, full, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("remaining wiki pages = %#v, want none", remaining)
 	}
 }
 

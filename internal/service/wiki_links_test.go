@@ -42,6 +42,15 @@ func TestExtractWikiLinkMatches_PreservesNestedLiteralPaths(t *testing.T) {
 	}
 }
 
+func TestWikiBacklinkGrepPatterns_FallsBackWhenVariantExpansionIsTooLarge(t *testing.T) {
+	slug := "one-two/three-four/five-six/seven-eight/nine-ten/eleven-twelve"
+
+	patterns := wikiBacklinkGrepPatterns(slug)
+	if patterns != nil {
+		t.Fatalf("expected fallback to full scan when variant expansion is too large, got %d patterns", len(patterns))
+	}
+}
+
 func TestRewriteWikiReferences_RewritesLiteralTargetsOnly(t *testing.T) {
 	body := strings.Join([]string{
 		"# Home",

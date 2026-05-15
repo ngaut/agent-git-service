@@ -54,6 +54,54 @@ func TestReadFile_DanglingHeadFallback(t *testing.T) {
 	}
 }
 
+func TestGrepFilesAtRef(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gitstore-grep-files-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := gitstore.New(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repoName := "user/grep-files"
+
+	if err := store.Init(ctx, repoName, "main", false); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	if _, err := store.WriteFile(ctx, repoName, "main", "home.md", "add home", []byte("# Home\nSee [[Guides/Setup]].\n")); err != nil {
+		t.Fatalf("WriteFile(home): %v", err)
+	}
+	if _, err := store.WriteFile(ctx, repoName, "main", "guides/setup.md", "add setup", []byte("# Setup\n")); err != nil {
+		t.Fatalf("WriteFile(setup): %v", err)
+	}
+	if _, err := store.WriteFile(ctx, repoName, "main", "notes.md", "add notes", []byte("# Notes\nNo links here.\n")); err != nil {
+		t.Fatalf("WriteFile(notes): %v", err)
+	}
+	head, err := store.HeadSHA(ctx, repoName, "main")
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+
+	files, err := store.GrepFilesAtRef(ctx, repoName, head, []string{"guides/setup"})
+	if err != nil {
+		t.Fatalf("GrepFilesAtRef: %v", err)
+	}
+	if len(files) != 1 || files[0] != "home.md" {
+		t.Fatalf("matched files = %#v, want home.md", files)
+	}
+
+	files, err = store.GrepFilesAtRef(ctx, repoName, head, []string{"missing"})
+	if err != nil {
+		t.Fatalf("GrepFilesAtRef missing: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("missing matched files = %#v, want empty", files)
+	}
+}
+
 func TestReadFile_FileNotFoundOnHead(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "gitstore-readfile-missing-*")
 	if err != nil {

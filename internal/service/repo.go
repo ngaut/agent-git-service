@@ -83,7 +83,7 @@ type Service struct {
 	typingHub     *TypingHub
 
 	wikiBacklinksMu    sync.RWMutex
-	wikiBacklinksCache map[string]wikiBacklinkIndex
+	wikiBacklinksCache map[string]map[string]wikiBacklinkCacheEntry
 
 	webhookWorkersOnce sync.Once
 	webhookJobs        chan webhookJob
