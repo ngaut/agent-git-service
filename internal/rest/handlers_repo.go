@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -231,7 +229,7 @@ func (d *Deps) UpdateRepo(w http.ResponseWriter, r *http.Request) {
 
 // ListOrgRepos handles GET /api/v3/orgs/{org}/repos
 func (d *Deps) ListOrgRepos(w http.ResponseWriter, r *http.Request) {
-	org := chi.URLParam(r, "org")
+	org := pathParam(r, "org")
 	repos, err := d.Svc.ListUserRepos(r.Context(), org)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -247,7 +245,7 @@ func (d *Deps) ListOrgRepos(w http.ResponseWriter, r *http.Request) {
 // GetOrg handles GET /api/v3/orgs/{org}
 // Returns 404 if the org does not exist or if the account is not an Organization.
 func (d *Deps) GetOrg(w http.ResponseWriter, r *http.Request) {
-	u, err := d.Svc.GetUser(r.Context(), chi.URLParam(r, "org"))
+	u, err := d.Svc.GetUser(r.Context(), pathParam(r, "org"))
 	if err != nil {
 		respond.NotFound(w)
 		return

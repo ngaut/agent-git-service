@@ -15,7 +15,6 @@ import (
 	"gh-server/internal/rest/transform"
 	"gh-server/internal/service"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
@@ -285,7 +284,7 @@ func (d *Deps) resolveRunsByRef(r *http.Request, repoID uint, fullName, ref stri
 // Returns workflow run jobs for runs matching the given commit ref.
 func (d *Deps) ListCheckRunsForRef(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	ref := chi.URLParam(r, "ref")
+	ref := pathParam(r, "ref")
 
 	repo, err := d.Svc.GetRepo(r.Context(), full)
 	if err != nil {
@@ -316,7 +315,7 @@ func (d *Deps) ListCheckRunsForRef(w http.ResponseWriter, r *http.Request) {
 // Returns workflow runs as check suites for the given commit ref.
 func (d *Deps) ListCheckSuitesForRef(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	ref := chi.URLParam(r, "ref")
+	ref := pathParam(r, "ref")
 
 	repo, err := d.Svc.GetRepo(r.Context(), full)
 	if err != nil {
@@ -343,7 +342,7 @@ func (d *Deps) ListCheckSuitesForRef(w http.ResponseWriter, r *http.Request) {
 // Returns combined status from workflow runs for the given commit.
 func (d *Deps) CombinedStatus(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	ref := chi.URLParam(r, "ref")
+	ref := pathParam(r, "ref")
 
 	repo, err := d.Svc.GetRepo(r.Context(), full)
 	if err != nil {
@@ -409,7 +408,7 @@ func (d *Deps) CombinedStatus(w http.ResponseWriter, r *http.Request) {
 // CreateCommitStatus handles POST /api/v3/repos/{owner}/{repo}/statuses/{sha}
 func (d *Deps) CreateCommitStatus(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	sha := chi.URLParam(r, "sha")
+	sha := pathParam(r, "sha")
 	var body struct {
 		State       string `json:"state"` // error, failure, pending, success
 		TargetURL   string `json:"target_url"`
@@ -467,7 +466,7 @@ func (d *Deps) CreateCommitStatus(w http.ResponseWriter, r *http.Request) {
 // ListCommitStatuses handles GET /api/v3/repos/{owner}/{repo}/commits/{ref}/statuses
 func (d *Deps) ListCommitStatuses(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	ref := chi.URLParam(r, "ref")
+	ref := pathParam(r, "ref")
 
 	repo, err := d.Svc.GetRepo(r.Context(), full)
 	if err != nil {
@@ -651,7 +650,7 @@ func (d *Deps) ListIssueReactions(w http.ResponseWriter, r *http.Request) {
 		reactions []db.Reaction
 		err       error
 	)
-	if commentIDStr := chi.URLParam(r, "comment_id"); commentIDStr != "" {
+	if commentIDStr := pathParam(r, "comment_id"); commentIDStr != "" {
 		commentID, ok := mustIntParam(w, r, "comment_id")
 		if !ok {
 			return
@@ -714,7 +713,7 @@ func (d *Deps) CreateIssueReaction(w http.ResponseWriter, r *http.Request) {
 	var commentID *uint
 
 	full := repoFullName(r)
-	if numStr := chi.URLParam(r, "comment_id"); numStr != "" {
+	if numStr := pathParam(r, "comment_id"); numStr != "" {
 		cid, ok := mustIntParam(w, r, "comment_id")
 		if !ok {
 			return
@@ -760,7 +759,7 @@ func (d *Deps) DeleteIssueReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if chi.URLParam(r, "comment_id") != "" {
+	if pathParam(r, "comment_id") != "" {
 		if _, ok := mustIntParam(w, r, "comment_id"); !ok {
 			return
 		}

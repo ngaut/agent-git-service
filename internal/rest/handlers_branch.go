@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -162,7 +160,7 @@ func (d *Deps) UpdateBranchProtection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Wildcard captures everything after /branches/, need to strip /protection suffix
-	branchPath := chi.URLParam(r, "*")
+	branchPath := pathParam(r, "*")
 	branch, resource, ok := d.resolveBranchProtectionPath(r.Context(), repo.FullName, branchPath)
 	if !ok {
 		respond.NotFound(w)
@@ -247,7 +245,7 @@ func (d *Deps) PostBranchProtection(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	branch, resource, ok := d.resolveBranchProtectionPath(r.Context(), repo.FullName, chi.URLParam(r, "*"))
+	branch, resource, ok := d.resolveBranchProtectionPath(r.Context(), repo.FullName, pathParam(r, "*"))
 	if !ok || resource == "" {
 		respond.NotFound(w)
 		return
@@ -262,7 +260,7 @@ func (d *Deps) PatchBranchProtection(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	branch, resource, ok := d.resolveBranchProtectionPath(r.Context(), repo.FullName, chi.URLParam(r, "*"))
+	branch, resource, ok := d.resolveBranchProtectionPath(r.Context(), repo.FullName, pathParam(r, "*"))
 	if !ok || resource == "" {
 		respond.NotFound(w)
 		return
@@ -277,7 +275,7 @@ func (d *Deps) DeleteBranchProtection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Wildcard captures everything after /branches/, need to strip /protection suffix
-	branchPath := chi.URLParam(r, "*")
+	branchPath := pathParam(r, "*")
 	branch, resource, ok := d.resolveBranchProtectionPath(r.Context(), repo.FullName, branchPath)
 	if !ok {
 		respond.NotFound(w)

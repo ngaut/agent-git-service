@@ -129,6 +129,70 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 	}
 }
 
+func TestWiki_PutNestedPageWithEncodedRepoName(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+
+	const repoName = "F1 Tracks and Tastes"
+	if _, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: h.User.Login,
+		Name:       repoName,
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	fullPath := url.PathEscape(h.User.Login) + "/" + url.PathEscape(repoName)
+	pagePath := "/api/v3/repos/" + fullPath + "/wiki/pages/" + url.PathEscape("xxx/yyy")
+	w := h.DoRESTJSON(t, "PUT", pagePath, map[string]any{
+		"body": "# Nested\n\nGrand prix notes.\n",
+	})
+	assertStatusCode(t, w, http.StatusOK)
+	body := testharness.DecodeJSON(t, w)
+	if body["slug"] != "xxx/yyy" {
+		t.Fatalf("PUT slug = %v, want xxx/yyy", body["slug"])
+	}
+
+	w = h.DoREST(t, "GET", pagePath, nil)
+	assertStatusCode(t, w, http.StatusOK)
+	body = testharness.DecodeJSON(t, w)
+	if body["slug"] != "xxx/yyy" {
+		t.Fatalf("GET slug = %v, want xxx/yyy", body["slug"])
+	}
+}
+
+func TestWiki_PutNestedPageWithLiteralPercentRepoName(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+
+	const repoName = "foo%20bar"
+	if _, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: h.User.Login,
+		Name:       repoName,
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	fullPath := url.PathEscape(h.User.Login) + "/" + url.PathEscape(repoName)
+	pagePath := "/api/v3/repos/" + fullPath + "/wiki/pages/" + url.PathEscape("xxx/yyy")
+	w := h.DoRESTJSON(t, "PUT", pagePath, map[string]any{
+		"body": "# Nested\n\nLiteral percent repo name.\n",
+	})
+	assertStatusCode(t, w, http.StatusOK)
+	body := testharness.DecodeJSON(t, w)
+	if body["slug"] != "xxx/yyy" {
+		t.Fatalf("PUT slug = %v, want xxx/yyy", body["slug"])
+	}
+
+	w = h.DoREST(t, "GET", "/api/v3/repos/"+fullPath, nil)
+	assertStatusCode(t, w, http.StatusOK)
+	body = testharness.DecodeJSON(t, w)
+	if body["name"] != repoName {
+		t.Fatalf("repo name = %v, want %s", body["name"], repoName)
+	}
+}
+
 func TestWikiPageLabelsREST(t *testing.T) {
 	h := testharness.New(t)
 	ctx := context.Background()

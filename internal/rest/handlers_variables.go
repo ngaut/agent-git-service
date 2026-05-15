@@ -3,8 +3,6 @@ package rest
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 )
@@ -111,7 +109,7 @@ func (d *Deps) ListEnvVariables(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.listVariables(w, r, repo.ID, env)
 }
 
@@ -121,7 +119,7 @@ func (d *Deps) CreateEnvVariable(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.createVariable(w, r, &repo.ID, repo.OwnerID, env)
 }
 
@@ -131,7 +129,7 @@ func (d *Deps) GetEnvVariable(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.getVariable(w, r, repo.ID, env)
 }
 
@@ -141,7 +139,7 @@ func (d *Deps) UpdateEnvVariable(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.updateVariable(w, r, repo.ID, env)
 }
 
@@ -151,7 +149,7 @@ func (d *Deps) DeleteEnvVariable(w http.ResponseWriter, r *http.Request) {
 	if repo == nil {
 		return
 	}
-	env := chi.URLParam(r, "environment_name")
+	env := pathParam(r, "environment_name")
 	d.deleteVariable(w, r, repo.ID, env)
 }
 
@@ -201,7 +199,7 @@ func (d *Deps) createVariable(w http.ResponseWriter, r *http.Request, repoID *ui
 }
 
 func (d *Deps) getVariable(w http.ResponseWriter, r *http.Request, repoID uint, env string) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	v, err := d.Svc.GetVariable(r.Context(), repoID, env, name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -211,7 +209,7 @@ func (d *Deps) getVariable(w http.ResponseWriter, r *http.Request, repoID uint, 
 }
 
 func (d *Deps) getOrgVariable(w http.ResponseWriter, r *http.Request, orgID uint) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	v, err := d.Svc.GetOrgVariable(r.Context(), orgID, name)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -221,7 +219,7 @@ func (d *Deps) getOrgVariable(w http.ResponseWriter, r *http.Request, orgID uint
 }
 
 func (d *Deps) updateVariable(w http.ResponseWriter, r *http.Request, repoID uint, env string) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	var body struct {
 		Value string `json:"value"`
 	}
@@ -235,7 +233,7 @@ func (d *Deps) updateVariable(w http.ResponseWriter, r *http.Request, repoID uin
 }
 
 func (d *Deps) updateOrgVariable(w http.ResponseWriter, r *http.Request, orgID uint) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	var body struct {
 		Value string `json:"value"`
 	}
@@ -248,7 +246,7 @@ func (d *Deps) updateOrgVariable(w http.ResponseWriter, r *http.Request, orgID u
 }
 
 func (d *Deps) deleteVariable(w http.ResponseWriter, r *http.Request, repoID uint, env string) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	if err := d.Svc.DeleteVariable(r.Context(), repoID, env, name); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -257,7 +255,7 @@ func (d *Deps) deleteVariable(w http.ResponseWriter, r *http.Request, repoID uin
 }
 
 func (d *Deps) deleteOrgVariable(w http.ResponseWriter, r *http.Request, orgID uint) {
-	name := chi.URLParam(r, "name")
+	name := pathParam(r, "name")
 	if err := d.Svc.DeleteOrgVariable(r.Context(), orgID, name); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return

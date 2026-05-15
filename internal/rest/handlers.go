@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +40,7 @@ import (
 // mustIntParam extracts a numeric URL parameter and writes a 422 response
 // if the value is missing or not a valid integer. Returns (0, false) on failure.
 func mustIntParam(w http.ResponseWriter, r *http.Request, key string) (int, bool) {
-	raw := chi.URLParam(r, key)
+	raw := pathParam(r, key)
 	n, err := strconv.Atoi(raw)
 	if err != nil {
 		respond.ValidationFailed(w, key+" must be a number")
@@ -53,7 +54,7 @@ func mustIntParam(w http.ResponseWriter, r *http.Request, key string) (int, bool
 // wildcard names for the same path segment.
 func mustIntParamAny(w http.ResponseWriter, r *http.Request, keys ...string) (int, bool) {
 	for _, key := range keys {
-		raw := chi.URLParam(r, key)
+		raw := pathParam(r, key)
 		if raw == "" {
 			continue
 		}
@@ -76,7 +77,7 @@ func mustIntParamAny(w http.ResponseWriter, r *http.Request, keys ...string) (in
 // response on failure. Prefer this over mustIntParam followed by a uint cast —
 // the cast silently wraps negative values on two's-complement systems.
 func mustUintParam(w http.ResponseWriter, r *http.Request, key string) (uint, bool) {
-	raw := chi.URLParam(r, key)
+	raw := pathParam(r, key)
 	n, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
 		respond.ValidationFailed(w, key+" must be a non-negative number")
@@ -99,9 +100,20 @@ func decodeBodyStrictOptional(r *http.Request, dst any) error {
 	return nil
 }
 
+func pathParam(r *http.Request, key string) string {
+	raw := chi.URLParam(r, key)
+	if r.URL.RawPath != "" {
+		decoded, err := url.PathUnescape(raw)
+		if err == nil {
+			return decoded
+		}
+	}
+	return raw
+}
+
 // repoFullName extracts the "owner/repo" path from the request URL params.
 func repoFullName(r *http.Request) string {
-	fullName := chi.URLParam(r, "owner") + "/" + chi.URLParam(r, "repo")
+	fullName := pathParam(r, "owner") + "/" + pathParam(r, "repo")
 	if fullName != "/" {
 		applog.AddAttrs(r.Context(), slog.String("repo", fullName))
 	}
@@ -371,7 +383,7 @@ func (d *Deps) authorAssociationChecks(ctx context.Context, repo db.Repository) 
 // mustGetOrg retrieves an org user by the {org} URL param.
 // Returns nil (and writes a 404 response) if the org does not exist or is not an Organization.
 func (d *Deps) mustGetOrg(w http.ResponseWriter, r *http.Request) *db.User {
-	org := chi.URLParam(r, "org")
+	org := pathParam(r, "org")
 	u, err := d.Svc.GetUser(r.Context(), org)
 	if err != nil {
 		respond.NotFound(w)
@@ -404,7 +416,7 @@ func decodeBody(r *http.Request, dst any) {
 // mustGetRepoByID retrieves a repository by its numeric {repo_id} URL param.
 // Returns nil (and writes a 404 response) if the repo does not exist.
 func (d *Deps) mustGetRepoByID(w http.ResponseWriter, r *http.Request) *db.Repository {
-	idStr := chi.URLParam(r, "repo_id")
+	idStr := pathParam(r, "repo_id")
 	repo, err := d.Svc.GetRepoByID(r.Context(), idStr)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)

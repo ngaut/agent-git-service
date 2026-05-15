@@ -9,8 +9,6 @@ import (
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 	"gh-server/internal/service"
-
-	"github.com/go-chi/chi/v5"
 )
 
 func repositoryInvitationJSON(inv db.RepositoryInvitation) map[string]any {
@@ -149,7 +147,7 @@ func (d *Deps) AddCollaborator(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := chi.URLParam(r, "username")
+	username := pathParam(r, "username")
 	if username == "" {
 		respond.NotFound(w)
 		return
@@ -225,7 +223,7 @@ func (d *Deps) RemoveCollaborator(w http.ResponseWriter, r *http.Request) {
 	if !d.requireRepoPermission(w, r, repo.ID, service.RepoPermissionAdmin) {
 		return
 	}
-	username := chi.URLParam(r, "username")
+	username := pathParam(r, "username")
 	if username == "" {
 		respond.NotFound(w)
 		return
