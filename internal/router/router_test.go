@@ -262,6 +262,26 @@ func TestOpenAPIEndpoint_ServesPublishedSpec(t *testing.T) {
 	}
 }
 
+func TestCORS_ExposesRequestIDHeader(t *testing.T) {
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://console.example.com")
+	_, mux := setupRouterTest(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v3/", nil)
+	req.Header.Set("Origin", "https://console.example.com")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://console.example.com" {
+		t.Fatalf("expected configured origin to be echoed, got %q", got)
+	}
+	if got := w.Header().Get("Access-Control-Expose-Headers"); got != "X-Request-Id" {
+		t.Fatalf("expected request ID header to be exposed, got %q", got)
+	}
+}
+
 func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 	_, gqlSrv, restDeps, gitHandler, oauthHandler := setupTestDeps(t)
 	rawRouter := chi.NewRouter()

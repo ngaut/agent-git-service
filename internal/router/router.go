@@ -65,6 +65,7 @@ func corsMiddleware(consoleBaseURL string) func(http.Handler) http.Handler {
 				if _, ok := allowedOrigins[origin]; ok {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 					w.Header().Set("Vary", "Origin")
+					w.Header().Set("Access-Control-Expose-Headers", srvmiddleware.RequestIDHeaderName())
 					if r.Method == http.MethodOptions {
 						reqHeaders := strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
 						if reqHeaders == "" {

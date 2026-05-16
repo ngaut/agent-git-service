@@ -119,6 +119,10 @@ CORS_ALLOWED_ORIGINS=https://console.example.com
 When `CORS_ALLOWED_ORIGINS` is empty, the server derives local development
 origins from `CONSOLE_BASE_URL`.
 
+Allowed browser origins can also read the `X-Request-Id` response header via
+`Access-Control-Expose-Headers` so frontend and API clients can correlate
+server responses with request-scoped logs.
+
 ### Workflow Execution
 
 Workflow execution is fail-closed by default. Enable it only when the container
