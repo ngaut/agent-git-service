@@ -398,6 +398,7 @@ func buildHTTPMux(cfg HTTPMuxConfig) (muxDeps, error) {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.RequestID)
+	r.Use(srvmiddleware.RequestIDResponseHeader())
 	r.Use(srvmiddleware.RequestLogging())
 	r.Use(srvmiddleware.Recoverer())
 	metricsHandler := metrics.Init()
