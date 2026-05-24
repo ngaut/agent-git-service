@@ -306,3 +306,69 @@ func TestWorkflowExecNoFileInvalid(t *testing.T) {
 		t.Fatal("expected error for invalid WORKFLOW_EXEC_NOFILE")
 	}
 }
+
+func TestSlockOAuthDisabledByDefault(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+
+	cfg, err := New()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SlockOAuthEnabled() {
+		t.Error("expected SlockOAuthEnabled=false by default")
+	}
+	if cfg.SlockOrigin != "" || cfg.SlockAPIOrigin != "" || cfg.SlockClientID != "" || cfg.SlockClientSecret != "" || cfg.AppOrigin != "" {
+		t.Errorf("expected all Slock OAuth fields empty, got %+v", cfg)
+	}
+}
+
+func TestSlockOAuthAllSet(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+	t.Setenv("SLOCK_ORIGIN", "https://app.slock.ai")
+	t.Setenv("SLOCK_API_ORIGIN", "https://api.slock.ai")
+	t.Setenv("SLOCK_CLIENT_ID", "agent-git-service")
+	t.Setenv("SLOCK_CLIENT_SECRET", "sekret")
+	t.Setenv("APP_ORIGIN", "https://app.example.com")
+
+	cfg, err := New()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.SlockOAuthEnabled() {
+		t.Error("expected SlockOAuthEnabled=true when all five set")
+	}
+	if cfg.SlockOrigin != "https://app.slock.ai" {
+		t.Errorf("SlockOrigin=%q", cfg.SlockOrigin)
+	}
+	if cfg.SlockAPIOrigin != "https://api.slock.ai" {
+		t.Errorf("SlockAPIOrigin=%q", cfg.SlockAPIOrigin)
+	}
+	if cfg.SlockClientID != "agent-git-service" {
+		t.Errorf("SlockClientID=%q", cfg.SlockClientID)
+	}
+	if cfg.SlockClientSecret != "sekret" {
+		t.Errorf("SlockClientSecret=%q", cfg.SlockClientSecret)
+	}
+	if cfg.AppOrigin != "https://app.example.com" {
+		t.Errorf("AppOrigin=%q", cfg.AppOrigin)
+	}
+}
+
+func TestSlockOAuthPartialRejected(t *testing.T) {
+	required := []string{"SLOCK_ORIGIN", "SLOCK_API_ORIGIN", "SLOCK_CLIENT_ID", "SLOCK_CLIENT_SECRET", "APP_ORIGIN"}
+	for _, omit := range required {
+		t.Run("missing_"+omit, func(t *testing.T) {
+			t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+			for _, k := range required {
+				if k == omit {
+					t.Setenv(k, "")
+				} else {
+					t.Setenv(k, "x")
+				}
+			}
+			if _, err := New(); err == nil {
+				t.Fatalf("expected error when %s is missing but others are set", omit)
+			}
+		})
+	}
+}

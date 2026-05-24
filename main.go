@@ -37,6 +37,7 @@ import (
 	"gh-server/internal/rest/transform"
 	"gh-server/internal/router"
 	"gh-server/internal/service"
+	"gh-server/internal/slockoauth"
 )
 
 // gitSHA is set at build time via -ldflags.
@@ -329,6 +330,25 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 		)
 	} else {
 		slog.Warn("workflow execution disabled; set ENABLE_WORKFLOW_EXEC=1 to allow sandboxed workflow steps")
+	}
+	if cfg.SlockOAuthEnabled() {
+		sc, err := slockoauth.New(slockoauth.Config{
+			Origin:       cfg.SlockOrigin,
+			APIOrigin:    cfg.SlockAPIOrigin,
+			ClientID:     cfg.SlockClientID,
+			ClientSecret: cfg.SlockClientSecret,
+			AppOrigin:    cfg.AppOrigin,
+		})
+		if err != nil {
+			return deps, fmt.Errorf("slockoauth: %w", err)
+		}
+		svcDeps.SlockOAuth = sc
+		slog.Info("login-with-slock enabled",
+			"client_id", cfg.SlockClientID,
+			"slock_origin", cfg.SlockOrigin,
+			"callback", sc.CallbackURL())
+	} else {
+		slog.Info("login-with-slock disabled", "reason", "SLOCK_CLIENT_ID/SLOCK_CLIENT_SECRET not set")
 	}
 	if cfg.Auth0Issuer != "" || cfg.Auth0ClientID != "" || cfg.Auth0Audience != "" {
 		c, err := auth0.New(auth0.Config{

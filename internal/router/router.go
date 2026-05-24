@@ -161,6 +161,11 @@ func registerPublicAuthRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw fun
 		r.Post("/api/v3/auth0/session", handlers.Auth0Session)
 		r.Post("/api/v3/auth0/callback", handlers.Auth0Callback)
 		r.Post("/api/v3/auth0/lookup", handlers.Auth0Lookup)
+		// Login-with-Slock OAuth (no auth required). Caddy 403 gate on
+		// POST /api/v3/agents is unchanged — agent provisioning routes
+		// through the Slock callback path instead.
+		r.Get("/auth/slock/login", handlers.SlockLogin)
+		r.Get("/auth/slock/callback", handlers.SlockCallback)
 	})
 }
 

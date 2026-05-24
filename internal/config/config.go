@@ -60,6 +60,15 @@ type Config struct {
 	Auth0ClientID string
 	Auth0Audience string
 
+	// Login-with-Slock OAuth configuration. All five must be set together to
+	// enable /auth/slock/login and /auth/slock/callback. When all empty, the
+	// feature is disabled. Partial configuration is a startup error.
+	SlockOrigin       string
+	SlockAPIOrigin    string
+	SlockClientID     string
+	SlockClientSecret string
+	AppOrigin         string
+
 	// ConsoleBaseURL is the base URL of the console frontend used for browser redirects.
 	ConsoleBaseURL string
 
@@ -122,6 +131,29 @@ func New() (Config, error) {
 		}
 		workflowExecNoFile = n
 	}
+	slockOrigin := os.Getenv("SLOCK_ORIGIN")
+	slockAPIOrigin := os.Getenv("SLOCK_API_ORIGIN")
+	slockClientID := os.Getenv("SLOCK_CLIENT_ID")
+	slockClientSecret := os.Getenv("SLOCK_CLIENT_SECRET")
+	appOrigin := os.Getenv("APP_ORIGIN")
+	slockVars := map[string]string{
+		"SLOCK_ORIGIN":        slockOrigin,
+		"SLOCK_API_ORIGIN":    slockAPIOrigin,
+		"SLOCK_CLIENT_ID":     slockClientID,
+		"SLOCK_CLIENT_SECRET": slockClientSecret,
+		"APP_ORIGIN":          appOrigin,
+	}
+	var slockSet, slockMissing []string
+	for name, v := range slockVars {
+		if v == "" {
+			slockMissing = append(slockMissing, name)
+		} else {
+			slockSet = append(slockSet, name)
+		}
+	}
+	if len(slockSet) > 0 && len(slockMissing) > 0 {
+		return Config{}, fmt.Errorf("login-with-slock: partial configuration. set: %v, missing: %v. provide all five or none", slockSet, slockMissing)
+	}
 	return Config{
 		Environment:    env,
 		ListenMode:     listenMode,
@@ -143,6 +175,11 @@ func New() (Config, error) {
 		Auth0Issuer:           os.Getenv("AUTH0_ISSUER"),
 		Auth0ClientID:         os.Getenv("AUTH0_CLIENT_ID"),
 		Auth0Audience:         os.Getenv("AUTH0_AUDIENCE"),
+		SlockOrigin:           slockOrigin,
+		SlockAPIOrigin:        slockAPIOrigin,
+		SlockClientID:         slockClientID,
+		SlockClientSecret:     slockClientSecret,
+		AppOrigin:             appOrigin,
 		EnableWorkflowExec:    os.Getenv("ENABLE_WORKFLOW_EXEC") == "true" || os.Getenv("ENABLE_WORKFLOW_EXEC") == "1",
 		WorkflowExecImage:     getEnv("WORKFLOW_EXEC_IMAGE", "bash:5.2"),
 		WorkflowExecTimeout:   workflowExecTimeout,
@@ -152,6 +189,11 @@ func New() (Config, error) {
 		WorkflowExecNoFile:    workflowExecNoFile,
 		WorkflowExecTmpfsSize: getEnv("WORKFLOW_EXEC_TMPFS_SIZE", "64m"),
 	}, nil
+}
+
+// SlockOAuthEnabled reports whether login-with-slock is configured.
+func (c Config) SlockOAuthEnabled() bool {
+	return c.SlockClientID != ""
 }
 
 func getEnv(key, fallback string) string {
