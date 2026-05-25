@@ -112,7 +112,7 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobByCI ma
 		result  ChangeSetResult
 		casLost bool
 	)
-	err := c.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := c.db(ctx).Transaction(func(tx *gorm.DB) error {
 		// 1. Read current head (may not exist for a brand-new wiki).
 		head, headExists, err := loadHeadForUpdate(tx, plan.repoID)
 		if err != nil {
@@ -267,7 +267,7 @@ func (c *Catalog) uploadBlobs(ctx context.Context, plan changesetPlan, blobByCI 
 				WrittenAt: c.Now(),
 				Size:      size,
 			}
-			if err := c.DB.WithContext(gctx).
+			if err := c.db(gctx).
 				Clauses(clause.OnConflict{DoNothing: true}).
 				Create(&pending).Error; err != nil {
 				return fmt.Errorf("wiki catalog: record pending blob: %w", err)
@@ -427,7 +427,7 @@ func assertNoPrefixCollision(tx *gorm.DB, repoID uint, slugCI string, ignorePage
 		// portability with GORM we build an OR chain — at depth ≤ 6
 		// this is still one round trip.
 		q := tx.Model(&db.WikiDirIndex{}).
-			Where("repository_id = ? AND child_kind = ?", repoID, ChildKindBlob)
+			Where("repository_id = ? AND child_kind = ?", repoID, childKindBlob)
 		var clauseSQL string
 		var clauseArgs []any
 		for i, anc := range ancestors {

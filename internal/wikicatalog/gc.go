@@ -45,7 +45,7 @@ func (c *Catalog) GCRun(ctx context.Context, now time.Time, pendingTTL, refcount
 	// row and then point-querying refs per orphan.
 	pendingCutoff := now.Add(-pendingTTL)
 	var orphans []db.WikiPendingBlob
-	err := c.DB.WithContext(ctx).
+	err := c.db(ctx).
 		Table("wiki_pending_blobs AS p").
 		Select("p.*").
 		Joins("LEFT JOIN wiki_blob_refs AS r ON r.blob_sha = p.blob_sha").
@@ -67,7 +67,7 @@ func (c *Catalog) GCRun(ctx context.Context, now time.Time, pendingTTL, refcount
 	// Phase 2: zero-refcount blobs.
 	refcountCutoff := now.Add(-refcountTTL)
 	var zeros []db.WikiBlobRef
-	err = c.DB.WithContext(ctx).
+	err = c.db(ctx).
 		Where("refcount <= 0 AND last_seen < ?", refcountCutoff).
 		Find(&zeros).Error
 	if err != nil {
@@ -93,7 +93,7 @@ func (c *Catalog) GCRun(ctx context.Context, now time.Time, pendingTTL, refcount
 // that interval).
 func (c *Catalog) reclaimPending(ctx context.Context, p db.WikiPendingBlob) (bool, error) {
 	var ref db.WikiBlobRef
-	err := c.DB.WithContext(ctx).
+	err := c.db(ctx).
 		Where("blob_sha = ?", p.BlobSHA).
 		Take(&ref).Error
 	if err == nil {
@@ -109,7 +109,7 @@ func (c *Catalog) reclaimPending(ctx context.Context, p db.WikiPendingBlob) (boo
 			return false, fmt.Errorf("wiki gc: delete CAS %s: %w", p.BlobSHA, err)
 		}
 	}
-	if err := c.DB.WithContext(ctx).
+	if err := c.db(ctx).
 		Where("blob_sha = ?", p.BlobSHA).
 		Delete(&db.WikiPendingBlob{}).Error; err != nil {
 		return false, fmt.Errorf("wiki gc: delete pending %s: %w", p.BlobSHA, err)
@@ -122,7 +122,7 @@ func (c *Catalog) reclaimPending(ctx context.Context, p db.WikiPendingBlob) (boo
 // taking a fresh reference would have bumped refcount > 0; if that
 // happened after our listing query, we leave the row alone.
 func (c *Catalog) reclaimRef(ctx context.Context, r db.WikiBlobRef) (bool, error) {
-	res := c.DB.WithContext(ctx).
+	res := c.db(ctx).
 		Where("blob_sha = ? AND refcount <= 0", r.BlobSHA).
 		Delete(&db.WikiBlobRef{})
 	if res.Error != nil {

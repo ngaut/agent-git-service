@@ -57,7 +57,7 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	case isLive:
 		pageID = live.PageID
 		revisionID = live.HeadRevisionID + 1
-		op = RevOpUpdate
+		op = revOpUpdate
 		decrementOld = true
 		oldBlobSHA = live.HeadBlobSHA
 		if err := tx.Model(&db.WikiPage{}).
@@ -72,7 +72,7 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		// delete time.
 		pageID = tomb.PageID
 		revisionID = tomb.HeadRevisionID + 1
-		op = RevOpRestore
+		op = revOpRestore
 		needsNewLeaf = true
 		if err := tx.Model(&db.WikiPage{}).
 			Where("page_id = ?", pageID).
@@ -80,7 +80,7 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 			return ChangeResult{}, fmt.Errorf("restore page %q: %w", ch.srcSlug, err)
 		}
 	default:
-		op = RevOpCreate
+		op = revOpCreate
 		revisionID = 1
 		needsNewLeaf = true
 		page := db.WikiPage{
@@ -179,7 +179,7 @@ func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		BodySize:    0,
 		SlugAtRev:   existing.Slug,
 		CommitSHA:   cs.SynthCommitSHA,
-		Op:          RevOpDelete,
+		Op:          revOpDelete,
 		AuthorID:    plan.authorID,
 		CommittedAt: plan.committedAt,
 	}
@@ -248,7 +248,7 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		BodyInline:  existing.BodyInline,
 		SlugAtRev:   ch.dstSlug,
 		CommitSHA:   cs.SynthCommitSHA,
-		Op:          RevOpRename,
+		Op:          revOpRename,
 		AuthorID:    plan.authorID,
 		CommittedAt: plan.committedAt,
 	}

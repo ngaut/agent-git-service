@@ -153,25 +153,26 @@ const (
 	ConflictCodeStale           = "SOURCE_STALE"
 	ConflictCodeDestinationTake = "DESTINATION_EXISTS"
 	ConflictCodePrefix          = "PREFIX_COLLISION"
-	ConflictCodeIfMatchMissing  = "IF_MATCH_REQUIRED"
 )
 
 // Revision op tags stored in wiki_page_revisions.op. The enum is a
 // superset of Op because revisions distinguish first-write from
 // later updates and record delete/restore as their own ops in the
-// history chain.
+// history chain. Package-internal; callers outside wikicatalog read
+// these only via the catalog's API, never the raw column.
 const (
-	RevOpCreate  = "create"
-	RevOpUpdate  = "update"
-	RevOpRename  = "rename"
-	RevOpDelete  = "delete"
-	RevOpRestore = "restore"
+	revOpCreate  = "create"
+	revOpUpdate  = "update"
+	revOpRename  = "rename"
+	revOpDelete  = "delete"
+	revOpRestore = "restore"
 )
 
 // Directory-index entry kinds stored in wiki_dir_index.child_kind.
+// Package-internal.
 const (
-	ChildKindBlob = "blob"
-	ChildKindTree = "tree"
+	childKindBlob = "blob"
+	childKindTree = "tree"
 )
 
 // Per-changeset quotas. Enforced in planChangeSet so the entire

@@ -332,6 +332,11 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	// stale. The hook is best-effort — failures log and do not roll
 	// back the catalog commit.
 	wikiCat.OnChangeSetCommitted = svcDeps.WikiCatalogPostCommit
+	// Route every catalog write through the same per-request DB the
+	// service layer uses; otherwise multi-tenant deployments commit
+	// page rows to the control-plane DB while the post-commit search
+	// hook (which uses DBForCtx) writes to the tenant DB.
+	wikiCat.DBFor = svcDeps.DBForCtx
 	// Initialize PresenceHub for collaborative conversation presence
 	svcDeps.PresenceHub = service.NewPresenceHub(database)
 	deps.svc = svcDeps

@@ -21,6 +21,17 @@ type Catalog struct {
 	DB   *gorm.DB
 	Blob *BlobStore
 
+	// DBFor resolves the *gorm.DB to use for a given request context.
+	// Required for multi-tenant deployments where Service.DBForCtx
+	// returns a per-tenant DB injected via ContextWithDB; without
+	// this hook the catalog would commit page rows to the
+	// control-plane DB while the post-commit search hook writes to
+	// the tenant DB.
+	//
+	// If nil, the catalog falls back to c.DB.WithContext(ctx) for
+	// single-DB deployments. New() defaults to that behavior.
+	DBFor func(ctx context.Context) *gorm.DB
+
 	// Now lets tests inject a deterministic clock. Defaults to
 	// time.Now().UTC().
 	Now func() time.Time
@@ -58,6 +69,10 @@ type Catalog struct {
 
 // New constructs a Catalog. db and blob must be non-nil; the caller
 // is responsible for AutoMigrate having already run on db.
+//
+// In a multi-tenant deployment the caller should set DBFor after
+// construction so the catalog routes writes to the per-request
+// tenant DB instead of the static fallback held in c.DB.
 func New(db *gorm.DB, blob *BlobStore) *Catalog {
 	return &Catalog{
 		DB:            db,
@@ -65,6 +80,16 @@ func New(db *gorm.DB, blob *BlobStore) *Catalog {
 		Now:           func() time.Time { return time.Now().UTC() },
 		MaxCASRetries: 5,
 	}
+}
+
+// db returns the *gorm.DB to use for a request. Resolves via DBFor
+// if set, otherwise falls back to c.DB. Always attaches ctx so
+// cancellation propagates into GORM.
+func (c *Catalog) db(ctx context.Context) *gorm.DB {
+	if c.DBFor != nil {
+		return c.DBFor(ctx)
+	}
+	return c.DB.WithContext(ctx)
 }
 
 // changesetPlan is the canonical form of a ChangeSetRequest after
