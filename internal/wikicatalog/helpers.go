@@ -55,7 +55,7 @@ func ensureDirChain(tx *gorm.DB, repoID uint, slugCI string) error {
 			RepositoryID: repoID,
 			ParentDir:    parent,
 			ChildName:    leaf,
-			ChildKind:    ChildKindTree,
+			ChildKind:    childKindTree,
 		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
 			return err
@@ -71,7 +71,7 @@ func insertDirLeaf(tx *gorm.DB, repoID uint, slugCI string, pageID uint64) error
 		RepositoryID: repoID,
 		ParentDir:    parent,
 		ChildName:    leaf,
-		ChildKind:    ChildKindBlob,
+		ChildKind:    childKindBlob,
 		PageID:       &pageID,
 	}
 	return tx.Create(&row).Error
@@ -123,7 +123,7 @@ func pruneEmptyParents(tx *gorm.DB, repoID uint, slugCI string) error {
 		}
 		parent, leaf := splitParentLeaf(dir)
 		if err := tx.Where("repository_id = ? AND parent_dir = ? AND child_name = ? AND child_kind = ?",
-			repoID, parent, leaf, ChildKindTree).
+			repoID, parent, leaf, childKindTree).
 			Delete(&db.WikiDirIndex{}).Error; err != nil {
 			return err
 		}

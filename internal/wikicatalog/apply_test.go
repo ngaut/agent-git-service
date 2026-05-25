@@ -1086,3 +1086,184 @@ func TestApplyChangeSet_OCCRetryExhausted(t *testing.T) {
 		t.Fatalf("retry budget consumed %d times, want %d", attempts, cat.MaxCASRetries)
 	}
 }
+
+// TestApplyChangeSet_RenameMissingSourceReturnsErrPageNotFound
+// pins the OpRename source-missing branch in apply.go's
+// checkConflicts. Without this test, the rename-with-no-source path
+// is untested and could silently change behaviour.
+func TestApplyChangeSet_RenameMissingSourceReturnsErrPageNotFound(t *testing.T) {
+	cat, repoID, _ := applyTestEnv(t)
+	_, err := cat.ApplyChangeSet(context.Background(), ChangeSetRequest{
+		RepositoryID: repoID, Source: SourceREST,
+		Changes: []Change{{Op: OpRename, Slug: "ghost", NewSlug: "after"}},
+	})
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+// TestApplyChangeSet_RenameIntoTombstonedDestination pins the
+// destination-tombstoned branch of checkConflicts. Renames into a
+// previously-deleted slug must surface the destination-taken
+// conflict so an operator can hard-purge before retrying.
+func TestApplyChangeSet_RenameIntoTombstonedDestination(t *testing.T) {
+	cat, repoID, _ := applyTestEnv(t)
+	ctx := context.Background()
+
+	for _, body := range []struct{ slug, body string }{
+		{"keep-me", "body"},
+		{"will-tomb", "doomed"},
+	} {
+		if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+			RepositoryID: repoID, Source: SourceREST,
+			Changes: []Change{{Op: OpUpsert, Slug: body.slug, Body: []byte(body.body)}},
+		}); err != nil {
+			t.Fatalf("seed %s: %v", body.slug, err)
+		}
+	}
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID, Source: SourceREST,
+		Changes: []Change{{Op: OpDelete, Slug: "will-tomb"}},
+	}); err != nil {
+		t.Fatalf("delete will-tomb: %v", err)
+	}
+
+	_, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID, Source: SourceREST,
+		Changes: []Change{{Op: OpRename, Slug: "keep-me", NewSlug: "will-tomb"}},
+	})
+	var cerr *ConflictError
+	if !errors.As(err, &cerr) {
+		t.Fatalf("expected *ConflictError, got %v", err)
+	}
+	if cerr.Code != ConflictCodeDestinationTake {
+		t.Fatalf("conflict code = %q, want DESTINATION_EXISTS", cerr.Code)
+	}
+}
+
+// TestApplyChangeSet_BodyAtInlineBoundary pins the inline-vs-CAS
+// boundary at MaxBodyInlineBytes. A body of exactly the limit must
+// stay inline; one byte over must materialize in the CAS. These
+// two cases bracket a class of off-by-one bugs that would otherwise
+// hide behind the typical-size test.
+func TestApplyChangeSet_BodyAtInlineBoundary(t *testing.T) {
+	cat, repoID, gdb := applyTestEnv(t)
+	ctx := context.Background()
+
+	atLimit := make([]byte, MaxBodyInlineBytes)
+	for i := range atLimit {
+		atLimit[i] = byte('x')
+	}
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID, Source: SourceREST,
+		Changes: []Change{{Op: OpUpsert, Slug: "edge", Body: atLimit}},
+	}); err != nil {
+		t.Fatalf("upsert at limit: %v", err)
+	}
+	sha := HashContent(atLimit)
+	if ok, _ := cat.Blob.Has(ctx, sha); ok {
+		t.Fatalf("body == MaxBodyInlineBytes must not materialize a CAS file")
+	}
+	var page db.WikiPage
+	if err := gdb.First(&page, "slug_ci_v1 = ?", "edge").Error; err != nil {
+		t.Fatalf("read page: %v", err)
+	}
+	if len(page.BodyInline) != MaxBodyInlineBytes {
+		t.Fatalf("body_inline at boundary len=%d, want %d", len(page.BodyInline), MaxBodyInlineBytes)
+	}
+}
+
+func TestApplyChangeSet_BodyJustOverInlineBoundary(t *testing.T) {
+	cat, repoID, gdb := applyTestEnv(t)
+	ctx := context.Background()
+
+	over := make([]byte, MaxBodyInlineBytes+1)
+	for i := range over {
+		over[i] = byte('y')
+	}
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID, Source: SourceREST,
+		Changes: []Change{{Op: OpUpsert, Slug: "over", Body: over}},
+	}); err != nil {
+		t.Fatalf("upsert over limit: %v", err)
+	}
+	sha := HashContent(over)
+	if ok, _ := cat.Blob.Has(ctx, sha); !ok {
+		t.Fatalf("body > MaxBodyInlineBytes must materialize a CAS file")
+	}
+	var page db.WikiPage
+	if err := gdb.First(&page, "slug_ci_v1 = ?", "over").Error; err != nil {
+		t.Fatalf("read page: %v", err)
+	}
+	if page.BodyInline != nil {
+		t.Fatalf("body > inline boundary must NOT be inlined; got %d bytes", len(page.BodyInline))
+	}
+}
+
+// TestApplyChangeSet_EmptyBodyAllowed pins the contract that an
+// empty body (zero bytes) is a valid page contents — distinct from
+// "no body provided" which is rejected by planChangeSet.
+func TestApplyChangeSet_EmptyBodyAllowed(t *testing.T) {
+	cat, repoID, gdb := applyTestEnv(t)
+	ctx := context.Background()
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID, Source: SourceREST,
+		Changes: []Change{{Op: OpUpsert, Slug: "blank", Body: []byte{}}},
+	}); err != nil {
+		t.Fatalf("upsert empty body: %v", err)
+	}
+	var page db.WikiPage
+	if err := gdb.First(&page, "slug_ci_v1 = ?", "blank").Error; err != nil {
+		t.Fatalf("read page: %v", err)
+	}
+	if page.BodySize != 0 {
+		t.Fatalf("body_size = %d, want 0", page.BodySize)
+	}
+	if page.HeadBlobSHA != HashContent([]byte{}) {
+		t.Fatalf("blob sha = %q, want git-empty-blob SHA", page.HeadBlobSHA)
+	}
+}
+
+// TestApplyChangeSet_MixedOpsInOneChangeset confirms upsert + delete
+// + rename can coexist in a single transaction. Migration replay
+// produces these; the test pins that the changeset commits atomically.
+func TestApplyChangeSet_MixedOpsInOneChangeset(t *testing.T) {
+	cat, repoID, gdb := applyTestEnv(t)
+	ctx := context.Background()
+	for _, slug := range []string{"a", "b", "c"} {
+		if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+			RepositoryID: repoID, Source: SourceREST,
+			Changes: []Change{{Op: OpUpsert, Slug: slug, Body: []byte(slug)}},
+		}); err != nil {
+			t.Fatalf("seed %s: %v", slug, err)
+		}
+	}
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID, Source: SourceBatch,
+		Message: "mixed",
+		Changes: []Change{
+			{Op: OpUpsert, Slug: "d", Body: []byte("d")},
+			{Op: OpDelete, Slug: "b"},
+			{Op: OpRename, Slug: "c", NewSlug: "renamed-c"},
+		},
+	}); err != nil {
+		t.Fatalf("mixed changeset: %v", err)
+	}
+	// a unchanged, d created, b tombstoned, c → renamed-c.
+	var aliveCount int64
+	gdb.Model(&db.WikiPage{}).
+		Where("repository_id = ? AND deleted_at IS NULL", repoID).
+		Count(&aliveCount)
+	if aliveCount != 3 {
+		t.Fatalf("expected 3 live pages (a, d, renamed-c), got %d", aliveCount)
+	}
+	for _, want := range []string{"a", "d", "renamed-c"} {
+		var n int64
+		gdb.Model(&db.WikiPage{}).
+			Where("repository_id = ? AND slug_ci_v1 = ? AND deleted_at IS NULL", repoID, want).
+			Count(&n)
+		if n != 1 {
+			t.Fatalf("missing live page %q", want)
+		}
+	}
+}
