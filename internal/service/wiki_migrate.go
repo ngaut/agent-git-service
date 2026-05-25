@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+
 	"gh-server/internal/db"
 	"gh-server/internal/gitstore"
 	"gh-server/internal/wikicatalog"
@@ -92,11 +94,94 @@ func (s *Service) MigrateWiki(ctx context.Context, repoFullName string, opts Wik
 	return s.migrateOneWiki(ctx, rep, opts)
 }
 
+// ensureWikiCatalogCurrent is the read-path freshness hook for the
+// wiki catalog. It treats the wikicatalog tables as a materialized
+// view of the legacy git wiki repo: before serving a read, this
+// function compares the wiki repo's git HEAD against the last
+// migrated commit recorded in the catalog and replays only the new
+// commits if they diverge. The fast path is one Git HEAD lookup plus
+// one indexed catalog query.
+//
+// This sits in front of catalog-backed read handlers while writes
+// still flow through the legacy git path; M4 (catalog-as-SOT writes)
+// will make this hook redundant.
+func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName string) error {
+	if s.Git == nil || s.WikiCatalog == nil {
+		return nil
+	}
+	full := wikiRepoFullName(repoFullName)
+	if !s.Git.Exists(ctx, full) {
+		return nil
+	}
+	rep, err := s.getRepoBase(ctx, repoFullName)
+	if err != nil {
+		return err
+	}
+	lastMigratedSHA, err := s.loadLatestMigratedWikiCommitSHA(ctx, rep.ID)
+	if err != nil {
+		return fmt.Errorf("read catalog head for %q: %w", repoFullName, err)
+	}
+	headSHA, err := s.Git.ResolveContentCommit(ctx, full, "")
+	if err != nil || strings.TrimSpace(headSHA) == "" {
+		branches, branchErr := s.Git.ListBranches(ctx, full)
+		if branchErr != nil {
+			if err != nil {
+				return fmt.Errorf("resolve wiki content commit for %q: %w", repoFullName, err)
+			}
+			return fmt.Errorf("list wiki branches for %q: %w", repoFullName, branchErr)
+		}
+		if len(branches) == 0 {
+			if lastMigratedSHA != "" {
+				if err := s.resetWikiCatalogRepo(ctx, rep.ID); err != nil {
+					return fmt.Errorf("reset empty wiki catalog for %q: %w", repoFullName, err)
+				}
+				if err := s.pruneWikiPageLabelsForMissingPages(ctx, rep.ID); err != nil {
+					return fmt.Errorf("prune wiki page labels for empty wiki %q: %w", repoFullName, err)
+				}
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("resolve wiki content commit for %q: %w", repoFullName, err)
+		}
+		return fmt.Errorf("resolve wiki content commit for %q: empty commit with %d branches", repoFullName, len(branches))
+	}
+	if strings.EqualFold(lastMigratedSHA, strings.ToLower(strings.TrimSpace(headSHA))) {
+		return nil
+	}
+	if _, err := s.migrateOneWiki(ctx, rep, WikiMigrationOptions{}); err != nil {
+		return fmt.Errorf("refresh catalog for %q: %w", repoFullName, err)
+	}
+	return nil
+}
+
 func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts WikiMigrationOptions) (RepoMigrationStats, error) {
 	stats := RepoMigrationStats{}
 	full := wikiRepoFullName(repo.FullName)
 	if !s.Git.Exists(ctx, full) {
 		return stats, nil
+	}
+
+	mu := s.getWikiMigrationSyncMu(repo.FullName)
+	mu.Lock()
+	defer mu.Unlock()
+
+	commits, err := s.Git.ListAllCommits(ctx, full, nil)
+	if err != nil {
+		return stats, fmt.Errorf("list commits: %w", err)
+	}
+	stats.GitCommits = len(commits)
+
+	lastMigratedSHA, err := s.loadLatestMigratedWikiCommitSHA(ctx, repo.ID)
+	if err != nil {
+		return stats, fmt.Errorf("load latest migrated SHA: %w", err)
+	}
+	didReset := false
+	if lastMigratedSHA != "" && !wikiCommitInHistory(commits, lastMigratedSHA) {
+		if err := s.resetWikiCatalogRepo(ctx, repo.ID); err != nil {
+			return stats, fmt.Errorf("reset rewritten wiki catalog: %w", err)
+		}
+		didReset = true
 	}
 
 	// Already-present commit SHAs short-circuit the replay so reruns
@@ -105,12 +190,9 @@ func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts W
 	if err != nil {
 		return stats, fmt.Errorf("load migrated SHAs: %w", err)
 	}
-
-	commits, err := s.Git.ListAllCommits(ctx, full, nil)
-	if err != nil {
-		return stats, fmt.Errorf("list commits: %w", err)
+	if s.testWikiMigrationAfterSnapshot != nil {
+		s.testWikiMigrationAfterSnapshot(repo.FullName)
 	}
-	stats.GitCommits = len(commits)
 
 	// ListAllCommits returns commits in git log's natural order, which
 	// is reverse-topological — every commit appears before its parents.
@@ -140,6 +222,11 @@ func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts W
 		stats.NewCommits++
 		existing[commit.SHA] = struct{}{}
 	}
+	if didReset {
+		if err := s.pruneWikiPageLabelsForMissingPages(ctx, repo.ID); err != nil {
+			return stats, fmt.Errorf("prune wiki page labels after reset: %w", err)
+		}
+	}
 
 	pageCount := int64(0)
 	_ = s.DBForCtx(ctx).Model(&db.WikiPage{}).
@@ -155,6 +242,98 @@ func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts W
 		"pages", stats.Pages,
 	)
 	return stats, nil
+}
+
+func (s *Service) loadLatestMigratedWikiCommitSHA(ctx context.Context, repoID uint) (string, error) {
+	var last db.WikiChangeset
+	err := s.DBForCtx(ctx).
+		Select("synth_commit_sha").
+		Where("repository_id = ?", repoID).
+		Order("changeset_id DESC").
+		Limit(1).
+		Take(&last).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(last.SynthCommitSHA)), nil
+}
+
+func wikiCommitInHistory(commits []gitstore.SearchCommitInfo, sha string) bool {
+	sha = strings.ToLower(strings.TrimSpace(sha))
+	if sha == "" {
+		return false
+	}
+	for _, commit := range commits {
+		if strings.EqualFold(strings.TrimSpace(commit.SHA), sha) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) resetWikiCatalogRepo(ctx context.Context, repoID uint) error {
+	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		type blobRefCount struct {
+			BlobSHA  string
+			Refcount int64
+		}
+		var liveRefs []blobRefCount
+		if err := tx.Model(&db.WikiPage{}).
+			Select("head_blob_sha AS blob_sha, COUNT(*) AS refcount").
+			Where("repository_id = ? AND deleted_at IS NULL", repoID).
+			Group("head_blob_sha").
+			Scan(&liveRefs).Error; err != nil {
+			return fmt.Errorf("load live blob refs: %w", err)
+		}
+		for _, ref := range liveRefs {
+			if strings.TrimSpace(ref.BlobSHA) == "" || ref.Refcount <= 0 {
+				continue
+			}
+			if err := tx.Model(&db.WikiBlobRef{}).
+				Where("blob_sha = ?", ref.BlobSHA).
+				UpdateColumn("refcount", gorm.Expr("refcount - ?", ref.Refcount)).Error; err != nil {
+				return fmt.Errorf("decrement blob ref %s: %w", ref.BlobSHA, err)
+			}
+		}
+
+		pageIDs := tx.Model(&db.WikiPage{}).
+			Select("page_id").
+			Where("repository_id = ?", repoID)
+
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiSearchDocument{}).Error; err != nil {
+			return fmt.Errorf("delete wiki search documents: %w", err)
+		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiPageLink{}).Error; err != nil {
+			return fmt.Errorf("delete wiki page links: %w", err)
+		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiDirIndex{}).Error; err != nil {
+			return fmt.Errorf("delete wiki dir index: %w", err)
+		}
+		if err := tx.Where("page_id IN (?)", pageIDs).Delete(&db.WikiPageRevision{}).Error; err != nil {
+			return fmt.Errorf("delete wiki page revisions: %w", err)
+		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiPage{}).Error; err != nil {
+			return fmt.Errorf("delete wiki pages: %w", err)
+		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiRepoHead{}).Error; err != nil {
+			return fmt.Errorf("delete wiki repo head: %w", err)
+		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiChangeset{}).Error; err != nil {
+			return fmt.Errorf("delete wiki changesets: %w", err)
+		}
+		return nil
+	})
+}
+
+func (s *Service) pruneWikiPageLabelsForMissingPages(ctx context.Context, repoID uint) error {
+	return s.DBForCtx(ctx).Where(
+		"repository_id = ? AND slug NOT IN (?)",
+		repoID,
+		s.DBForCtx(ctx).Model(&db.WikiPage{}).Select("slug").Where("repository_id = ? AND deleted_at IS NULL", repoID),
+	).Delete(&db.WikiPageLabel{}).Error
 }
 
 func (s *Service) loadMigratedCommitSHAs(ctx context.Context, repoID uint) (map[string]struct{}, error) {

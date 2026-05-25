@@ -712,6 +712,12 @@ func (s *Service) ensureWikiRepo(ctx context.Context, repoFullName string) error
 // ListWikiPages returns one summary entry per markdown page at the wiki
 // repo's HEAD. Returns an empty slice (not an error) if the wiki repo
 // has not been created yet.
+//
+// Reads come from the wikicatalog materialized view rather than walking
+// the git tree per request. ensureWikiCatalogCurrent refreshes the view
+// against the wiki repo's HEAD before each call; writes still flow
+// through the legacy git path, so the view stays a strict materialized
+// projection of git until M4 inverts the SOT.
 func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts ListWikiPagesOptions) ([]WikiPageSummary, error) {
 	if s.Git == nil {
 		return nil, errors.New("git store unavailable")
@@ -730,27 +736,29 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 	if !s.Git.Exists(ctx, full) {
 		return []WikiPageSummary{}, nil
 	}
-	snapshot, err := s.Git.ResolveContentCommit(ctx, full, "")
-	if err != nil {
-		return []WikiPageSummary{}, nil
+
+	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+		return nil, err
 	}
-	paths, err := s.Git.ListTreeFilesAtRef(ctx, full, snapshot)
-	if err != nil {
-		return []WikiPageSummary{}, nil
+
+	var pages []db.WikiPage
+	if err := s.DBForCtx(ctx).
+		Preload("LastAuthor").
+		Where("repository_id = ? AND deleted_at IS NULL", rep.ID).
+		Find(&pages).Error; err != nil {
+		return nil, fmt.Errorf("list wiki pages: %w", err)
 	}
-	pagePaths := make([]string, 0, len(paths))
-	for _, p := range paths {
-		slug := wikiPathToSlug(p)
-		if slug != "" && wikiSlugMatchesPathFilter(slug, opts.Path, opts.Recursive) {
-			pagePaths = append(pagePaths, p)
+
+	pageSlugs := make([]string, 0, len(pages))
+	filtered := make([]db.WikiPage, 0, len(pages))
+	for _, p := range pages {
+		if !wikiSlugMatchesPathFilter(p.Slug, opts.Path, opts.Recursive) {
+			continue
 		}
+		filtered = append(filtered, p)
+		pageSlugs = append(pageSlugs, p.Slug)
 	}
-	pageSlugs := make([]string, 0, len(pagePaths))
-	for _, p := range pagePaths {
-		if slug := wikiPathToSlug(p); slug != "" {
-			pageSlugs = append(pageSlugs, slug)
-		}
-	}
+
 	labelFilters := WikiLabelFilters{Labels: opts.Labels, ExcludeLabels: opts.ExcludeLabels}
 	var allowedSlugs map[string]struct{}
 	if hasWikiLabelFilters(labelFilters) {
@@ -768,40 +776,21 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 		return nil, err
 	}
 
-	metadata, err := s.wikiPageMetadataAtRef(ctx, full, snapshot, pagePaths)
-	if err != nil {
-		return nil, err
-	}
-	blobSHAs, err := s.wikiBlobSHAsAtRef(ctx, full, snapshot, pagePaths)
-	if err != nil {
-		return nil, err
-	}
-
-	var out []WikiPageSummary
-	for _, p := range pagePaths {
-		slug := wikiPathToSlug(p)
-		if slug == "" {
-			continue
-		}
+	out := make([]WikiPageSummary, 0, len(filtered))
+	for _, p := range filtered {
 		if allowedSlugs != nil {
-			if _, ok := allowedSlugs[slug]; !ok {
+			if _, ok := allowedSlugs[p.Slug]; !ok {
 				continue
 			}
 		}
-		summary := WikiPageSummary{
-			Slug:   slug,
-			Title:  titleFromSlug(slug),
-			SHA:    blobSHAs[p],
-			Labels: labelsBySlug[slug],
-		}
-		if meta, ok := metadata[p]; ok {
-			summary.UpdatedAt = meta.UpdatedAt
-			summary.LastAuthor = meta.LastAuthor
-		}
-		out = append(out, summary)
-	}
-	if out == nil {
-		out = []WikiPageSummary{}
+		out = append(out, WikiPageSummary{
+			Slug:       p.Slug,
+			Title:      titleFromSlug(p.Slug),
+			SHA:        p.HeadBlobSHA,
+			Labels:     labelsBySlug[p.Slug],
+			UpdatedAt:  p.UpdatedAt,
+			LastAuthor: p.LastAuthor,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
 	return out, nil

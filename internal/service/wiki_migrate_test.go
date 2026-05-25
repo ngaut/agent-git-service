@@ -9,7 +9,9 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"gh-server/internal/db"
 	"gh-server/internal/service"
@@ -200,6 +202,299 @@ func TestMigrateWiki_IsIdempotent(t *testing.T) {
 	}
 	if stats2.SkippedExist != 1 {
 		t.Fatalf("second run SkippedExist = %d, want 1", stats2.SkippedExist)
+	}
+}
+
+func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+
+	if _, err := svc.CreateLabel(ctx, repoFullName, "stale", "ff0000", "stale wiki label"); err != nil {
+		t.Fatalf("CreateLabel stale: %v", err)
+	}
+	if _, err := svc.CreateLabel(ctx, repoFullName, "current", "00ff00", "current wiki label"); err != nil {
+		t.Fatalf("CreateLabel current: %v", err)
+	}
+
+	homeV1, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", "")
+	if err != nil {
+		t.Fatalf("create home: %v", err)
+	}
+	if _, err := svc.SetWikiPageLabels(ctx, repoFullName, "home", []string{"current"}); err != nil {
+		t.Fatalf("SetWikiPageLabels home: %v", err)
+	}
+	headA, err := svc.Git.HeadSHA(ctx, repoFullName+".wiki", "master")
+	if err != nil {
+		t.Fatalf("head after A: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "about", "about body", "create about", ""); err != nil {
+		t.Fatalf("create about: %v", err)
+	}
+	if _, err := svc.SetWikiPageLabels(ctx, repoFullName, "about", []string{"stale"}); err != nil {
+		t.Fatalf("SetWikiPageLabels about: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v2", "update home", homeV1.SHA); err != nil {
+		t.Fatalf("update home: %v", err)
+	}
+
+	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+
+	repoDir, err := svc.Git.GetRepoPath(ctx, repoFullName+".wiki")
+	if err != nil {
+		t.Fatalf("GetRepoPath: %v", err)
+	}
+	workDir := t.TempDir()
+	if out, err := exec.Command("git", "clone", repoDir, workDir).CombinedOutput(); err != nil {
+		t.Fatalf("git clone bare wiki: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "checkout", "master").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout master: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "reset", "--hard", headA).CombinedOutput(); err != nil {
+		t.Fatalf("git reset --hard %s: %v\n%s", headA, err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "push", "--force", "origin", "master").CombinedOutput(); err != nil {
+		t.Fatalf("git push --force origin master: %v\n%s", err, out)
+	}
+
+	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages after rewrite: %v", err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("ListWikiPages after rewrite returned %d pages, want 1: %+v", len(pages), pages)
+	}
+	if pages[0].Slug != "home" {
+		t.Fatalf("ListWikiPages returned slug %q, want home", pages[0].Slug)
+	}
+	if pages[0].SHA != homeV1.SHA {
+		t.Fatalf("ListWikiPages returned SHA %q, want rewritten home SHA %q", pages[0].SHA, homeV1.SHA)
+	}
+
+	rep, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	var pageRows []db.WikiPage
+	if err := svc.DB.Where("repository_id = ? AND deleted_at IS NULL", rep.ID).Order("slug ASC").Find(&pageRows).Error; err != nil {
+		t.Fatalf("list wiki_pages: %v", err)
+	}
+	if len(pageRows) != 1 || pageRows[0].Slug != "home" || pageRows[0].HeadBlobSHA != homeV1.SHA {
+		t.Fatalf("live catalog rows = %+v, want only rewritten home row", pageRows)
+	}
+
+	var pageLabels []db.WikiPageLabel
+	if err := svc.DB.Where("repository_id = ?", rep.ID).Order("slug ASC, label_id ASC").Find(&pageLabels).Error; err != nil {
+		t.Fatalf("list wiki_page_labels: %v", err)
+	}
+	if len(pageLabels) != 1 || pageLabels[0].Slug != "home" {
+		t.Fatalf("wiki_page_labels rows = %+v, want only home label after rebuild", pageLabels)
+	}
+
+	labels, err := svc.ListWikiPageLabels(ctx, repoFullName, "home")
+	if err != nil {
+		t.Fatalf("ListWikiPageLabels(home): %v", err)
+	}
+	if got := labelNames(labels); strings.Join(got, ",") != "current" {
+		t.Fatalf("home labels = %v, want [current] after rebuild", got)
+	}
+
+	if labels, err := svc.ListWikiPageLabels(ctx, repoFullName, "about"); err == nil {
+		t.Fatalf("ListWikiPageLabels(about) = %v, want not found after rebuild", labelNames(labels))
+	}
+
+	var changesets []db.WikiChangeset
+	if err := svc.DB.Where("repository_id = ?", rep.ID).Order("changeset_id ASC").Find(&changesets).Error; err != nil {
+		t.Fatalf("list wiki_changesets: %v", err)
+	}
+	if len(changesets) != 1 {
+		t.Fatalf("wiki_changesets rows = %d, want 1 after rebuild", len(changesets))
+	}
+	if changesets[0].SynthCommitSHA != strings.ToLower(headA) {
+		t.Fatalf("replayed synth_commit_sha = %q, want %q", changesets[0].SynthCommitSHA, strings.ToLower(headA))
+	}
+}
+
+func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+
+	if _, err := svc.CreateLabel(ctx, repoFullName, "current", "00ff00", "current wiki label"); err != nil {
+		t.Fatalf("CreateLabel current: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage home: %v", err)
+	}
+	if _, err := svc.SetWikiPageLabels(ctx, repoFullName, "home", []string{"current"}); err != nil {
+		t.Fatalf("SetWikiPageLabels home: %v", err)
+	}
+	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+
+	repoDir, err := svc.Git.GetRepoPath(ctx, repoFullName+".wiki")
+	if err != nil {
+		t.Fatalf("GetRepoPath: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", repoDir, "update-ref", "-d", "refs/heads/master").CombinedOutput(); err != nil {
+		t.Fatalf("git update-ref -d refs/heads/master: %v\n%s", err, out)
+	}
+
+	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages after branch deletion: %v", err)
+	}
+	if len(pages) != 0 {
+		t.Fatalf("ListWikiPages returned %d pages after branch deletion, want 0: %+v", len(pages), pages)
+	}
+
+	filteredPages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{
+		Recursive: true,
+		Labels:    []string{"current"},
+	})
+	if err != nil {
+		t.Fatalf("ListWikiPages with label filter after branch deletion: %v", err)
+	}
+	if len(filteredPages) != 0 {
+		t.Fatalf("ListWikiPages with label filter returned %d pages after branch deletion, want 0: %+v", len(filteredPages), filteredPages)
+	}
+
+	rep, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	var pageRows []db.WikiPage
+	if err := svc.DB.Where("repository_id = ? AND deleted_at IS NULL", rep.ID).Find(&pageRows).Error; err != nil {
+		t.Fatalf("list wiki_pages: %v", err)
+	}
+	if len(pageRows) != 0 {
+		t.Fatalf("live wiki_pages rows = %+v, want none after branch deletion", pageRows)
+	}
+
+	var pageLabels []db.WikiPageLabel
+	if err := svc.DB.Where("repository_id = ?", rep.ID).Find(&pageLabels).Error; err != nil {
+		t.Fatalf("list wiki_page_labels: %v", err)
+	}
+	if len(pageLabels) != 0 {
+		t.Fatalf("wiki_page_labels rows = %+v, want none after branch deletion", pageLabels)
+	}
+
+	var changesets []db.WikiChangeset
+	if err := svc.DB.Where("repository_id = ?", rep.ID).Find(&changesets).Error; err != nil {
+		t.Fatalf("list wiki_changesets: %v", err)
+	}
+	if len(changesets) != 0 {
+		t.Fatalf("wiki_changesets rows = %+v, want none after branch deletion", changesets)
+	}
+}
+
+func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+
+	homeV1, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", "")
+	if err != nil {
+		t.Fatalf("create home: %v", err)
+	}
+	headA, err := svc.Git.HeadSHA(ctx, repoFullName+".wiki", "master")
+	if err != nil {
+		t.Fatalf("head after A: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "about", "about body", "create about", ""); err != nil {
+		t.Fatalf("create about: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v2", "update home", homeV1.SHA); err != nil {
+		t.Fatalf("update home: %v", err)
+	}
+
+	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+
+	repoDir, err := svc.Git.GetRepoPath(ctx, repoFullName+".wiki")
+	if err != nil {
+		t.Fatalf("GetRepoPath: %v", err)
+	}
+	workDir := t.TempDir()
+	if out, err := exec.Command("git", "clone", repoDir, workDir).CombinedOutput(); err != nil {
+		t.Fatalf("git clone bare wiki: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "checkout", "master").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout master: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "reset", "--hard", headA).CombinedOutput(); err != nil {
+		t.Fatalf("git reset --hard %s: %v\n%s", headA, err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "push", "--force", "origin", "master").CombinedOutput(); err != nil {
+		t.Fatalf("git push --force origin master: %v\n%s", err, out)
+	}
+
+	enterCh := make(chan struct{}, 1)
+	releaseCh := make(chan struct{})
+	var entered int32
+	svc.SetWikiMigrationAfterSnapshotHookForTest(func(fullName string) {
+		if fullName != repoFullName {
+			return
+		}
+		if atomic.AddInt32(&entered, 1) == 1 {
+			enterCh <- struct{}{}
+			<-releaseCh
+		}
+	})
+	defer func() {
+		svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+	}()
+
+	errCh := make(chan error, 2)
+	go func() {
+		_, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+		errCh <- err
+	}()
+
+	select {
+	case <-enterCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for first migration to reach the snapshot hook")
+	}
+
+	go func() {
+		_, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+		errCh <- err
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	if got := atomic.LoadInt32(&entered); got != 1 {
+		t.Fatalf("snapshot hook entered %d times while first migration was blocked, want serialization", got)
+	}
+
+	close(releaseCh)
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("concurrent migrate[%d]: %v", i, err)
+		}
+	}
+
+	rep, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	var changesets []db.WikiChangeset
+	if err := svc.DB.Where("repository_id = ?", rep.ID).Order("changeset_id ASC").Find(&changesets).Error; err != nil {
+		t.Fatalf("list wiki_changesets: %v", err)
+	}
+	if len(changesets) != 1 {
+		t.Fatalf("wiki_changesets rows = %d, want 1 after serialized concurrent refresh", len(changesets))
+	}
+	if changesets[0].SynthCommitSHA != strings.ToLower(headA) {
+		t.Fatalf("replayed synth_commit_sha = %q, want %q", changesets[0].SynthCommitSHA, strings.ToLower(headA))
 	}
 }
 

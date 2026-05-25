@@ -94,3 +94,10 @@ func (s *Service) SetWorkflowStepRunnerForTest(timeout time.Duration, fn func(ct
 		return result, nil
 	})
 }
+
+// SetWikiMigrationAfterSnapshotHookForTest installs a test-only hook
+// after migrateOneWiki snapshots the migrated commit set and before it
+// replays any git commits.
+func (s *Service) SetWikiMigrationAfterSnapshotHookForTest(fn func(repoFullName string)) {
+	s.testWikiMigrationAfterSnapshot = fn
+}
