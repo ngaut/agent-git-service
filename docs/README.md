@@ -39,6 +39,7 @@ accepted direction, or incremental work that has not fully landed yet.
 - [Agent Auth and Account Model](design/agent-auth.md)
 - [Authorization Layer](design/authz-layer.md)
 - [Multi-Agent Architecture](design/multi-agent.md)
+- [Wiki Storage Re-Architecture](design/wiki-storage-rearchitecture.md)
 
 ## Testing And Operations
 
