@@ -432,6 +432,35 @@ func TestBuildPartialDeps_NonNilInput(t *testing.T) {
 	}
 }
 
+func TestInitServiceDeps_UsesConfiguredDataRootForWikiStorage(t *testing.T) {
+	mainDB := openTestDB(t)
+	dataRoot := t.TempDir()
+	store, err := gitstore.New(dataRoot)
+	if err != nil {
+		t.Fatalf("gitstore: %v", err)
+	}
+
+	srvCtx, srvCancel := context.WithCancel(context.Background())
+	defer srvCancel()
+
+	deps, err := initServiceDeps(config.Config{
+		BaseURL:    "http://localhost:8080",
+		GitRepoDir: dataRoot,
+	}, mainDB, store, embedding.NopEmbedder{}, srvCtx)
+	if err != nil {
+		t.Fatalf("initServiceDeps: %v", err)
+	}
+	if deps.svc.AttachmentRoot != dataRoot {
+		t.Fatalf("AttachmentRoot = %q, want %q", deps.svc.AttachmentRoot, dataRoot)
+	}
+	if deps.svc.WikiBlob == nil {
+		t.Fatal("WikiBlob should be configured")
+	}
+	if deps.svc.WikiBlob.Root() != dataRoot {
+		t.Fatalf("WikiBlob root = %q, want %q", deps.svc.WikiBlob.Root(), dataRoot)
+	}
+}
+
 func TestBootstrapResult_SetPartial(t *testing.T) {
 	mainDB := openTestDB(t)
 	tmpDir := t.TempDir()

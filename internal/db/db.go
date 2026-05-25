@@ -310,6 +310,14 @@ func Migrate(database *gorm.DB) error {
 		&IssueReadState{},
 		&WikiPageLabel{},
 		&WikiSearchDocument{},
+		&WikiPage{},
+		&WikiPageRevision{},
+		&WikiChangeset{},
+		&WikiRepoHead{},
+		&WikiDirIndex{},
+		&WikiPageLink{},
+		&WikiBlobRef{},
+		&WikiPendingBlob{},
 	); err != nil {
 		return err
 	}
