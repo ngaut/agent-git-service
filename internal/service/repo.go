@@ -73,6 +73,10 @@ type Service struct {
 	workflowSyncMu     map[string]*sync.Mutex
 	workflowSyncMapMu  sync.Mutex
 
+	wikiMigrationSyncMuOnce sync.Once
+	wikiMigrationSyncMu     map[string]*sync.Mutex
+	wikiMigrationSyncMapMu  sync.Mutex
+
 	workflowStepRunner workflowStepRunner
 
 	// tokenTouchCache deduplicates TouchToken DB writes in-memory.
@@ -90,6 +94,11 @@ type Service struct {
 
 	webhookWorkersOnce sync.Once
 	webhookJobs        chan webhookJob
+
+	// testWikiMigrationAfterSnapshot is a test-only hook used to
+	// coordinate concurrent migration callers after they have loaded the
+	// migrated-commit snapshot but before they replay any git commits.
+	testWikiMigrationAfterSnapshot func(repoFullName string)
 }
 
 func (s *Service) workflowSyncMuInit() {
@@ -106,6 +115,24 @@ func (s *Service) getWorkflowSyncMu(repoFullName string) *sync.Mutex {
 	if !ok {
 		mu = &sync.Mutex{}
 		s.workflowSyncMu[repoFullName] = mu
+	}
+	return mu
+}
+
+func (s *Service) wikiMigrationSyncMuInit() {
+	s.wikiMigrationSyncMu = make(map[string]*sync.Mutex)
+}
+
+func (s *Service) getWikiMigrationSyncMu(repoFullName string) *sync.Mutex {
+	s.wikiMigrationSyncMuOnce.Do(s.wikiMigrationSyncMuInit)
+
+	s.wikiMigrationSyncMapMu.Lock()
+	defer s.wikiMigrationSyncMapMu.Unlock()
+
+	mu, ok := s.wikiMigrationSyncMu[repoFullName]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.wikiMigrationSyncMu[repoFullName] = mu
 	}
 	return mu
 }
