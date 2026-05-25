@@ -103,8 +103,13 @@ unbounded per wiki.
 
 1. **Catalog is the source of truth.** Bytes go to content-addressed
    storage; structure goes to SQL.
-2. **Page identity is a stable `page_id`, not a slug.** Renames preserve
-   identity, history continuity, and backlink anchoring.
+2. **Page identity is a stable `page_id`, not a slug.** Live REST-side
+   renames preserve identity, history continuity, and backlink
+   anchoring. The one migration-only exception is replaying historical
+   git rename commits that were already stored as delete+create at the
+   file-tree level; because `page_id` is not externally visible, M2 may
+   preserve observable slug/body/commit history without reconstructing
+   hidden pre-cutover page identities.
 3. **Single write primitive.** All REST endpoints, batch operations, and
    any future push ingestion call `ApplyChangeSet`. There is exactly one
    path from request to durable state.
@@ -486,10 +491,7 @@ type ChangeSetResult struct {
        UPSERT wiki_pages   (slug, slug_ci_v1, head_blob_sha, head_*_id, updated_at)
        UPDATE wiki_dir_index (add/remove leaves; materialize intermediate dirs)
        DELETE wiki_page_links WHERE src_page_id=?; INSERT new out-links
-       For rename/prefix-move:
-         rewrite inbound wiki links in affected pages using the same
-         readable-slug rules as `main`
-         collect `rewrites` and `skipped` result payloads
+       For rename:
          move label ownership from old slug to new slug
        INSERT wiki_blob_refs ON DUPLICATE KEY UPDATE refcount=refcount+1
        UPDATE wiki_blob_refs SET refcount=refcount-1 WHERE blob_sha=old_blob
@@ -517,8 +519,15 @@ The move endpoints keep their current observable behavior:
   sorted deterministically.
 - Labels attached to moved pages remain attached after the move.
 
-The catalog model changes *how* the service persists those effects, not
-*whether* clients observe them.
+`ApplyChangeSet` is the catalog persistence primitive, not the full move
+API surface by itself. In the step-1-to-step-3 foundation work it only
+needs to make rename state transitions durable (page identity, labels,
+directory index, backlinks). Step 4's service-layer cutover remains
+responsible for computing rewrite targets, rewriting affected page
+bodies, and shaping the public `rewrites` / `skipped` response payloads
+before it submits the resulting changeset to the catalog. The catalog
+model changes *how* the service persists those effects, not *whether*
+clients observe them.
 
 ### 8.4 Concurrency
 

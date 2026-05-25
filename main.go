@@ -37,6 +37,7 @@ import (
 	"gh-server/internal/rest/transform"
 	"gh-server/internal/router"
 	"gh-server/internal/service"
+	"gh-server/internal/wikicatalog"
 )
 
 // gitSHA is set at build time via -ldflags.
@@ -292,13 +293,29 @@ func initCoreDeps() (coreDeps, error) {
 
 func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store, embedder embedding.Embedder, srvCtx context.Context) (serviceDeps, error) {
 	var deps serviceDeps
+	dataRoot := cfg.GitRepoDir
+	if strings.TrimSpace(dataRoot) == "" {
+		dataRoot = "."
+	}
+
+	// Wiki catalog: a content-addressed blob store on the filesystem
+	// plus the catalog primitive backed by the same database. The
+	// blob root sits alongside the attachment root by convention so
+	// operators only need to mount one persistent volume. The catalog
+	// is constructed but inactive until Step 4 wires it into the REST
+	// handlers; meanwhile MigrateAllWikis and RunWikiCatalogGC can
+	// already be invoked from admin endpoints.
+	wikiBlob := wikicatalog.NewBlobStore(dataRoot)
+	wikiCat := wikicatalog.New(database, wikiBlob)
 
 	svcDeps := &service.Service{
 		Ctx:                 srvCtx,
 		DB:                  database,
 		Git:                 store,
+		WikiCatalog:         wikiCat,
+		WikiBlob:            wikiBlob,
 		BaseURL:             cfg.BaseURL,
-		AttachmentRoot:      ".",
+		AttachmentRoot:      dataRoot,
 		Embedder:            embedder,
 		AllowAnyToken:       cfg.AllowAnyToken,
 		WorkflowExecEnabled: cfg.EnableWorkflowExec,
@@ -310,6 +327,11 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 		WorkflowExecNoFile:  cfg.WorkflowExecNoFile,
 		WorkflowExecTmpfs:   cfg.WorkflowExecTmpfsSize,
 	}
+	// Post-commit hook: drive the wiki search index from catalog
+	// writes so Step 4 cutover does not leave wiki_search_documents
+	// stale. The hook is best-effort — failures log and do not roll
+	// back the catalog commit.
+	wikiCat.OnChangeSetCommitted = svcDeps.WikiCatalogPostCommit
 	// Initialize PresenceHub for collaborative conversation presence
 	svcDeps.PresenceHub = service.NewPresenceHub(database)
 	deps.svc = svcDeps

@@ -12,6 +12,7 @@ import (
 	"gh-server/internal/embedding"
 	"gh-server/internal/gitstore"
 	"gh-server/internal/service"
+	"gh-server/internal/wikicatalog"
 )
 
 // ServiceConfig tunes the bare-service fixture produced by NewService. A zero
@@ -101,9 +102,14 @@ func NewService(tb testing.TB, cfg ServiceConfig) (*service.Service, func()) {
 		embedder = embedding.NopEmbedder{}
 	}
 
+	wikiBlob := wikicatalog.NewBlobStore(tmpDir)
+	wikiCat := wikicatalog.New(gdb, wikiBlob)
+
 	svc := &service.Service{
 		DB:             gdb,
 		Git:            store,
+		WikiCatalog:    wikiCat,
+		WikiBlob:       wikiBlob,
 		BaseURL:        "http://localhost:8080",
 		AttachmentRoot: tmpDir,
 		Embedder:       embedder,

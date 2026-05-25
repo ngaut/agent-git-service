@@ -17,6 +17,7 @@ import (
 	"gh-server/internal/db"
 	"gh-server/internal/embedding"
 	"gh-server/internal/gitstore"
+	"gh-server/internal/wikicatalog"
 )
 
 // Repository lookup convention:
@@ -31,6 +32,8 @@ type Service struct {
 	Ctx            context.Context
 	DB             *gorm.DB
 	Git            *gitstore.Store
+	WikiCatalog    *wikicatalog.Catalog
+	WikiBlob       *wikicatalog.BlobStore
 	BaseURL        string
 	AttachmentRoot string
 	Embedder       embedding.Embedder

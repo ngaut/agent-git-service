@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"gh-server/internal/db"
 	"gh-server/internal/gitstore"
+	"gh-server/internal/wikicatalog"
 	"log/slog"
 	"net/url"
 	"regexp"
@@ -192,7 +193,6 @@ var (
 	wikiMarkdownLinkRE = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 	wikiBracketLinkRE  = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	wikiCommitSHARE    = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
-	wikiTitleReplacer  = strings.NewReplacer("-", " ", "_", " ")
 )
 
 // wikiRepoFullName returns the sibling repo name where wiki pages are stored.
@@ -340,27 +340,7 @@ func canonicalWikiLookupSlug(slug string) string {
 // intentionally independent from page body contents so title responses are
 // deterministic and list responses do not need to read every page body.
 func titleFromSlug(slug string) string {
-	parts := strings.Split(strings.Trim(slug, "/"), "/")
-	leaf := slug
-	if len(parts) > 0 && parts[len(parts)-1] != "" {
-		leaf = parts[len(parts)-1]
-	}
-	leaf = wikiTitleReplacer.Replace(leaf)
-	words := strings.Fields(leaf)
-	if len(words) == 0 {
-		return slug
-	}
-	for i, word := range words {
-		if word == "" {
-			continue
-		}
-		b := []byte(word)
-		if b[0] >= 'a' && b[0] <= 'z' {
-			b[0] -= 'a' - 'A'
-		}
-		words[i] = string(b)
-	}
-	return strings.Join(words, " ")
+	return wikicatalog.TitleFromSlug(slug)
 }
 
 func normalizeWikiReference(raw string) string {

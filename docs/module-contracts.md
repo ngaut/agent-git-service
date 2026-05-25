@@ -84,6 +84,7 @@ document the relevant contract below in the same change.
 | `service` | business logic and cross-store orchestration |
 | `tenant` | gitstore tenant context helpers for physical repo scoping |
 | `testharness` | production-wired service and router test fixtures |
+| `wikicatalog` | catalog-backed wiki storage primitive, slug canonicalization, and blob CAS coordination |
 
 ## Dependency Rules
 
