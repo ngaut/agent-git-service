@@ -1037,7 +1037,8 @@ func (s *Service) ListWikiPageHistoryPage(ctx context.Context, repoFullName, slu
 
 	var total int64
 	if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
-		Where("page_id = ?", pageRow.PageID).Count(&total).Error; err != nil {
+		Where("page_id = ? AND superseded_by_changeset_id IS NULL", pageRow.PageID).
+		Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
@@ -1066,7 +1067,7 @@ func (s *Service) ListWikiPageHistoryPage(ctx context.Context, repoFullName, slu
 			wiki_changesets.committed_at AS committed_at,
 			wiki_changesets.author_id AS cs_author_id`).
 		Joins("JOIN wiki_changesets ON wiki_changesets.changeset_id = wiki_page_revisions.changeset_id").
-		Where("wiki_page_revisions.page_id = ?", pageRow.PageID).
+		Where("wiki_page_revisions.page_id = ? AND wiki_page_revisions.superseded_by_changeset_id IS NULL", pageRow.PageID).
 		Order("wiki_page_revisions.revision_id DESC").
 		Offset(offset).Limit(perPage).
 		Scan(&rows).Error; err != nil {

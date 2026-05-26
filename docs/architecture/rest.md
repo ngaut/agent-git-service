@@ -201,9 +201,9 @@ Wiki path-slug hierarchy rules:
 - resolve `{owner}` and `{repo}` from the path
 - require `RepoPermissionAdmin`
 - reject `ref` and any non-empty `before` payload because bounded compaction is not implemented yet
-- currently return `409 Conflict` with a temporary-disable message instead of creating or restarting a compaction job
+- create or resume one repo-scoped compaction job that performs a catalog-first compact and then materializes a `refs/heads/compacted-<timestamp>` git projection
 
-`GET /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}` requires `RepoPermissionAdmin` and remains available for inspecting jobs created before the temporary freeze.
+`GET /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}` requires `RepoPermissionAdmin` and returns the current async job state.
 
 ### Git-Backed REST Request
 

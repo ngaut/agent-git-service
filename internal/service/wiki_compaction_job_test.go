@@ -2,7 +2,6 @@ package service_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -52,8 +51,37 @@ func TestStartWikiCompaction_RestartsStaleRunningJob_Issue1462(t *testing.T) {
 		t.Fatalf("create stale job: %v", err)
 	}
 
-	if _, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full); !errors.Is(err, service.ErrConflict) {
-		t.Fatalf("StartWikiCompaction err = %v, want ErrConflict", err)
+	started := make(chan string, 1)
+	continueCh := make(chan string, 1)
+	service.SetTestWikiCompactionJobStartedForTest(svc, func(jobID string) {
+		started <- jobID
+	})
+	service.SetTestWikiCompactionJobContinueForTest(svc, func(jobID string) {
+		continueCh <- jobID
+	})
+
+	job, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full)
+	if err != nil {
+		t.Fatalf("StartWikiCompaction err = %v", err)
+	}
+	if job.ID != staleJob.ID {
+		t.Fatalf("job.ID = %q, want stale job %q", job.ID, staleJob.ID)
+	}
+	select {
+	case startedJobID := <-started:
+		if startedJobID != staleJob.ID {
+			t.Fatalf("started job id = %q, want %q", startedJobID, staleJob.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stale job restart")
+	}
+	select {
+	case continuedJobID := <-continueCh:
+		if continuedJobID != staleJob.ID {
+			t.Fatalf("continued job id = %q, want %q", continuedJobID, staleJob.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stale job worker continuation")
 	}
 }
 
@@ -100,7 +128,21 @@ func TestStartWikiCompaction_DoesNotRestartFreshRunningJob_Issue1462(t *testing.
 		t.Fatalf("create fresh job: %v", err)
 	}
 
-	if _, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full); !errors.Is(err, service.ErrConflict) {
-		t.Fatalf("StartWikiCompaction err = %v, want ErrConflict", err)
+	started := make(chan string, 1)
+	service.SetTestWikiCompactionJobStartedForTest(svc, func(jobID string) {
+		started <- jobID
+	})
+
+	job, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full)
+	if err != nil {
+		t.Fatalf("StartWikiCompaction err = %v", err)
+	}
+	if job.ID != freshJob.ID {
+		t.Fatalf("job.ID = %q, want fresh job %q", job.ID, freshJob.ID)
+	}
+	select {
+	case startedJobID := <-started:
+		t.Fatalf("fresh running job should not restart, but started %q", startedJobID)
+	case <-time.After(200 * time.Millisecond):
 	}
 }

@@ -5,7 +5,7 @@ Update it when behavior, package boundaries, or the local development workflow c
 Avoid putting transient status here such as exact passing test counts; the codebase and CI are the truth for fast-moving inventory.
 This document records the current implemented architecture. Planned multi-agent changes live in [design/multi-agent.md](design/multi-agent.md) until the corresponding code lands.
 
-Wiki compaction preserves catalog/materialized-git consistency by moving the wiki git ref before committing the compacted catalog transaction. If the ref update fails, the catalog head stays unchanged; if the ref update succeeds but the catalog transaction fails, the service immediately replays the materialized git state back into the catalog.
+Wiki compaction is catalog-first and insert-only. A compact attempt creates one new changeset plus one new revision per live page, marks older revisions/changesets as superseded instead of deleting them, and only materializes an optional git projection after the catalog transaction commits.
 
 ## Purpose
 

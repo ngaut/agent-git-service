@@ -34,7 +34,7 @@ func wikiCompactionDisabledError() error {
 }
 
 func (s *Service) StartWikiCompaction(ctx context.Context, repoFullName string) (db.WikiCompactionJob, error) {
-	return db.WikiCompactionJob{}, wikiCompactionDisabledError()
+	return s.startWikiCompactionEnabled(ctx, repoFullName)
 }
 
 func (s *Service) startWikiCompactionEnabled(ctx context.Context, repoFullName string) (db.WikiCompactionJob, error) {
@@ -219,7 +219,7 @@ func isWikiCompactionJobStale(job db.WikiCompactionJob, now time.Time) bool {
 }
 
 func (s *Service) CompactWikiHistory(ctx context.Context, repoFullName string) (WikiCompactResult, error) {
-	return WikiCompactResult{}, wikiCompactionDisabledError()
+	return s.compactWikiHistoryEnabled(ctx, repoFullName)
 }
 
 func (s *Service) compactWikiHistoryEnabled(ctx context.Context, repoFullName string) (WikiCompactResult, error) {
@@ -237,8 +237,9 @@ func (s *Service) compactWikiHistoryEnabled(ctx context.Context, repoFullName st
 }
 
 func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Repository, repoFullName string) (WikiCompactResult, error) {
-	var result WikiCompactResult
-	refUpdated := false
+	var (
+		result WikiCompactResult
+	)
 	err := s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
 		now := time.Now().UTC()
 
@@ -265,13 +266,30 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 		if err := s.DBForCtx(ctx).Where("changeset_id = ?", repoHead.HeadChangesetID).Take(&previousChangeset).Error; err != nil {
 			return err
 		}
+		if previousChangeset.Source == string(wikicatalog.SourceCompact) && previousChangeset.SynthFormatVer < synthProjectionMaterialized {
+			result = WikiCompactResult{
+				PreviousHead:    previousChangeset.SynthCommitSHA,
+				NewHead:         previousChangeset.SynthCommitSHA,
+				CompactedBefore: previousChangeset.CommittedAt,
+			}
+			return s.resumePendingWikiCompactProjection(ctx, repoFullName, previousChangeset)
+		}
+
 		pageIDs := make([]uint64, 0, len(livePages))
 		for _, page := range livePages {
 			pageIDs = append(pageIDs, page.PageID)
 		}
+		var allPageIDs []uint64
+		if err := s.DBForCtx(ctx).Model(&db.WikiPage{}).
+			Unscoped().
+			Where("repository_id = ?", rep.ID).
+			Order("page_id ASC").
+			Pluck("page_id", &allPageIDs).Error; err != nil {
+			return err
+		}
 		var revisionCount int64
 		if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
-			Where("page_id IN ?", pageIDs).
+			Where("page_id IN ?", allPageIDs).
 			Count(&revisionCount).Error; err != nil {
 			return err
 		}
@@ -300,50 +318,46 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 			nextRevisionByPage[rev.PageID] = rev.RevisionID + 1
 		}
 
-		newCommitSHA, err := s.createWikiCompactCommitObject(ctx, repoFullName, now)
+		newProjectionSHA, err := s.createWikiCompactCommitObject(ctx, repoFullName, now, livePages)
 		if err != nil {
 			return err
 		}
+		compactedRef := wikiCompactProjectionRef(now)
 
 		newChangeset := db.WikiChangeset{
 			RepositoryID:   rep.ID,
+			ParentID:       &repoHead.HeadChangesetID,
 			Message:        db.LargeText(fmt.Sprintf("Compact wiki history at %s", now.Format(time.RFC3339))),
 			AuthorID:       s.resolveWikiAuthor(ctx),
 			CommittedAt:    now,
 			PageCount:      len(livePages),
-			Source:         string(wikicatalog.SourceAdmin),
-			SynthCommitSHA: newCommitSHA,
-			SynthFormatVer: synthProjectionMaterialized,
+			Source:         string(wikicatalog.SourceCompact),
+			SynthCommitSHA: newProjectionSHA,
 		}
 
 		result = WikiCompactResult{
 			PreviousHead:    previousChangeset.SynthCommitSHA,
-			NewHead:         newCommitSHA,
+			NewHead:         newProjectionSHA,
 			CompactedBefore: now,
 			Pages:           len(livePages),
 			CommitsRemoved:  int(revisionCount) - len(livePages),
 		}
 
-		if err := s.updateWikiCompactRefLocked(ctx, repoFullName, result.NewHead); err != nil {
-			return err
-		}
-		refUpdated = true
-
-		return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&newChangeset).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&db.WikiRepoHead{}).
+			headUpdate := tx.Model(&db.WikiRepoHead{}).
 				Where("repository_id = ? AND head_changeset_id = ?", rep.ID, repoHead.HeadChangesetID).
 				Updates(map[string]any{
 					"head_changeset_id": newChangeset.ChangesetID,
 					"updated_at":        now,
-				}).Error; err != nil {
-				return err
+				})
+			if headUpdate.Error != nil {
+				return headUpdate.Error
 			}
-
-			if err := tx.Where("page_id IN ?", pageIDs).Delete(&db.WikiPageRevision{}).Error; err != nil {
-				return err
+			if headUpdate.RowsAffected != 1 {
+				return ErrConflict
 			}
 
 			newRevisions := make([]db.WikiPageRevision, 0, len(livePages))
@@ -360,8 +374,8 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 					BodySize:    page.BodySize,
 					BodyInline:  page.BodyInline,
 					SlugAtRev:   page.Slug,
-					CommitSHA:   newCommitSHA,
-					Op:          "update",
+					CommitSHA:   newChangeset.SynthCommitSHA,
+					Op:          "compact",
 					AuthorID:    newChangeset.AuthorID,
 					CommittedAt: now,
 				})
@@ -372,22 +386,44 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 			if err := updateWikiPagesForCompaction(tx, newRevisions, newChangeset.ChangesetID, newChangeset.AuthorID, now); err != nil {
 				return err
 			}
-			if err := tx.Where("repository_id = ? AND changeset_id <> ?", rep.ID, newChangeset.ChangesetID).Delete(&db.WikiChangeset{}).Error; err != nil {
+			if err := tx.Model(&db.WikiPageRevision{}).
+				Where("page_id IN ? AND changeset_id <= ? AND superseded_by_changeset_id IS NULL", allPageIDs, repoHead.HeadChangesetID).
+				Update("superseded_by_changeset_id", newChangeset.ChangesetID).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&db.WikiChangeset{}).
+				Where("repository_id = ? AND changeset_id <= ? AND superseded_by_changeset_id IS NULL", rep.ID, repoHead.HeadChangesetID).
+				Update("superseded_by_changeset_id", newChangeset.ChangesetID).Error; err != nil {
 				return err
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		if err := s.updateWikiCompactRefLocked(ctx, repoFullName, compactedRef, newProjectionSHA); err != nil {
+			return err
+		}
+		return s.DBForCtx(ctx).Model(&db.WikiChangeset{}).
+			Where("changeset_id = ?", newChangeset.ChangesetID).
+			Update("synth_format_ver", synthProjectionMaterialized).Error
 	})
 	if err != nil {
-		if refUpdated {
-			if repairErr := s.repairWikiCatalogFromGit(ctx, repoFullName); repairErr != nil {
-				return WikiCompactResult{}, fmt.Errorf("compact wiki history: persist compact catalog after git ref update: %w (catalog repair failed: %v)", err, repairErr)
-			}
-		}
 		return WikiCompactResult{}, err
 	}
 	s.invalidateWikiBacklinks(repoFullName)
 	return result, nil
+}
+
+func (s *Service) resumePendingWikiCompactProjection(ctx context.Context, repoFullName string, changeset db.WikiChangeset) error {
+	if strings.TrimSpace(changeset.SynthCommitSHA) == "" {
+		return fmt.Errorf("compact changeset %d is missing synth commit sha", changeset.ChangesetID)
+	}
+	if err := s.updateWikiCompactRefLocked(ctx, repoFullName, wikiCompactProjectionRef(changeset.CommittedAt), changeset.SynthCommitSHA); err != nil {
+		return err
+	}
+	return s.DBForCtx(ctx).Model(&db.WikiChangeset{}).
+		Where("changeset_id = ?", changeset.ChangesetID).
+		Update("synth_format_ver", synthProjectionMaterialized).Error
 }
 
 func updateWikiPagesForCompaction(tx *gorm.DB, revisions []db.WikiPageRevision, changesetID uint64, authorID *uint, now time.Time) error {
