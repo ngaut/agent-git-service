@@ -11,10 +11,18 @@ func preloadIssue(q *gorm.DB) *gorm.DB {
 		Preload("Milestone").Preload("Milestone.Creator")
 }
 
+func preloadIssueForRESTList(q *gorm.DB) *gorm.DB {
+	return q.Preload("Author").Preload("Labels").Preload("Milestone").Preload("Milestone.Creator")
+}
+
 func preloadPRFull(q *gorm.DB) *gorm.DB {
 	return q.Preload("Author").Preload("Repository").Preload("Repository.Owner").
 		Preload("HeadRepository").Preload("HeadRepository.Owner").Preload("Labels").
 		Preload("Milestone").Preload("Milestone.Creator")
+}
+
+func preloadPRForRESTIssueList(q *gorm.DB) *gorm.DB {
+	return q.Preload("Author").Preload("Labels").Preload("Milestone").Preload("Milestone.Creator")
 }
 
 func preloadRelease(q *gorm.DB) *gorm.DB {
