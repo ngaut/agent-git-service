@@ -544,22 +544,6 @@ func Bootstrap() BootstrapResult {
 		return result
 	}
 	deps.DBRouter = cp.dbRouter
-	if cp.dbRouter != nil {
-		svc.svc.TenantDBs = cp.dbRouter.TenantDBs
-		svc.svc.TenantContexts = func(ctx context.Context) ([]context.Context, error) {
-			targets, err := cp.dbRouter.TenantTargets(ctx)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]context.Context, 0, len(targets))
-			for _, target := range targets {
-				tenantCtx := service.ContextWithTenant(ctx, target.Login)
-				tenantCtx = service.ContextWithDB(tenantCtx, target.DB)
-				out = append(out, tenantCtx)
-			}
-			return out, nil
-		}
-	}
 
 	// 5. Build router and host-aware mux.
 	mux, err := buildHTTPMux(HTTPMuxConfig{
@@ -679,8 +663,6 @@ func run(sigCh <-chan os.Signal, shutdownCfg ShutdownConfig) error {
 		return result.Err
 	}
 	deps := result.Deps
-
-	deps.SvcDeps.QueueWikiSearchAutoReindex()
 
 	// Start HTTP servers.
 	for i, srv := range deps.Servers {

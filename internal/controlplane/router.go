@@ -15,11 +15,6 @@ import (
 	"gh-server/internal/db"
 )
 
-type TenantTarget struct {
-	Login string
-	DB    *gorm.DB
-}
-
 // RouterConfig holds per-tenant connection pool settings and cache limits.
 type RouterConfig struct {
 	MaxOpenConns    int           // per-tenant; default 5
@@ -254,32 +249,6 @@ func (r *DBRouter) TenantDBs(ctx context.Context) ([]*gorm.DB, error) {
 		dbs = append(dbs, tenantDB)
 	}
 	return dbs, nil
-}
-
-// TenantTargets returns the active control-plane tenant identities together
-// with their opened tenant DB handles.
-func (r *DBRouter) TenantTargets(ctx context.Context) ([]TenantTarget, error) {
-	if r == nil || r.cpDB == nil || r.openDB == nil {
-		return nil, errors.New("controlplane: db router is not initialized")
-	}
-
-	var users []CPUser
-	if err := r.cpDB.WithContext(ctx).Where("state = ?", AgentStateActive).Find(&users).Error; err != nil {
-		return nil, fmt.Errorf("controlplane: list active users: %w", err)
-	}
-
-	targets := make([]TenantTarget, 0, len(users))
-	for _, user := range users {
-		tenantDB, err := r.getOrOpenDB(ctx, user)
-		if err != nil {
-			return nil, fmt.Errorf("controlplane: open tenant db for %s: %w", user.Login, err)
-		}
-		targets = append(targets, TenantTarget{
-			Login: user.Login,
-			DB:    tenantDB,
-		})
-	}
-	return targets, nil
 }
 
 // Close drains all cached tenant DB connections.

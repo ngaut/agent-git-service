@@ -40,12 +40,6 @@ type Service struct {
 	Embedder       embedding.Embedder
 	AllowAnyToken  bool
 	Auth0          Auth0DeviceFlow
-	// TenantDBs returns additional tenant-local databases that background
-	// maintenance should traverse in control-plane mode.
-	TenantDBs func(context.Context) ([]*gorm.DB, error)
-	// TenantContexts returns tenant-aware contexts for control-plane background
-	// maintenance that must preserve both DB and tenant repo routing.
-	TenantContexts func(context.Context) ([]context.Context, error)
 	// AttachmentScanner is an optional hook for virus scanning or policy checks
 	// before an attachment is written to disk.
 	AttachmentScanner func(ctx context.Context, filename, contentType string, content []byte) error
