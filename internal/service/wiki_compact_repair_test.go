@@ -12,7 +12,7 @@ import (
 	"gh-server/internal/service"
 )
 
-func TestCompactWikiHistory_LeavesCatalogUnchangedWhenRefUpdateFails(t *testing.T) {
+func TestCompactWikiHistory_RemainsDisabledBeforeRefUpdate_Issue1470(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -57,22 +57,8 @@ func TestCompactWikiHistory_LeavesCatalogUnchangedWhenRefUpdateFails(t *testing.
 		t.Fatalf("count changesets before compact: %v", err)
 	}
 
-	forcedErr := errors.New("forced compact ref failure")
-	service.SetTestWikiCompactRefUpdateFailureForTest(svc, func(repoFullName, commitSHA string) error {
-		if repoFullName != full {
-			t.Fatalf("repoFullName = %q, want %q", repoFullName, full)
-		}
-		if commitSHA == "" {
-			t.Fatalf("commitSHA should not be empty")
-		}
-		return forcedErr
-	})
-	t.Cleanup(func() {
-		service.SetTestWikiCompactRefUpdateFailureForTest(svc, nil)
-	})
-
-	if _, err := svc.CompactWikiHistory(ctx, full); !errors.Is(err, forcedErr) {
-		t.Fatalf("CompactWikiHistory err = %v, want forced error", err)
+	if _, err := svc.CompactWikiHistory(ctx, full); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("CompactWikiHistory err = %v, want ErrConflict", err)
 	}
 
 	var afterHead db.WikiRepoHead
@@ -101,7 +87,7 @@ func TestCompactWikiHistory_LeavesCatalogUnchangedWhenRefUpdateFails(t *testing.
 	}
 }
 
-func TestCompactWikiHistory_ClearsStaleRefLockBeforeUpdate(t *testing.T) {
+func TestCompactWikiHistory_DoesNotTouchStaleRefLockWhileDisabled_Issue1470(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -151,11 +137,11 @@ func TestCompactWikiHistory_ClearsStaleRefLockBeforeUpdate(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
-	if _, err := svc.CompactWikiHistory(ctx, full); err != nil {
-		t.Fatalf("CompactWikiHistory: %v", err)
+	if _, err := svc.CompactWikiHistory(ctx, full); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("CompactWikiHistory err = %v, want ErrConflict", err)
 	}
-	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("lock should be removed, stat err = %v", err)
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock should remain in place while disabled, stat err = %v", err)
 	}
 }
 

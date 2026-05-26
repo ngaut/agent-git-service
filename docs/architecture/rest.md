@@ -173,7 +173,7 @@ Wiki path-slug hierarchy rules:
 - `GET /api/v3/repos/{owner}/{repo}/wiki/search` accepts `q`, `limit`, `offset`, `label`/`labels`, and `exclude_label`/`exclude_labels`, returns `{results, query, method, elapsed_ms}`, and caps `limit` server-side at 50
 - `GET/POST/PUT/DELETE /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` attaches repo-scoped labels to wiki pages; labels are metadata, not git-tracked page content
 - `POST /api/v3/repos/{owner}/{repo}/wiki/move` atomically renames every page whose slug equals `from` or starts with `from/`, requires an `if_match` SHA map that covers the full source set, and returns one commit for the entire move
-- `POST /api/v3/repos/{owner}/{repo}/wiki/compact` requires repo-admin permission and compacts every live wiki page to one synthetic revision rooted at the current HEAD content
+- `POST /api/v3/repos/{owner}/{repo}/wiki/compact` remains reserved for repo-admin callers, but it is temporarily disabled while the wiki catalog corruption incident is contained and repaired
 - `POST /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move` performs an atomic rename with `new_slug` and `if_match`, rewrites eligible inbound wiki references in the same commit, and returns `{ moved, rewrites, skipped }`
 - wiki page get/list/search/backlink response `title` values are deterministically derived from the page slug leaf, not from the markdown body heading; for example `guides/plain-page` returns `Plain Page`
 - wiki page get/list/search responses include `labels`, shaped with the existing repository label JSON contract
@@ -201,12 +201,9 @@ Wiki path-slug hierarchy rules:
 - resolve `{owner}` and `{repo}` from the path
 - require `RepoPermissionAdmin`
 - reject `ref` and any non-empty `before` payload because bounded compaction is not implemented yet
-- create or reuse one repository-scoped async compaction job and return `202 Accepted`
-- set `Location: /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}`
-- return `{ job_id, status, status_url, started_at, finished_at, previous_head, new_head, compacted_before, pages, commits_removed, error }`
-- execute the catalog compaction and wiki ref rewrite on a server-lifecycle background context so client disconnects do not cancel the job
+- currently return `409 Conflict` with a temporary-disable message instead of creating or restarting a compaction job
 
-`GET /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}` requires `RepoPermissionAdmin` and returns the current async job status for polling. Successful jobs include the final `{ previous_head, new_head, compacted_before, pages, commits_removed }` result fields.
+`GET /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}` requires `RepoPermissionAdmin` and remains available for inspecting jobs created before the temporary freeze.
 
 ### Git-Backed REST Request
 
