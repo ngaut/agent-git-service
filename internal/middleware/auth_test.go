@@ -106,9 +106,9 @@ func TestExtractToken(t *testing.T) {
 			if tt.header != "" {
 				r.Header.Set("Authorization", tt.header)
 			}
-			got := extractToken(r)
+			got := ExtractToken(r)
 			if got != tt.want {
-				t.Errorf("extractToken(%q) = %q, want %q", tt.header, got, tt.want)
+				t.Errorf("ExtractToken(%q) = %q, want %q", tt.header, got, tt.want)
 			}
 		})
 	}

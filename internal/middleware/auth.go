@@ -27,7 +27,7 @@ func TokenAuth(svc *service.Service, router TokenResolver) func(http.Handler) ht
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			applog.AddAttrs(r.Context(), slog.String("auth_scheme", authScheme(r.Header.Get("Authorization"))))
-			token := extractToken(r)
+			token := ExtractToken(r)
 			if token == "" {
 				logAuthFailure(r.Context(), "header_missing_or_empty", "", "", nil)
 				respond.Error(w, http.StatusUnauthorized, "Requires authentication")
@@ -65,7 +65,7 @@ func OptionalTokenAuth(svc *service.Service, router TokenResolver) func(http.Han
 			}
 
 			applog.AddAttrs(r.Context(), slog.String("auth_scheme", authScheme(auth)))
-			token := extractToken(r)
+			token := ExtractToken(r)
 			if token == "" {
 				logAuthFailure(r.Context(), "malformed_authorization_header", "", "", nil)
 				respond.Error(w, http.StatusUnauthorized, "Bad credentials")
@@ -127,11 +127,11 @@ func MaxBodySizeUnless(maxBytes int64, skip func(*http.Request) bool) func(http.
 	}
 }
 
-// extractToken extracts the token value from an Authorization header.
+// ExtractToken extracts the token value from an Authorization header.
 // Supports "token <val>", "Bearer <val>", and "Basic <base64>" formats.
 // For Basic auth the password portion is used as the token, matching the
 // convention used by Git credential helpers (username:token).
-func extractToken(r *http.Request) string {
+func ExtractToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	authTrim := strings.TrimSpace(auth)
 	lower := strings.ToLower(authTrim)

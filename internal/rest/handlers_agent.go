@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ngaut/agent-git-service/internal/middleware"
 	"github.com/ngaut/agent-git-service/internal/rest/respond"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/service"
@@ -159,5 +160,50 @@ func (d *Deps) ResetAgentToken(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{
 		"agent_login": agentLogin,
 		"token":       transform.Token(tok),
+	})
+}
+
+// SwitchAgentSession handles POST /api/v3/agent-bindings/{agent_login}/switch-session.
+func (d *Deps) SwitchAgentSession(w http.ResponseWriter, r *http.Request) {
+	u, err := d.Svc.GetCurrentUser(r.Context())
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	agentLogin := pathParam(r, "agent_login")
+	res, err := d.Svc.CreateAgentSwitchSession(r.Context(), u.ID, agentLogin)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"agent_login": agentLogin,
+		"token":       transform.Token(res.Token),
+		"user":        transform.UserPrivate(res.Agent),
+	})
+}
+
+// RefreshAgentSwitchSession handles POST /api/v3/agent-bindings/{agent_login}/refresh-session.
+func (d *Deps) RefreshAgentSwitchSession(w http.ResponseWriter, r *http.Request) {
+	u, err := d.Svc.GetCurrentUser(r.Context())
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	currentToken := middleware.ExtractToken(r)
+	if currentToken == "" {
+		respond.Unauthorized(w, "Bad credentials")
+		return
+	}
+	agentLogin := pathParam(r, "agent_login")
+	res, err := d.Svc.RefreshAgentSwitchSession(r.Context(), u.ID, currentToken, agentLogin)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"agent_login": agentLogin,
+		"token":       transform.Token(res.Token),
+		"user":        transform.UserPrivate(res.Agent),
 	})
 }
