@@ -100,6 +100,12 @@ func buildRESTOpenAPIPaths() map[string]any {
 		"/api/v3/agent-bindings/{agent_login}/reset-token": map[string]any{
 			"post": operation("resetAgentToken", "Rotate the token for a bound agent login.", auth(), nil, pathParams(param("agent_login", "string")), response(200, "Token rotated")),
 		},
+		"/api/v3/agent-bindings/{agent_login}/switch-session": map[string]any{
+			"post": operation("switchAgentSession", "Create a temporary console session for a bound agent without rotating its existing tokens.", auth(), nil, pathParams(param("agent_login", "string")), response(200, "Switch session created")),
+		},
+		"/api/v3/agent-bindings/{agent_login}/refresh-session": map[string]any{
+			"post": operation("refreshAgentSwitchSession", "Refresh an active bound-agent switch session before it expires.", auth(), nil, pathParams(param("agent_login", "string")), response(200, "Switch session refreshed")),
+		},
 		"/api/v3/auth0/device/code": map[string]any{
 			"post": operation("createAuth0DeviceCode", "Start an Auth0 device-code login flow.", nil, nil, nil, response(200, "Device code issued")),
 		},

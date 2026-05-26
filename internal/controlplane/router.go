@@ -81,6 +81,9 @@ func (r *DBRouter) ResolveToken(ctx context.Context, token string) (db.User, *go
 	// Step 1: look up token → CPUser in control plane
 	var cpToken CPToken
 	if err := r.cpDB.WithContext(ctx).Preload("CPUser").Where("value = ?", token).Take(&cpToken).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return r.resolveTenantToken(ctx, token)
+		}
 		return db.User{}, nil, fmt.Errorf("%w: %v", authn.ErrUnknownToken, err)
 	}
 	cpUser := cpToken.CPUser
@@ -102,6 +105,39 @@ func (r *DBRouter) ResolveToken(ctx context.Context, token string) (db.User, *go
 	}
 
 	return tenantUser, tenantDB, nil
+}
+
+func (r *DBRouter) resolveTenantToken(ctx context.Context, token string) (db.User, *gorm.DB, error) {
+	var cpUsers []CPUser
+	q := r.cpDB.WithContext(ctx)
+	if r.multiTenantMode {
+		q = q.Where("state = ?", AgentStateActive)
+	}
+	if err := q.Find(&cpUsers).Error; err != nil {
+		return db.User{}, nil, fmt.Errorf("%w: list tenant users: %v", authn.ErrUnknownToken, err)
+	}
+
+	now := time.Now().UTC()
+	for _, cpUser := range cpUsers {
+		tenantDB, err := r.getOrOpenDB(ctx, cpUser)
+		if err != nil {
+			return db.User{}, nil, err
+		}
+
+		var tok db.Token
+		if err := tenantDB.WithContext(ctx).Preload("User").Take(&tok, "value = ?", token).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return db.User{}, nil, fmt.Errorf("%w: tenant token lookup: %v", authn.ErrUnknownToken, err)
+		}
+		if tok.ExpiresAt != nil && !tok.ExpiresAt.After(now) {
+			return db.User{}, nil, fmt.Errorf("%w: token expired", authn.ErrUnknownToken)
+		}
+		return tok.User, tenantDB, nil
+	}
+
+	return db.User{}, nil, fmt.Errorf("%w: record not found", authn.ErrUnknownToken)
 }
 
 // getOrOpenDB returns a cached tenant DB or opens a new one (serialized per agent).

@@ -370,6 +370,8 @@ func registerAgentBindingRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/agent-bindings/confirm", handlers.ConfirmAgentBinding)
 	r.Patch("/api/v3/agent-bindings/{agent_login}", handlers.RenameBoundAgent)
 	r.Post("/api/v3/agent-bindings/{agent_login}/reset-token", handlers.ResetAgentToken)
+	r.Post("/api/v3/agent-bindings/{agent_login}/switch-session", handlers.SwitchAgentSession)
+	r.Post("/api/v3/agent-bindings/{agent_login}/refresh-session", handlers.RefreshAgentSwitchSession)
 }
 
 func registerUserScopedRoutes(r chi.Router, handlers *rest.Deps) {

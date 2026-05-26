@@ -310,3 +310,145 @@ func TestConfirmAgentBindingRejectsTeamGrantForUnaffiliatedAgentWhenInviterIsOnl
 		t.Fatalf("expected binding rollback, found %d rows", count)
 	}
 }
+
+func TestCreateAgentSwitchSessionPreservesExistingAgentToken(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	human := db.User{Login: "switch-human", Name: "switch-human", Type: db.TypeUser, UserKind: db.UserKindHuman}
+	agent := db.User{Login: "switch-agent", Name: "switch-agent", Type: db.TypeUser, UserKind: db.UserKindAgent}
+	if err := svc.DB.Create(&human).Error; err != nil {
+		t.Fatalf("create human: %v", err)
+	}
+	if err := svc.DB.Create(&agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := svc.DB.Create(&db.AgentBinding{HumanUserID: human.ID, AgentUserID: agent.ID}).Error; err != nil {
+		t.Fatalf("create binding: %v", err)
+	}
+	const originalToken = "switch-agent-long-lived-token"
+	if err := svc.DB.Create(&db.Token{UserID: agent.ID, Name: "agent", Value: originalToken}).Error; err != nil {
+		t.Fatalf("create original token: %v", err)
+	}
+
+	result, err := svc.CreateAgentSwitchSession(context.Background(), human.ID, agent.Login)
+	if err != nil {
+		t.Fatalf("CreateAgentSwitchSession: %v", err)
+	}
+	if result.Agent.ID != agent.ID {
+		t.Fatalf("result.Agent.ID = %d, want %d", result.Agent.ID, agent.ID)
+	}
+	if result.Token.Value == "" {
+		t.Fatal("expected switch session token value")
+	}
+	if result.Token.Value == originalToken {
+		t.Fatal("expected switch session token to differ from existing long-lived token")
+	}
+	if result.Token.ExpiresAt == nil || !result.Token.ExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("expected switch session token expiry in the future, got %v", result.Token.ExpiresAt)
+	}
+
+	resolvedOld, err := svc.ResolveUserByToken(context.Background(), originalToken)
+	if err != nil {
+		t.Fatalf("ResolveUserByToken(original): %v", err)
+	}
+	if resolvedOld.ID != agent.ID {
+		t.Fatalf("resolved old token user = %d, want %d", resolvedOld.ID, agent.ID)
+	}
+
+	resolvedNew, err := svc.ResolveUserByToken(context.Background(), result.Token.Value)
+	if err != nil {
+		t.Fatalf("ResolveUserByToken(new): %v", err)
+	}
+	if resolvedNew.ID != agent.ID {
+		t.Fatalf("resolved new token user = %d, want %d", resolvedNew.ID, agent.ID)
+	}
+
+	var tokenCount int64
+	if err := svc.DB.Model(&db.Token{}).Where("user_id = ?", agent.ID).Count(&tokenCount).Error; err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokenCount != 2 {
+		t.Fatalf("token count = %d, want 2", tokenCount)
+	}
+}
+
+func TestRefreshAgentSwitchSessionRotatesOnlyTheSwitchToken(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	human := db.User{Login: "refresh-human", Name: "refresh-human", Type: db.TypeUser, UserKind: db.UserKindHuman}
+	agent := db.User{Login: "refresh-agent", Name: "refresh-agent", Type: db.TypeUser, UserKind: db.UserKindAgent}
+	if err := svc.DB.Create(&human).Error; err != nil {
+		t.Fatalf("create human: %v", err)
+	}
+	if err := svc.DB.Create(&agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := svc.DB.Create(&db.AgentBinding{HumanUserID: human.ID, AgentUserID: agent.ID}).Error; err != nil {
+		t.Fatalf("create binding: %v", err)
+	}
+	const originalToken = "refresh-agent-long-lived-token"
+	if err := svc.DB.Create(&db.Token{UserID: agent.ID, Name: "agent", Value: originalToken}).Error; err != nil {
+		t.Fatalf("create original token: %v", err)
+	}
+
+	issued, err := svc.CreateAgentSwitchSession(context.Background(), human.ID, agent.Login)
+	if err != nil {
+		t.Fatalf("CreateAgentSwitchSession: %v", err)
+	}
+
+	refreshed, err := svc.RefreshAgentSwitchSession(context.Background(), agent.ID, issued.Token.Value, agent.Login)
+	if err != nil {
+		t.Fatalf("RefreshAgentSwitchSession: %v", err)
+	}
+	if refreshed.Token.Value == issued.Token.Value {
+		t.Fatal("expected refreshed switch token to change")
+	}
+	if refreshed.Token.ExpiresAt == nil || !refreshed.Token.ExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("expected refreshed switch token expiry in the future, got %v", refreshed.Token.ExpiresAt)
+	}
+
+	if _, err := svc.ResolveUserByToken(context.Background(), originalToken); err != nil {
+		t.Fatalf("ResolveUserByToken(original): %v", err)
+	}
+	if _, err := svc.ResolveUserByToken(context.Background(), refreshed.Token.Value); err != nil {
+		t.Fatalf("ResolveUserByToken(refreshed): %v", err)
+	}
+	if _, err := svc.ResolveUserByToken(context.Background(), issued.Token.Value); err == nil {
+		t.Fatal("expected old switch token to stop resolving after refresh")
+	}
+
+	var tokenCount int64
+	if err := svc.DB.Model(&db.Token{}).Where("user_id = ?", agent.ID).Count(&tokenCount).Error; err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokenCount != 2 {
+		t.Fatalf("token count = %d, want 2", tokenCount)
+	}
+}
+
+func TestRefreshAgentSwitchSessionRejectsLongLivedAgentToken(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	human := db.User{Login: "refresh-human-2", Name: "refresh-human-2", Type: db.TypeUser, UserKind: db.UserKindHuman}
+	agent := db.User{Login: "refresh-agent-2", Name: "refresh-agent-2", Type: db.TypeUser, UserKind: db.UserKindAgent}
+	if err := svc.DB.Create(&human).Error; err != nil {
+		t.Fatalf("create human: %v", err)
+	}
+	if err := svc.DB.Create(&agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := svc.DB.Create(&db.AgentBinding{HumanUserID: human.ID, AgentUserID: agent.ID}).Error; err != nil {
+		t.Fatalf("create binding: %v", err)
+	}
+	const originalToken = "refresh-agent-2-long-lived-token"
+	if err := svc.DB.Create(&db.Token{UserID: agent.ID, Name: "agent", Value: originalToken}).Error; err != nil {
+		t.Fatalf("create original token: %v", err)
+	}
+
+	if _, err := svc.RefreshAgentSwitchSession(context.Background(), agent.ID, originalToken, agent.Login); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("RefreshAgentSwitchSession error = %v, want ErrForbidden", err)
+	}
+}

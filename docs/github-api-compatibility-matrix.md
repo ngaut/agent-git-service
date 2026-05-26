@@ -228,7 +228,7 @@ GitHub-compatible APIs:
 
 | Area | Routes |
 |---|---|
-| Agents | `/api/v3/agents`, `/agent-invites`, `/agent-bindings/confirm`, `/agent-bindings/{agent_login}/reset-token`, `/user/agents` |
+| Agents | `/api/v3/agents`, `/agent-invites`, `/agent-bindings/confirm`, `/agent-bindings/{agent_login}/reset-token`, `/agent-bindings/{agent_login}/switch-session`, `/agent-bindings/{agent_login}/refresh-session`, `/user/agents` |
 | Auth0 | `/api/v3/auth0/device/code`, `/session`, `/callback`, `/lookup` |
 | Presence/typing/read state | `/presence/heartbeat`, `/issues/{id}/typing`, `/issues/{issue_id}/presence`, `/users/{user_id}/last-seen`, `/user/presence/privacy`, issue read-state routes |
 | Attachments | `/api/v3/issues/{id}/attachments`, `/api/v3/repos/{owner}/{repo}/attachments`, `/api/v3/repositories/{repo_id}/attachments`, `/api/v3/attachments/{uuid}` |
