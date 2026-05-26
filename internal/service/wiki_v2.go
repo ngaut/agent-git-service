@@ -22,6 +22,16 @@ type WikiV2KickResult struct {
 	RequestedAt      time.Time
 }
 
+// WikiV2StateResult reports the currently persisted derived-index state for one repo.
+type WikiV2StateResult struct {
+	RepositoryID         uint
+	IndexedCommitSHA     string
+	IndexedAt            *time.Time
+	ReconcileRequestedAt *time.Time
+	ReconcilerLeaseUntil *time.Time
+	PageCount            int
+}
+
 type wikiV2SnapshotReplaceResult struct {
 	Applied          bool
 	CurrentHeadSHA   string
@@ -147,6 +157,30 @@ func (s *Service) ReconcileWikiV2(ctx context.Context, repoFullName string) (wik
 		IndexedCommitSHA: replaceResult.CurrentHeadSHA,
 		PageCount:        replaceResult.CurrentPageCount,
 		Reconciled:       replaceResult.Applied,
+	}, nil
+}
+
+// GetWikiV2State returns the current persisted derived-index state without changing wiki behavior.
+func (s *Service) GetWikiV2State(ctx context.Context, repoFullName string) (WikiV2StateResult, error) {
+	rep, err := s.getRepoBase(ctx, repoFullName)
+	if err != nil {
+		return WikiV2StateResult{}, err
+	}
+	state, err := s.loadWikiV2State(ctx, rep.ID)
+	if err != nil {
+		return WikiV2StateResult{}, err
+	}
+	var pageCount int64
+	if err := s.DBForCtx(ctx).Model(&db.WikiPageIndex{}).Where("repository_id = ?", rep.ID).Count(&pageCount).Error; err != nil {
+		return WikiV2StateResult{}, err
+	}
+	return WikiV2StateResult{
+		RepositoryID:         rep.ID,
+		IndexedCommitSHA:     state.IndexedCommitSHA,
+		IndexedAt:            state.IndexedAt,
+		ReconcileRequestedAt: state.ReconcileRequestedAt,
+		ReconcilerLeaseUntil: state.ReconcilerLeaseUntil,
+		PageCount:            int(pageCount),
 	}, nil
 }
 
