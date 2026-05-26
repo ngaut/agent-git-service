@@ -13,7 +13,7 @@ import (
 	"gh-server/internal/testharness"
 )
 
-func TestWiki_CompactHistory_IsTemporarilyDisabled_Issue1470(t *testing.T) {
+func TestWiki_CompactHistory_StartsAsyncJob_Issue1472(t *testing.T) {
 	h := testharness.New(t)
 	ctx := context.Background()
 	owner, ownerToken := seedHarnessUser(t, h, "wiki-compact-owner", false)
@@ -48,13 +48,26 @@ func TestWiki_CompactHistory_IsTemporarilyDisabled_Issue1470(t *testing.T) {
 	}
 
 	compact := h.DoRESTJSONWithToken(t, "POST", "/api/v3/repos/"+full+"/wiki/compact", ownerToken, map[string]any{})
-	assertStatusCode(t, compact, http.StatusConflict)
+	assertStatusCode(t, compact, http.StatusAccepted)
+	compactBody := testharness.DecodeJSON(t, compact)
+	statusURL, _ := compactBody["status_url"].(string)
+	if statusURL == "" {
+		t.Fatalf("status_url = %q, want non-empty", statusURL)
+	}
+	h.Svc.Wg.Wait()
+
+	status := h.DoRESTWithToken(t, "GET", statusURL, ownerToken)
+	assertStatusCode(t, status, http.StatusOK)
+	statusBody := testharness.DecodeJSON(t, status)
+	if statusBody["status"] != service.WikiCompactionJobSucceeded {
+		t.Fatalf("job status = %v, want %q", statusBody["status"], service.WikiCompactionJobSucceeded)
+	}
 
 	after := h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history", nil)
 	assertStatusCode(t, after, http.StatusOK)
 	rowsAfter := testharness.DecodeJSONArray(t, after)
-	if len(rowsAfter) != 2 {
-		t.Fatalf("rowsAfter len = %d, want 2", len(rowsAfter))
+	if len(rowsAfter) != 1 {
+		t.Fatalf("rowsAfter len = %d, want 1", len(rowsAfter))
 	}
 
 	req := httptest.NewRequest("POST", "/api/v3/repos/"+full+"/wiki/compact", bytes.NewReader([]byte("{")))
@@ -65,7 +78,7 @@ func TestWiki_CompactHistory_IsTemporarilyDisabled_Issue1470(t *testing.T) {
 	assertStatusCode(t, invalid, http.StatusUnprocessableEntity)
 }
 
-func TestWiki_CompactHistory_RemainsDisabledAfterRequestContextCanceled_Issue1470(t *testing.T) {
+func TestWiki_CompactHistory_CompletesAfterRequestContextCanceled_Issue1472(t *testing.T) {
 	h := testharness.New(t)
 	ctx := context.Background()
 	owner, ownerToken := seedHarnessUser(t, h, "wiki-compact-async-owner", false)
@@ -100,13 +113,26 @@ func TestWiki_CompactHistory_RemainsDisabledAfterRequestContextCanceled_Issue147
 	resp := httptest.NewRecorder()
 	h.Mux.ServeHTTP(resp, req)
 	cancel()
-	assertStatusCode(t, resp, http.StatusConflict)
+	assertStatusCode(t, resp, http.StatusAccepted)
+	compactBody := testharness.DecodeJSON(t, resp)
+	statusURL, _ := compactBody["status_url"].(string)
+	if statusURL == "" {
+		t.Fatalf("status_url = %q, want non-empty", statusURL)
+	}
+	h.Svc.Wg.Wait()
+
+	status := h.DoRESTWithToken(t, "GET", statusURL, ownerToken)
+	assertStatusCode(t, status, http.StatusOK)
+	statusBody := testharness.DecodeJSON(t, status)
+	if statusBody["status"] != service.WikiCompactionJobSucceeded {
+		t.Fatalf("job status = %v, want %q", statusBody["status"], service.WikiCompactionJobSucceeded)
+	}
 
 	after := h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history", nil)
 	assertStatusCode(t, after, http.StatusOK)
 	rowsAfter := testharness.DecodeJSONArray(t, after)
-	if len(rowsAfter) != 2 {
-		t.Fatalf("rowsAfter len = %d, want 2", len(rowsAfter))
+	if len(rowsAfter) != 1 {
+		t.Fatalf("rowsAfter len = %d, want 1", len(rowsAfter))
 	}
 }
 

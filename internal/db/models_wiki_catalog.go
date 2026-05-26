@@ -49,18 +49,19 @@ func (WikiPage) TableName() string { return "wiki_pages" }
 // REST history and move responses. idx_wiki_revisions_page_commit
 // covers `GetWikiPage?ref=<sha>` lookups with (page_id, commit_sha).
 type WikiPageRevision struct {
-	PageID      uint64 `gorm:"primaryKey;autoIncrement:false;index:idx_wiki_revisions_page_commit,priority:1"`
-	RevisionID  uint64 `gorm:"primaryKey;autoIncrement:false"`
-	ChangesetID uint64 `gorm:"not null;index:idx_wiki_revisions_changeset"`
-	BlobSHA     string `gorm:"type:char(40)"` // empty for delete rows
-	BodySize    int
-	BodyInline  []byte // present iff BodySize <= MaxBodyInlineBytes
-	SlugAtRev   string `gorm:"type:varbinary(1024);not null"`
-	CommitSHA   string `gorm:"type:char(40);not null;index:idx_wiki_revisions_page_commit,priority:2"`
-	Op          string `gorm:"type:char(16);not null"` // create|update|rename|delete|restore
-	AuthorID    *uint
-	Author      *User     `gorm:"foreignKey:AuthorID"`
-	CommittedAt time.Time `gorm:"not null"`
+	PageID                  uint64  `gorm:"primaryKey;autoIncrement:false;index:idx_wiki_revisions_page_commit,priority:1"`
+	RevisionID              uint64  `gorm:"primaryKey;autoIncrement:false"`
+	ChangesetID             uint64  `gorm:"not null;index:idx_wiki_revisions_changeset"`
+	SupersededByChangesetID *uint64 `gorm:"index:idx_wiki_revisions_superseded"`
+	BlobSHA                 string  `gorm:"type:char(40)"` // empty for delete rows
+	BodySize                int
+	BodyInline              []byte // present iff BodySize <= MaxBodyInlineBytes
+	SlugAtRev               string `gorm:"type:varbinary(1024);not null"`
+	CommitSHA               string `gorm:"type:char(40);not null;index:idx_wiki_revisions_page_commit,priority:2"`
+	Op                      string `gorm:"type:char(16);not null"` // create|update|rename|delete|restore|compact
+	AuthorID                *uint
+	Author                  *User     `gorm:"foreignKey:AuthorID"`
+	CommittedAt             time.Time `gorm:"not null"`
 }
 
 func (WikiPageRevision) TableName() string { return "wiki_page_revisions" }
@@ -70,18 +71,19 @@ func (WikiPageRevision) TableName() string { return "wiki_page_revisions" }
 // identity surfaced through the REST contract and through any future
 // git façade.
 type WikiChangeset struct {
-	ChangesetID    uint64     `gorm:"primaryKey;autoIncrement"`
-	RepositoryID   uint       `gorm:"not null;index:idx_wiki_changesets_repo,sort:desc"`
-	Repository     Repository `gorm:"foreignKey:RepositoryID"`
-	ParentID       *uint64    `gorm:"index:idx_wiki_changesets_parent"`
-	Message        LargeText
-	AuthorID       *uint
-	Author         *User     `gorm:"foreignKey:AuthorID"`
-	CommittedAt    time.Time `gorm:"not null"`
-	PageCount      int       `gorm:"not null"`
-	Source         string    `gorm:"type:char(16);not null"` // rest|batch|push|migration
-	SynthCommitSHA string    `gorm:"type:char(40);not null"`
-	SynthFormatVer int16
+	ChangesetID             uint64     `gorm:"primaryKey;autoIncrement"`
+	RepositoryID            uint       `gorm:"not null;index:idx_wiki_changesets_repo,sort:desc"`
+	Repository              Repository `gorm:"foreignKey:RepositoryID"`
+	ParentID                *uint64    `gorm:"index:idx_wiki_changesets_parent"`
+	SupersededByChangesetID *uint64    `gorm:"index:idx_wiki_changesets_superseded"`
+	Message                 LargeText
+	AuthorID                *uint
+	Author                  *User     `gorm:"foreignKey:AuthorID"`
+	CommittedAt             time.Time `gorm:"not null"`
+	PageCount               int       `gorm:"not null"`
+	Source                  string    `gorm:"type:char(16);not null"` // rest|admin|batch|compact|push|migration
+	SynthCommitSHA          string    `gorm:"type:char(40);not null"`
+	SynthFormatVer          int16
 }
 
 func (WikiChangeset) TableName() string { return "wiki_changesets" }

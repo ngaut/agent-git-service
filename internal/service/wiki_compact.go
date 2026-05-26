@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"time"
 
+	"gh-server/internal/db"
 	"gh-server/internal/gitstore"
 )
 
 const (
 	wikiCompactCommitName  = "gh-server"
 	wikiCompactCommitEmail = "gh-server@localhost"
+	wikiCompactRefPrefix   = "refs/heads/compacted-"
 	wikiRefLockStaleAfter  = 5 * time.Minute
 )
 
@@ -32,7 +34,7 @@ type WikiRefLockRepairResult struct {
 	AgeSeconds int64
 }
 
-func (s *Service) createWikiCompactCommitObject(ctx context.Context, repoFullName string, committedAt time.Time) (string, error) {
+func (s *Service) createWikiCompactCommitObject(ctx context.Context, repoFullName string, committedAt time.Time, livePages []db.WikiPage) (string, error) {
 	if s.Git == nil {
 		return "", errors.New("git store unavailable")
 	}
@@ -40,17 +42,27 @@ func (s *Service) createWikiCompactCommitObject(ctx context.Context, repoFullNam
 		return "", err
 	}
 	full := wikiRepoFullName(repoFullName)
-	headSHA, err := s.Git.HeadSHA(ctx, full, wikiDefaultBranch)
-	if err != nil {
-		return "", err
+	entries := make([]gitstore.CreateTreeEntryInput, 0, len(livePages))
+	for _, page := range livePages {
+		body, err := s.wikiPageBody(ctx, page)
+		if err != nil {
+			return "", err
+		}
+		bodyCopy := string(body)
+		entries = append(entries, gitstore.CreateTreeEntryInput{
+			Path:    wikiSlugToPath(page.Slug),
+			Mode:    "100644",
+			Type:    "blob",
+			Content: &bodyCopy,
+		})
 	}
-	headCommit, err := s.Git.GetGitCommitObject(ctx, full, headSHA)
+	tree, err := s.Git.CreateTreeObject(ctx, full, gitstore.CreateTreeOptions{Entries: entries})
 	if err != nil {
 		return "", err
 	}
 	commit, err := s.Git.CreateCommitObject(ctx, full, gitstore.CreateCommitOptions{
 		Message: fmt.Sprintf("Compact wiki history at %s", committedAt.Format(time.RFC3339)),
-		TreeSHA: headCommit.TreeSHA,
+		TreeSHA: tree.SHA,
 		Author: gitstore.GitSignature{
 			Name:  wikiCompactCommitName,
 			Email: wikiCompactCommitEmail,
@@ -68,17 +80,21 @@ func (s *Service) createWikiCompactCommitObject(ctx context.Context, repoFullNam
 	return commit.SHA, nil
 }
 
-func (s *Service) updateWikiCompactRef(ctx context.Context, repoFullName, commitSHA string) error {
+func wikiCompactProjectionRef(committedAt time.Time) string {
+	return wikiCompactRefPrefix + committedAt.UTC().Format("20060102-150405")
+}
+
+func (s *Service) updateWikiCompactRef(ctx context.Context, repoFullName, ref, commitSHA string) error {
 	if s.Git == nil {
 		return errors.New("git store unavailable")
 	}
 	full := wikiRepoFullName(repoFullName)
 	return s.Git.WithRepoLock(ctx, full, func() error {
-		return s.updateWikiCompactRefLocked(ctx, repoFullName, commitSHA)
+		return s.updateWikiCompactRefLocked(ctx, repoFullName, ref, commitSHA)
 	})
 }
 
-func (s *Service) updateWikiCompactRefLocked(ctx context.Context, repoFullName, commitSHA string) error {
+func (s *Service) updateWikiCompactRefLocked(ctx context.Context, repoFullName, ref, commitSHA string) error {
 	if s.testWikiCompactRefUpdateFailure != nil {
 		if err := s.testWikiCompactRefUpdateFailure(repoFullName, commitSHA); err != nil {
 			return err
@@ -88,19 +104,19 @@ func (s *Service) updateWikiCompactRefLocked(ctx context.Context, repoFullName, 
 		return errors.New("git store unavailable")
 	}
 	full := wikiRepoFullName(repoFullName)
-	ref := "refs/heads/" + wikiDefaultBranch
 	if _, err := s.Git.RepairRefLock(ctx, full, ref, wikiRefLockStaleAfter, false); err != nil {
 		if errors.Is(err, gitstore.ErrRefLockActive) {
 			return fmt.Errorf("%w: wiki ref lock for %s is still active", ErrConflict, ref)
 		}
 		return err
 	}
+	if _, err := s.Git.LookupRef(ctx, full, ref); err != nil {
+		if errors.Is(err, gitstore.ErrRefNotFound) {
+			return s.Git.CreateRef(ctx, full, ref, commitSHA)
+		}
+		return err
+	}
 	return s.Git.UpdateRefSafe(ctx, full, ref, commitSHA, true)
-}
-
-func (s *Service) repairWikiCatalogFromGit(ctx context.Context, repoFullName string) error {
-	_, err := s.MigrateWiki(ctx, repoFullName, WikiMigrationOptions{})
-	return err
 }
 
 func (s *Service) RepairWikiRefLocks(ctx context.Context, repoFullName string, force bool) (WikiRefLockRepairResult, error) {

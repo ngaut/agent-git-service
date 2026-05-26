@@ -350,6 +350,9 @@ func (s *Service) loadLatestWikiChangesetState(ctx context.Context, repoID uint)
 }
 
 func (s wikiChangesetState) allowGitBackfillReset() bool {
+	if s.Source == wikicatalog.SourceCompact {
+		return false
+	}
 	return s.SynthFormatVer >= synthProjectionMaterialized
 }
 

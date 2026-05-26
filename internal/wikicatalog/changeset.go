@@ -73,6 +73,7 @@ const (
 	SourceREST      Source = "rest"
 	SourceAdmin     Source = "admin"
 	SourceBatch     Source = "batch"
+	SourceCompact   Source = "compact"
 	SourceMigration Source = "migration"
 	SourcePush      Source = "push" // reserved for the future git façade
 )
