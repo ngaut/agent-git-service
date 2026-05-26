@@ -39,6 +39,11 @@ Current wiki exception:
 - Wiki page content and history are authoritative in `wikicatalog` tables after the catalog cutover.
 - The sibling bare `*.wiki.git` repository remains a materialized projection maintained by the post-commit hook plus the git receive-pack migration hook so clone, fetch, pull, and ref-pinned reads still preserve real Git semantics for clients.
 
+Planned wiki replacement:
+
+- The approved target direction for issue #1488 is documented in [architecture/wiki-storage-v2.md](architecture/wiki-storage-v2.md).
+- Until that rewrite lands, the current catalog-first wiki exception above remains the implemented production contract.
+
 This does not prohibit repository- or pull-request-related metadata in the database.
 The rule is about authority: Git-native behavior stays Git-backed, while relational metadata stays DB-backed.
 
