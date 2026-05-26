@@ -1,832 +1,206 @@
 # Design: Wiki Storage Re-Architecture
 
-Status: Draft
+Status: Approved direction, implementation planning in progress
 
-This RFC now tracks the approved direction from issue #1488: replace the
-current catalog-first wiki subsystem with a git-first design where the sibling
-bare wiki repository is the source of truth and TiDB stores only rebuildable
-derived indexes.
-
-The concise architecture baseline for the target design lives in
+This document turns the approved Wiki V2 direction from issue #1488 into an
+implementation plan for the repo. The target architecture baseline lives in
 [`../architecture/wiki-storage-v2.md`](../architecture/wiki-storage-v2.md).
-The current implemented production architecture remains documented in
-[`../architecture.md`](../architecture.md) until the rewrite lands.
-
-The remainder of this document predates that decision and is retained only as
-superseded background for the rejected catalog-first approach. It must not be
-used as the implementation baseline for new wiki work.
-
-## 1. Summary
-
-The wiki subsystem stores every page as a file in a sibling bare git repo
-(`<owner>/<repo>.wiki`) and writes one commit per page. Reads reconstruct
-page metadata from `git log` / `ls-tree` on every request; writes serialize
-through a per-repo in-process mutex and fork ≥13 `git` subprocesses per
-page. At 3,000 pages the navigation list takes ~55s and writes take
-~1.5s/page with super-linear degradation. The architecture cannot reach the
-project's 10⁹ pages target.
-
-This RFC proposes treating the wiki as a **catalog-backed system with git
-only at the protocol boundary**:
-
-1. A relational catalog (`wiki_pages`, `wiki_page_revisions`,
-   `wiki_changesets`, `wiki_dir_index`, `wiki_page_links`, `wiki_blob_refs`)
-   becomes the source of truth.
-2. Page bodies live in a content-addressed blob store (object storage)
-   referenced by git's SHA-1 blob hash, preserving the existing REST
-   `If-Match` ETag contract.
-3. A single write primitive — `ApplyChangeSet` — replaces all current write
-   paths and supports REST single-page, batch upsert, rename, prefix-move,
-   and future `git push` ingestion.
-4. The current per-repo `sync.Mutex` is removed in favor of SQL-level
-   optimistic concurrency control (`wiki_changesets.parent_id` CAS).
-5. Reading the page list becomes a single indexed SQL query, independent
-   of git history length, while keeping current rename, prefix-move,
-   rewrite-reporting, and label behaviors intact.
-6. A `git clone` / `git push` protocol façade is **future, optional** work
-   (deferred RFC) because no production client uses it today.
-
-Expected impact: navigation list ~55s → <100ms P99, single-page PUT ~1.5s
-→ <200ms P99, batch 1,000-page write ~25min → <5s, and write concurrency
-unbounded per wiki.
-
-## 2. Motivation
-
-### 2.1 Observed performance
-
-- 3,000-page wiki: navigation list 55s, page write 1.5s, degrades
-  super-linearly.
-- Code path responsible for read regression:
-  `internal/service/wiki.go:735` `ListWikiPages` →
-  `internal/gitstore/search.go:356` `LatestCommitsForPathsAtRef` with
-  N-element pathspec walking N commits.
-- Code path responsible for write regression:
-  `internal/gitstore/content.go:586` `writeFile` (read-tree of N entries,
-  write-tree of N entries, multiple `git` forks per write), serialized
-  through `internal/gitstore/store.go:36-60` per-repo mutex.
-
-### 2.2 Why incremental tuning is insufficient
-
-- `git log -- <N paths>` is O(commits × pathspec). With one commit per
-  page write, this is O(N²). No git flag avoids it; we cannot patch our
-  way out.
-- `read-tree` / `write-tree` scale linearly with tree size. Any per-page
-  write must touch them.
-- Per-repo write serialization is in-process and cannot scale
-  horizontally.
-- These are property-of-storage problems, not parameter-tuning problems.
-
-### 2.3 Target scale
-
-- Total pages across all wikis: 10⁹ order of magnitude.
-- Per-wiki: 10¹–10⁴ typical, 10⁷ long tail.
-- Per-page body: ~10 KB average, 1 MB P99, 25 MB hard cap.
-
-## 3. Goals and Non-goals
-
-### Goals
-
-- Navigation list `GET /repos/{o}/{r}/wiki/pages`: < 100 ms P99
-  independent of wiki size up to 10⁶ pages.
-- Single-page PUT: < 200 ms P99 independent of wiki size.
-- Batch 1,000 page upsert: < 5 s.
-- Linear write throughput within a wiki (no per-repo lock bottleneck).
-- REST API compatibility: every existing endpoint at
-  `/api/v3/repos/{owner}/{repo}/wiki/...` keeps URL, JSON shape, status
-  codes, rename/move side effects, and **blob-SHA-based `If-Match`
-  semantics**.
-- Preserve per-page version history, prefix collision detection,
-  backlinks, labels, batch move semantics.
-
-### Non-goals (this RFC)
-
-- `git clone` / `git push` of `<repo>.wiki.git` — currently not exposed
-  (see §10.A); deferred to a follow-up "Wiki Git Protocol Façade" RFC.
-- Multi-region active-active wiki writes.
-- Rich-text / non-markdown content.
-- Branches, merges, force-push, submodules, LFS (none of which GitHub
-  Wiki itself supports).
-- Migrating to SHA-256 blob identifiers (kept on git's timeline).
-
-## 4. Design Principles
-
-1. **Catalog is the source of truth.** Bytes go to content-addressed
-   storage; structure goes to SQL.
-2. **Page identity is a stable `page_id`, not a slug.** Live REST-side
-   renames preserve identity, history continuity, and backlink
-   anchoring. The one migration-only exception is replaying historical
-   git rename commits that were already stored as delete+create at the
-   file-tree level; because `page_id` is not externally visible, M2 may
-   preserve observable slug/body/commit history without reconstructing
-   hidden pre-cutover page identities.
-3. **Single write primitive.** All REST endpoints, batch operations, and
-   any future push ingestion call `ApplyChangeSet`. There is exactly one
-   path from request to durable state.
-4. **No request-path `fork+exec git`.** Git subprocess invocations are
-   confined to migration tooling and the (future) protocol façade.
-5. **Per-page version chains, not a global DAG.** Cross-page atomicity
-   comes from a SQL transaction tagged with a `changeset_id`; a global
-   linear "git log"-equivalent is derived from `wiki_changesets`, not
-   stored as a DAG.
-6. **ETag = git blob SHA-1.** Catalog computes the same hash git would
-   compute, so existing REST clients continue to send and receive the
-   same `If-Match` / `ETag` values.
-
-## 5. Architecture Overview
-
-```
-                ┌────────────────────────────────────────────┐
-   REST API     │ PutWikiPage / ListWikiPages / Move / ...   │
-                └──────────────────────┬─────────────────────┘
-                                       │
-                                       ▼
-                ┌────────────────────────────────────────────┐
-   Service      │ WikiCatalog.ApplyChangeSet                 │
-                │  (validate → CAS-upload blobs → SQL txn    │
-                │   → outbox enqueue)                        │
-                └─────┬───────────────────────┬──────────────┘
-                      │                       │
-            ┌─────────▼─────────┐  ┌──────────▼──────────────┐
-   Storage  │ TiDB Catalog      │  │ Blob CAS (S3-compatible)│
-            │ - wiki_pages      │  │ key = "blob/aa/bb/<sha>"│
-            │ - revisions       │  │ git SHA-1 blob hashes   │
-            │ - changesets      │  └─────────────────────────┘
-            │ - dir_index       │
-            │ - page_links      │
-            │ - blob_refs       │
-            └────────┬──────────┘
-                     │ outbox / CDC
-                     ▼
-            ┌────────────────────┐  ┌────────────────────────┐
-   Async    │ Search indexer    │  │ Backlink resolver       │
-            │ (existing TiDB    │  │ (slug → page_id refill) │
-            │  hybrid search)   │  └────────────────────────┘
-            └────────────────────┘
-
-   (Future RFC) git façade: lazy-materialized protocol-cache
-   bare repo per wiki; serves git-upload-pack / git-receive-pack
-   over the existing /info/refs route.
-```
-
-## 6. Data Model
-
-All wiki tables are `PARTITION BY HASH(repo_id) PARTITIONS 256` unless
-otherwise stated. Same-wiki rows live in a single partition; cross-wiki
-workload spreads naturally.
-
-### 6.1 `wiki_pages`
-
-```sql
-CREATE TABLE wiki_pages (
-  page_id           BIGINT     NOT NULL,           -- snowflake
-  repo_id           BIGINT     NOT NULL,
-  slug              VARBINARY(1024) NOT NULL,      -- readable, case-preserving
-  slug_ci_v1        VARBINARY(384)  NOT NULL,      -- canonical form (see 6.8)
-  title             VARCHAR(1024),
-  head_blob_sha     BINARY(20) NOT NULL,           -- git SHA-1 blob hash
-  body_size         INT        NOT NULL,
-  body_inline       VARBINARY(4096) NULL,          -- inline if body_size <= 4096
-  head_revision_id  BIGINT     NOT NULL,
-  head_changeset_id BIGINT     NOT NULL,           -- ETag basis
-  last_author_id    BIGINT,
-  created_at        DATETIME(6) NOT NULL,
-  updated_at        DATETIME(6) NOT NULL,
-  deleted_at        DATETIME(6) NULL,
-  PRIMARY KEY (page_id),
-  UNIQUE KEY uk_repo_slug   (repo_id, slug_ci_v1),
-  KEY idx_repo_updated      (repo_id, updated_at DESC, page_id),
-  KEY idx_repo_prefix       (repo_id, slug_ci_v1)
-) PARTITION BY HASH(repo_id) PARTITIONS 256;
-```
-
-Why `page_id` PK and not `(repo_id, slug_ci_v1)`:
-
-- 10⁹-row tables suffer with wide clustered keys.
-- Renames preserve `page_id`; backlinks resolved to `page_id` stay stable
-  across slug changes.
-- Secondary indexes become narrower.
-
-`body_inline` short-circuits the common case (page bodies < 4 KB), saving
-an S3 round-trip on hot reads. Determined at write time.
-
-### 6.2 `wiki_page_revisions`
-
-```sql
-CREATE TABLE wiki_page_revisions (
-  page_id       BIGINT     NOT NULL,
-  revision_id   BIGINT     NOT NULL,            -- monotonic per page
-  changeset_id  BIGINT     NOT NULL,
-  blob_sha      BINARY(20) NULL,                -- NULL for delete rows
-  body_size     INT        NULL,
-  body_inline   VARBINARY(4096) NULL,           -- inline if body_size <= 4096
-  slug_at_rev   VARBINARY(1024) NOT NULL,
-  commit_sha    BINARY(20) NOT NULL,
-  op            ENUM('create','update','rename','delete','restore') NOT NULL,
-  author_id     BIGINT,
-  committed_at  DATETIME(6) NOT NULL,
-  PRIMARY KEY (page_id, revision_id DESC),
-  KEY idx_changeset (changeset_id),
-  KEY idx_page_commit (page_id, commit_sha)
-) PARTITION BY HASH(page_id) PARTITIONS 256;
-```
-
-Per-page descending PK makes "list history" / "get latest" a prefix scan.
-`body_inline` preserves small historical revisions even after later
-updates or deletes. `commit_sha` records the immutable commit identity
-that current REST history rows and move responses already expose on
-`main`, while `idx_page_commit` keeps `GetWikiPage?ref=<sha>` lookups
-indexable. Cross-page grouping uses `idx_changeset`.
-
-### 6.3 `wiki_changesets`, `wiki_repo_heads`
-
-```sql
-CREATE TABLE wiki_changesets (
-  changeset_id     BIGINT     NOT NULL,
-  repo_id          BIGINT     NOT NULL,
-  parent_id        BIGINT     NULL,            -- ff-only chain head
-  message          TEXT,
-  author_id        BIGINT,
-  committed_at     DATETIME(6) NOT NULL,
-  page_count       INT        NOT NULL,
-  source           ENUM('rest','batch','push','migration') NOT NULL,
-  synth_commit_sha BINARY(20) NOT NULL,        -- immutable REST-visible commit id
-  synth_format_ver SMALLINT   NULL,
-  PRIMARY KEY (changeset_id),
-  KEY idx_repo (repo_id, changeset_id DESC),
-  KEY idx_parent (repo_id, parent_id)
-) PARTITION BY HASH(repo_id) PARTITIONS 256;
-
-CREATE TABLE wiki_repo_heads (
-  repo_id            BIGINT PRIMARY KEY,
-  head_changeset_id  BIGINT NOT NULL,
-  updated_at         DATETIME(6) NOT NULL
-);
-```
-
-`wiki_repo_heads` is the single row whose CAS update serializes concurrent
-writers to the same wiki (replaces the in-process `sync.Mutex`).
-
-### 6.4 `wiki_dir_index`
-
-```sql
-CREATE TABLE wiki_dir_index (
-  repo_id    BIGINT NOT NULL,
-  parent_dir VARBINARY(1024) NOT NULL,      -- "" = root
-  child_name VARBINARY(255)  NOT NULL,
-  child_kind ENUM('blob','tree') NOT NULL,
-  page_id    BIGINT NULL,                   -- present when child_kind='blob'
-  PRIMARY KEY (repo_id, parent_dir, child_name)
-) PARTITION BY HASH(repo_id) PARTITIONS 256;
-```
-
-Maintained incrementally inside `ApplyChangeSet`. Supports:
-
-- `ListWikiPages(path, recursive=false)`: one indexed range scan.
-- Prefix collision: O(depth) lookups, no full-tree scan.
-- Tree-object synthesis for the future façade.
-
-`_sidebar` and any other top-level reserved slugs (see §6.8) are stored as
-ordinary `blob` entries under `parent_dir=""`.
-
-### 6.5 `wiki_page_links`
-
-```sql
-CREATE TABLE wiki_page_links (
-  repo_id      BIGINT NOT NULL,
-  src_page_id  BIGINT NOT NULL,
-  dst_slug_ci  VARBINARY(384) NOT NULL,     -- canonical (slug_ci_v1)
-  dst_page_id  BIGINT NULL,                 -- filled by async resolver
-  PRIMARY KEY  (src_page_id, dst_slug_ci),
-  KEY idx_dst_resolved (repo_id, dst_page_id),
-  KEY idx_dst_string   (repo_id, dst_slug_ci)
-);
-```
-
-Write path: delete-all-and-insert per `src_page_id` inside the same txn.
-Rename only mutates `wiki_pages.slug_ci_v1`; `wiki_page_links` does not
-need rewriting because `idx_dst_resolved` is anchored on `dst_page_id`.
-
-### 6.6 `wiki_blob_refs`, `wiki_pending_blobs`
-
-```sql
-CREATE TABLE wiki_blob_refs (
-  blob_sha    BINARY(20) PRIMARY KEY,
-  refcount    BIGINT NOT NULL,
-  size        INT NOT NULL,
-  first_seen  DATETIME(6),
-  last_seen   DATETIME(6)
-);
-
-CREATE TABLE wiki_pending_blobs (
-  blob_sha    BINARY(20) PRIMARY KEY,
-  written_at  DATETIME(6) NOT NULL,
-  size        INT NOT NULL
-);
-```
-
-Reference-count-based garbage collection. `wiki_pending_blobs` holds the
-WAL row asserted before blob upload and deleted inside the txn that takes
-the first reference. GC: any row in `wiki_pending_blobs` older than 1h
-with no matching `wiki_blob_refs` row → physical delete. Object-storage
-lifecycle rules act as a belt-and-suspenders backup.
-
-### 6.7 `wiki_slug_aliases` (internal migration aid)
-
-```sql
-CREATE TABLE wiki_slug_aliases (
-  repo_id      BIGINT NOT NULL,
-  old_slug_ci  VARBINARY(384) NOT NULL,
-  page_id      BIGINT NOT NULL,
-  created_at   DATETIME(6) NOT NULL,
-  expires_at   DATETIME(6) NOT NULL,
-  PRIMARY KEY (repo_id, old_slug_ci)
-);
-```
-
-When a page is renamed, the prior `slug_ci_v1` may be inserted with a
-TTL as an **internal migration aid only**. The current REST contract does
-not expose renamed slugs as redirects or alias hits, so request-path
-lookup continues to behave exactly as it does on `main`: callers must use
-the new slug returned by the move endpoint. If alias storage is kept, it
-is for rollback tooling, auditability, and future product discussion, not
-for changing `GetWikiPage` semantics in this RFC.
-
-### 6.8 Slug canonicalization (`slug_ci_v1`)
-
-The canonical-form function is **frozen as v1** and corresponds to the
-current `canonicalWikiLookupSlug` (`internal/service/wiki.go:321-337`):
-
-```
-slug_ci_v1(s) =
-   1. split on '/'
-   2. for each segment:
-        trim spaces
-        replace '_' → '-'
-        collapse internal whitespace → '-'
-        lowercase
-   3. rejoin with '/'
-   4. validate against validateReadableWikiSlug; reject if invalid
-```
-
-Reserved tokens (`_sidebar`, `.`, `..`) keep current handling: `_sidebar`
-is allowed as a literal segment, dot segments rejected. A golden-test
-suite locks input→output pairs; any future change requires introducing
-`slug_ci_v2` and dual-maintaining columns during migration.
-
-Write-time validation remains a separate concern from lookup
-canonicalization. This RFC preserves the current split behavior: request
-lookups canonicalize via `canonicalWikiLookupSlug`, while create/update
-paths still run the stricter readable-slug validators before any catalog
-write.
-
-### 6.9 Label compatibility
-
-Current wiki labels are part of the public API surface, so the catalog
-design must preserve them during cutover rather than treating them as an
-adjacent concern. The implementation plan is:
-
-1. Keep the existing label endpoints and response fields unchanged.
-2. Continue serving label-filtered list operations during M3+.
-3. During rename and prefix-move operations, remap label ownership from
-   old slug to new slug in the same transaction that applies the page
-   move, matching today's `moveWikiPageLabels` behavior.
-4. During dual-write phases, continuously audit that label reads from the
-   catalog-backed path match label reads from the legacy git-backed path.
-
-The RFC intentionally does not redesign labels around `page_id` in this
-document. Whether label storage remains slug-keyed or gains an internal
-`page_id` mapping is an implementation detail, but externally visible
-behavior must stay compatible with `main`.
-
-## 7. Blob CAS
-
-- Object store: S3 / S3-compatible. Key layout: `blob/aa/bb/<full-sha1>`
-  (2×2 hex prefix shards).
-- Content stored zstd-compressed (`Content-Encoding: zstd`); compression
-  performed by the writer.
-- Identifier: **git blob SHA-1** of the raw content
-  (`sha1("blob " + len + "\0" + content)`). This matches what
-  `git hash-object` would compute and preserves wire compatibility with
-  the existing REST `If-Match` value.
-- Reference counting in `wiki_blob_refs` (§6.6) gives cross-wiki dedup
-  for free (identical bodies share blobs).
-- Bodies ≤ 4 KB inline into both `wiki_pages.body_inline` and
-  `wiki_page_revisions.body_inline`; they may skip S3 storage because
-  every historical revision still has a durable in-catalog copy.
-
-Implementation note: the SHA-1 blob hash can be computed in-process (no
-`git hash-object` fork) using `crypto/sha1` with the standard git blob
-framing.
-
-## 8. The `ApplyChangeSet` Primitive
-
-Single write entry point. REST handlers, batch APIs, and (eventual) push
-ingestion all funnel through it.
-
-### 8.1 Interface
-
-```go
-type Op uint8
-const (
-  OpUpsert Op = iota
-  OpRename
-  OpDelete
-  OpRestore
-)
-
-type Change struct {
-  Op       Op
-  Slug     string           // src slug
-  NewSlug  string           // OpRename only
-  Body     []byte           // OpUpsert only
-  IfMatch  string           // optional blob SHA hex (per-page CAS)
-}
-
-type ChangeSetRequest struct {
-  RepoID         uint64
-  Author         UserRef
-  Message        string
-  ExpectedParent *uint64    // optional; ff-only if set
-  IdempotencyKey *string    // optional
-  Source         Source     // rest|batch|push|migration
-  Changes        []Change
-}
-
-type ChangeSetResult struct {
-  ChangesetID uint64
-  Parent      uint64
-  PerChange   []PerChangeResult   // new blob_sha, revision_id, etag, status
-}
-```
-
-### 8.2 Execution
-
-1. **Validate & canonicalize.** Per `Change`, derive `slug_ci_v1`,
-   `new_slug_ci_v1`. Reject duplicates within the changeset. Validate
-   slug grammar.
-2. **Quota gate.** See §11.
-3. **Pre-read.** One indexed
-   `SELECT page_id, slug_ci_v1, head_blob_sha, head_changeset_id,
-   deleted_at FROM wiki_pages WHERE repo_id = ? AND slug_ci_v1 IN (...)`
-   covering every touched slug (sources + rename destinations).
-4. **In-memory conflict checks** against pre-read:
-   - `IfMatch` mismatch → 409 with current SHA.
-   - Prefix collision via `wiki_dir_index` range query → 409.
-   - Rename destination occupied → 409.
-   - Delete on missing → 404.
-   - Move and prefix-move plan generation must also precompute the
-     current rewrite set and per-page skips so the response contract
-     matches `main`.
-5. **Blob uploads.** For each upsert with non-inline body:
-   - Compute SHA-1 in-process.
-   - If `wiki_blob_refs` already contains the SHA (dedup hit), skip
-     upload.
-   - Otherwise: `INSERT wiki_pending_blobs`, upload to S3 (parallel).
-     Failures here roll back the whole changeset before touching SQL.
-6. **SQL transaction:**
-
-   ```
-   BEGIN;
-     INSERT wiki_changesets (parent_id = ExpectedParent or current head, ...);
-     UPDATE wiki_repo_heads
-        SET head_changeset_id = new
-        WHERE repo_id = ? AND head_changeset_id = parent;   -- CAS
-     -- if rowcount=0 → ROLLBACK, retry with refreshed parent or fail
-     derive immutable `commit_sha` for the new changeset before writing
-     revision rows or response payloads
-     For each change:
-       allocate page_id if create
-       INSERT wiki_page_revisions
-       UPSERT wiki_pages   (slug, slug_ci_v1, head_blob_sha, head_*_id, updated_at)
-       UPDATE wiki_dir_index (add/remove leaves; materialize intermediate dirs)
-       DELETE wiki_page_links WHERE src_page_id=?; INSERT new out-links
-       For rename:
-         move label ownership from old slug to new slug
-       INSERT wiki_blob_refs ON DUPLICATE KEY UPDATE refcount=refcount+1
-       UPDATE wiki_blob_refs SET refcount=refcount-1 WHERE blob_sha=old_blob
-       DELETE wiki_pending_blobs WHERE blob_sha=new_blob
-       optional internal alias rows may be written only for rollback or
-       audit tooling; request-path reads do not consult them
-     INSERT wiki_outbox (changeset_id, repo_id)
-   COMMIT;
-   ```
-
-7. **Post-commit async (best-effort):**
-   - Outbox consumer → search reindex (existing
-     `queueWikiSearchUpsert` path).
-   - Backlink resolver → fill `dst_page_id` where it can.
-   - Optional: invalidate any per-repo cache.
-
-### 8.3 Rename and prefix-move contract
-
-The move endpoints keep their current observable behavior:
-
-- The renamed page is returned under the destination slug.
-- Inbound wiki references in other pages are rewritten when they can be
-  updated safely using the same rewrite rules as `main`.
-- The response still includes `rewrites` and `skipped`, with `skipped`
-  sorted deterministically.
-- Labels attached to moved pages remain attached after the move.
-
-`ApplyChangeSet` is the catalog persistence primitive, not the full move
-API surface by itself. In the step-1-to-step-3 foundation work it only
-needs to make rename state transitions durable (page identity, labels,
-directory index, backlinks). Step 4's service-layer cutover remains
-responsible for computing rewrite targets, rewriting affected page
-bodies, and shaping the public `rewrites` / `skipped` response payloads
-before it submits the resulting changeset to the catalog. The catalog
-model changes *how* the service persists those effects, not *whether*
-clients observe them.
-
-### 8.4 Concurrency
-
-The in-process `repoLock` (`internal/gitstore/store.go:36-60`) is removed
-for wiki writes. Serialization is purely SQL-level on the
-`wiki_repo_heads` row. On CAS failure the service retries from a fresh
-planning snapshot: reload touched pages plus candidate rewrite targets,
-recompute prefix-collision checks, recompute `rewrites` and `skipped`,
-and then re-validate `IfMatch` on each change. Bounded retry (default 5).
-
-### 8.5 Cost budget
-
-| Step | Single page | 1,000 pages |
-|---|---|---|
-| Validate + folding | < 1 ms | < 50 ms |
-| Pre-read SELECT | ~5 ms | ~15 ms |
-| Blob upload (parallel) | ~10 ms | ~200 ms |
-| SQL txn (incl. outbox) | ~10–15 ms | ~300–500 ms |
-| **Total** | **~25 ms** | **~1 s** |
-
-## 9. Read Paths
-
-| Operation | Implementation | Complexity |
-|---|---|---|
-| `ListWikiPages` | `wiki_pages` ∪ `wiki_dir_index` range scan; label join | O(returned rows) |
-| `GetWikiPage` (HEAD) | `wiki_pages` PK; inline body or 1 S3 GET | O(1) |
-| `GetWikiPage` @rev | `wiki_page_revisions` via `(page_id, commit_sha)`; inline body or 1 S3 GET | O(1) |
-| `ListWikiPageHistory` | `wiki_page_revisions(page_id, ...)` range | O(returned rows) |
-| `ListWikiBacklinks` | `wiki_page_links` via `idx_dst_resolved` | O(returned rows) |
-| Search | Existing `wiki_search_documents` (no change) | unchanged |
-| Wiki "git log" view | `wiki_changesets(repo_id, ...)` range | O(returned rows) |
-| Prefix collision check | `wiki_dir_index` range | O(depth) |
-
-ETag = hex(`wiki_pages.head_blob_sha`) for page reads; `If-None-Match`
-short-circuits at the catalog lookup. `head_changeset_id` remains an
-internal change detector; this RFC does not claim new collection-level
-HTTP ETags on routes that do not emit them today.
-
-Renamed slugs do not gain new redirect or alias-read semantics in this
-RFC. Compatibility means the post-move read contract stays aligned with
-`main`, while the move endpoints continue to surface the destination slug
-and rewrite results explicitly.
-
-No request path forks `git`.
-
-## 10. Open Architectural Decisions
-
-### 10.A Git protocol façade
-
-Out of scope for this RFC; deferred to "Wiki Git Protocol Façade" RFC.
-Verified that today the route `/{owner}/{repo}.git/info/refs`
-(`internal/router/router.go:212`) handles a hypothetical
-`clone owner/repo.wiki.git`, but `internal/githttp/handler.go:100`
-requires a `db.Repository` row that wiki repos don't have. This scope
-decision is based on source inspection, not production telemetry; if
-later evidence shows active clients on that path, the deferred façade RFC
-must move ahead of read/write cutover.
-
-When that follow-up RFC lands, the design will:
-
-- Materialize a per-wiki bare repo lazily as a protocol cache (not SOT).
-- Reuse `git-upload-pack` / `git-receive-pack` rather than re-implementing
-  the wire protocol.
-- Route push ingestion through `ApplyChangeSet` (parse pack →
-  `[]Change`).
-- Use immutable per-changeset `synth_commit_sha` once a clone observes it.
-
-### 10.B SHA-1 vs SHA-256
-
-This RFC stays on SHA-1 blob hashes to preserve REST `If-Match`
-compatibility (`internal/service/wiki.go:1230`). Migration to SHA-256
-follows git's own timeline and would be a separate RFC.
-
-### 10.C Soft-delete vs hard-delete
-
-`wiki_pages.deleted_at` retains the row; revision history retained.
-`wiki_blob_refs` decrements on delete; blobs GC normally. Default UI/API
-behavior excludes deleted pages. Hard-delete is an admin operation that
-purges revisions and aliases as well.
-
-## 11. Quotas, ACLs, Abuse
-
-| Limit | Default | Enforcement point |
-|---|---|---|
-| `MAX_BLOB_BYTES` | 25 MB | step 5 (blob upload) |
-| `MAX_BODY_INLINE_BYTES` | 4 KB | step 5 |
-| `MAX_CHANGES_PER_CHANGESET` | 10,000 | step 2 |
-| `MAX_BYTES_PER_CHANGESET` | 200 MB | step 2 |
-| `MAX_PAGES_PER_WIKI` (soft) | 10⁷ | nightly job + ingress warn |
-| `MAX_OUTLINKS_PER_PAGE` | 5,000 | step 1 (markdown parse) |
-| `WIKI_WRITE_QPS_PER_REPO` | 100/s | service-layer token bucket |
-
-All operations require resolution through `repo_id` and the existing repo
-permission check (`service.HasRepoAccess`); the catalog never bypasses it.
-The current `getRepoBase` / `requireRepoPermission` gating in the service
-layer stays unchanged in shape, only its body changes from "ensure git
-repo exists" to "ensure wiki catalog row exists."
-
-Pack-parsing safety lives in the future façade RFC.
-
-## 12. Storage Capacity
-
-| Table | Row count (10⁹ pages) | Approx. size incl. indexes |
-|---|---|---|
-| `wiki_pages` | 1 × 10⁹ | 250–400 GB |
-| `wiki_page_revisions` | ~10 × 10⁹ | ~1.2 TB |
-| `wiki_dir_index` | ≤ 1.5 × 10⁹ | 150–250 GB |
-| `wiki_page_links` | ~10 × 10⁹ | ~500 GB |
-| `wiki_blob_refs` | 0.5–0.8 × 10⁹ (post-dedup) | < 100 GB |
-| Blob bytes (S3, zstd) | — | ~3 PB |
-
-Catalog total dominated by `wiki_page_revisions`; partition pruning by
-`page_id` keeps individual partitions on the order of 5 × 10⁷ rows. Blob
-storage is the dominant cost regardless of architecture.
-
-## 13. Migration Plan
-
-Each phase is independently shippable, independently revertible via a
-per-repo feature flag, and gated on SLO + correctness metrics before
-promotion.
-
-| Phase | Change | Revert mechanism | Validation gate |
-|---|---|---|---|
-| M0 | DDL: create all tables. Freeze `slug_ci_v1` function + golden test (`internal/service/wiki.go:321` baseline). No traffic changes. | DROP tables | DDL applied to all environments; golden tests green |
-| M1 | Dual-write: after each existing wiki git write, async upsert catalog (best-effort, alarms only), including immutable revision rows and commit identities for new traffic. | Flip flag | < 0.01% catalog/git drift over 24h on shadow audit job |
-| M2 | One-shot backfill: per-repo job replays full git history, not just `HEAD`, into `wiki_changesets` and `wiki_page_revisions`, then rebuilds current-page state. Resumable, rate-limited. | Drop partitions | Per-repo current rows match git tree; historical commit count and sampled `?ref=` reads match git for pre-cutover content |
-| M3 | Switch reads to catalog (`ListWikiPages`, `GetWikiPage`, `GetWikiPage?ref=`, history, search, labels, backlinks, move/prefix-move parity checks, prefix-collision), per-repo flag. Shadow read for first 10% repos, compare responses byte-by-byte (timestamps normalized). | Flag flip per repo | List P99 < 100 ms; diff rate < 0.001% |
-| M4 | Switch writes to `ApplyChangeSet` (still dual-writing the legacy git repo). | Flag flip | PUT P99 < 200 ms; no missing data on audit; move/search/label parity checks stay green |
-| M5 | Stop dual-writing the legacy git repo. Wiki bare repos move to a "frozen" state, retained for one quarter for forensics. | Re-enable dual-write (requires re-sync) | One quarter of clean operation, no rollback events |
-| M6 | Decommission legacy bare repos. | — | — |
-
-Two safety properties hold across all phases:
-
-1. **`head_blob_sha` byte-equality**: catalog and (during dual-write) git
-   always agree on the SHA-1 of each page's body. The audit job compares
-   them continuously during M1–M4.
-2. **REST API contract is invariant**: every URL/JSON shape/status
-   code/`If-Match` header semantics works identically before and after
-   each phase, including `GET ?ref=<sha>`, history commit SHAs, search,
-   labels, single-page move, and bulk prefix-move responses. Existing
-   acceptance tests in `cli/acceptance/` and `e2e/` must continue to
-   pass.
-
-## 14. Rollback Strategy
-
-- M0–M2 are additive; revert by dropping tables / flipping flags.
-- M3 read-side rollback: per-repo flag flip restores git-backed reads in
-  seconds.
-- M4 write-side rollback: per-repo flag flip restores git-backed writes;
-  catalog writes continue in dual-write mode and may be replayed back to
-  git via a one-time tooling script (drift-since-cutover bounded by
-  changesets timestamped after the flag flip).
-- M5 is the irreversible point. Decision gate: at least one quarter of
-  stable operation in M4 with no rollback events, plus migration team
-  approval.
-
-## 15. Observability and SLOs
-
-Service-level objectives (per-repo P99):
-
-- `ListWikiPages` < 100 ms (independent of page count up to 10⁶).
-- `GetWikiPage` < 50 ms.
-- `PutWikiPage` < 200 ms.
-- Batch 1,000-page `ApplyChangeSet` < 5 s.
-- Catalog/git drift during M1–M4: < 0.01% pages with mismatched
-  `head_blob_sha`.
-
-Required metrics (Prometheus / TiDB dashboards):
-
-- `wiki_apply_changeset_latency_seconds{op, source}`
-- `wiki_apply_changeset_cas_retries_total`
-- `wiki_blob_upload_latency_seconds{outcome}`
-- `wiki_dual_write_drift_total`
-- `wiki_pages_per_repo` (distribution; alert on growth approaching 10⁷)
-- `wiki_blob_refs_orphan_total` (GC backlog)
-- `wiki_outbox_lag_seconds`
-
-Required logs (slog, structured):
-
-- Every `ApplyChangeSet` invocation: `changeset_id`, `repo_id`,
-  `page_count`, `source`, latency, CAS retries.
-- Every blob upload failure with sha and size.
-- Every prefix-collision rejection (to detect bad client patterns).
-
-## 16. Testing Strategy
-
-Per `docs/test-strategy.md`, with these specifics:
-
-1. **`slug_ci_v1` golden tests.** Pure-function inputs/outputs; runs in
-   every CI. Locks behavior forever.
-2. **Catalog write semantics**: per-package tests on
-   `WikiCatalog.ApplyChangeSet` for each conflict case (`IfMatch`
-   mismatch, prefix collision, rename dest taken, delete missing) and OCC
-   retry behavior under concurrent CAS losers.
-3. **Cross-store invariant tests** (M1–M4 phase): a test harness that
-   performs random wiki operations against both stores and asserts
-   `head_blob_sha` agreement after each.
-4. **Performance regression tests**: a synthetic 10⁴-page wiki where
-   `ListWikiPages` must complete in < 50 ms; failure breaks CI.
-5. **REST acceptance** (`cli/acceptance/`): all existing wiki cases run
-   untouched; any diff in headers/status/payload is a blocker.
-   Explicit parity coverage must include `GetWikiPage?ref=<sha>`,
-   `ListWikiPageHistory`, wiki search, wiki labels, `MoveWikiPage`, and
-   `MoveWikiPagePrefix` response fields (`moved`, `rewrites`, `skipped`,
-   `commit`).
-6. **E2E** (`e2e/*.sh`): add `wiki-batch-upsert.sh` and
-   `wiki-rename-prefix-large.sh`.
-7. **Chaos**: kill the service between blob upload and SQL commit;
-   verify no dangling pages and GC reclaims the orphan blob within the
-   configured TTL.
-
-## 17. Alternatives Considered
-
-**A. Keep git as SOT, add only a denormalized catalog projection.**
-Rejected. The page-write fork count and `read-tree` / `write-tree` cost
-remain; only reads improve. Cannot meet the write SLO at 10⁶+ pages.
-
-**B. Replace per-repo mutex with a sharded lock; keep git writes.**
-Rejected. Per-write fork count and tree-IO costs dominate; lock removal
-does not change them.
-
-**C. Migrate to a different git implementation (libgit2 / go-git
-in-process).** Rejected as primary solution. Removes fork overhead
-(~30%) but not the algorithmic O(N) per write and O(N²) for the metadata
-join. Useful inside the future façade but not on the request path.
-
-**D. Move only blobs to object storage, keep git tree as catalog.**
-Rejected. The tree itself is the slow part. Decoupling blobs without
-decoupling the tree saves IO but not CPU.
-
-**E. SQLite-per-wiki instead of TiDB.** Rejected. Operational complexity
-at 10⁹ pages across many tenants; cross-wiki search and dedup become
-hard.
-
-The chosen approach (SOT = TiDB catalog, blobs = object CAS, optional git
-façade) is the only design surveyed that satisfies all four scaling axes
-(per-wiki size, per-wiki write QPS, total system size, REST/Git
-compatibility).
-
-## 18. Open Questions
-
-1. **Object storage choice** (S3 vs MinIO vs internal blob service): not
-   blocking the RFC; resolved during M0 implementation.
-2. **`MAX_PAGES_PER_WIKI`** soft limit value (currently proposed 10⁷):
-   needs product input before M3 ramp.
-3. **Alias retention TTL**: if internal alias rows are kept for rollback
-   or audit, 90 days is proposed; product-facing redirect behavior is out
-   of scope for this RFC.
-4. **`Idempotency-Key` header**: introduce now or in a later iteration?
-   RFC assumes optional; safe to defer.
-5. **Cross-wiki link semantics**: currently links are intra-wiki only; no
-   schema change here, but future extension would add `dst_repo_id` to
-   `wiki_page_links`.
-
-## 19. Code References (verification trail)
-
-The verification round that informed this RFC inspected the following
-code locations. Reviewers can audit each claim against the cited line.
-
-| Claim | File:Line |
-|---|---|
-| 1 commit per page, ≥13 git forks per PUT | `internal/gitstore/content.go:586` `writeFile` |
-| `ListWikiPages` triple-walks the tree | `internal/service/wiki.go:735` |
-| `LatestCommitsForPathsAtRef` is O(commits × paths) | `internal/gitstore/search.go:356` |
-| Full-tree scan on every write for prefix collision | `internal/service/wiki.go:1712` |
-| Per-repo `sync.Mutex` serializes writes | `internal/gitstore/store.go:36-60` |
-| Wiki repos are sibling bare repos, not DB rows | `internal/service/wiki.go:200, 725-730`; verified absence in `internal/githttp/handler.go:100` |
-| Search/backlinks/labels already have non-git persistence pieces today | `internal/service/wiki_search.go:527` (goroutine); `internal/service/wiki.go:460` (in-memory cache); `internal/db/models_wiki_label.go` (DB table) |
-| `If-Match` checks against blob SHA (not commit SHA) | `internal/service/wiki.go:1230` |
-| Write-time readable-slug validation and lookup canonicalization are separate behaviors | `internal/service/wiki.go:205-337`, `wiki.go:26-30` |
-| Move/prefix-move rewrites and label remap are part of today's contract | `internal/service/wiki.go:1344-1455`, `internal/service/wiki.go:1490-1708` |
-| Canonical lookup function (`slug_ci_v1` baseline) | `internal/service/wiki.go:321-337` |
-| Existing multi-mutation primitive available for transitional reuse | `internal/gitstore/commit_files.go:19` |
-
-## 20. Out-of-scope Adjacent Work
-
-- Wiki Git Protocol Façade — separate RFC.
-- Multi-region replication of wiki catalog — separate RFC.
-- Wiki content security policy / sanitization improvements — separate
-  RFC.
-- Migration tooling productization (UX, dashboards, throttling) —
-  engineering work item, not part of this design.
-
-## 21. Acceptance Checklist for This RFC
-
-- [ ] DDL reviewed by DBA / TiDB team for partition layout and online-DDL
-      feasibility.
-- [ ] REST contract diff confirmed empty by API owners.
-- [ ] Slug canonicalization golden tests landed before M0.
-- [ ] Per-phase SLO dashboards exist and are alarmed before M1.
-- [ ] Capacity model reviewed against current TiDB cluster headroom.
-- [ ] Migration rollback rehearsal performed in staging at the end of
-      each phase.
+The current production implementation remains documented in
+[`../architecture.md`](../architecture.md) and the component references under
+[`../architecture/`](../architecture/).
+
+## Summary
+
+The repo has already approved the architectural direction: the sibling bare
+wiki git repository becomes the only durable source of truth, while TiDB keeps
+rebuildable derived indexes for listing, labels, backlinks, search, and
+reconciler progress. In the target state, wiki label assignments must also come
+from git-tracked wiki metadata rather than standalone relational writes so the
+label index can be rebuilt from git alone.
+
+What remains open is execution discipline. This document defines the delivery
+slices, repo touch points, open decisions, and acceptance gates for landing the
+rewrite without drifting away from the current service and REST contracts.
+
+## Delivery Principles
+
+- Keep the current wiki APIs stable until a cutover step explicitly changes a
+  route contract.
+- Treat git as the durable authority for page content and history as soon as
+  the new path exists; do not add new catalog-authoritative features.
+- Land small, reviewable slices that preserve the current test pyramid:
+  package/service first, router integration second, acceptance/e2e last.
+- Keep every TiDB wiki index rebuildable from git history and current trees.
+- Define a git-tracked source for wiki labels before cutover; do not leave
+  label assignments as standalone catalog-only state.
+- Prefer explicit feature flags and provisional handlers over partial in-place
+  rewrites of the current wiki service.
+
+## Planned Delivery Slices
+
+### Slice 0: Design and Contract Baseline
+
+Goal: make the approved direction explicit in repo docs before implementation.
+
+Expected changes:
+
+- `docs/architecture/wiki-storage-v2.md` as the target architecture baseline.
+- This implementation-plan document.
+- Contract notes in `docs/architecture/service.md`,
+  `docs/architecture/rest.md`, and `docs/module-contracts.md` that explain
+  which current wiki behaviors are transitional and which must survive cutover.
+
+Acceptance:
+
+- The target authority split is documented once and referenced consistently.
+- No current component doc implies that the old catalog-first direction is the
+  future implementation baseline.
+
+### Slice 1: Storage and Reconciler Skeleton
+
+Goal: create the new internal seams without cutting production traffic.
+
+Expected code areas:
+
+- New git-backed wiki package or subpackage for path mapping, write planning,
+  ref-CAS, and reconciler contracts.
+- New TiDB models/migrations for derived indexes and reconciler state.
+- Worker loop or service entrypoints for index catch-up.
+
+Acceptance:
+
+- `db.Migrate` can create the new derived tables safely.
+- Service/package tests cover path mapping, slug validation, ref-CAS retry, and
+  reconciler idempotence.
+- No existing `/wiki/*` route changes behavior yet.
+
+### Slice 2: Provisional V2 Service and Routes
+
+Goal: expose the new git-backed flow behind provisional handlers and feature
+flags so it can be tested without replacing the current API surface.
+
+Expected code areas:
+
+- New service entrypoints for git-backed read/write/list/tree/history flows.
+- Git-tracked label metadata support so label assignment writes become part of
+  the durable wiki history before cutover.
+- Provisional REST routes, for example `/wiki2/*` or gated `/wiki/*` variants.
+- Focused integration tests through `internal/testharness`.
+
+Acceptance:
+
+- Git-backed CRUD, history, tree, labels, backlinks, and search integration
+  tests pass under the provisional path.
+- Current `/wiki/*` clients remain unaffected when the feature flag is off.
+- Label assignment rebuilds from git-tracked metadata with no dependency on the
+  legacy `wiki_page_labels` rows as a source of truth.
+
+### Slice 3: Migration Tooling and Verification
+
+Goal: make cutover operable and measurable before traffic moves.
+
+Expected code areas:
+
+- One-shot migration command for importing current catalog state into git and
+  building derived indexes from git.
+- Verification helpers that compare page content, flat list results, labels,
+  backlinks, and search parity.
+- Metrics and logs for reconciler lag, rebuild duration, and migration failures.
+
+Acceptance:
+
+- A wiki can be migrated and verified end-to-end in a test environment.
+- Failures are observable and rollback steps are documented.
+
+### Slice 4: Route Cutover
+
+Goal: switch production wiki traffic to the git-backed path.
+
+Expected code areas:
+
+- Route wiring from the old handlers to the new service implementation.
+- Removal of obsolete migration/projection logic from the hot path.
+- Updated acceptance and e2e coverage for the final route contract.
+
+Acceptance:
+
+- Existing REST wiki workflows still pass unless a separately approved route
+  contract change says otherwise.
+- `go test ./...`, relevant router/service suites, and wiki e2e coverage pass.
+
+### Slice 5: Cleanup
+
+Goal: delete the old catalog-authority implementation after a verification
+window.
+
+Expected code areas:
+
+- Remove superseded wiki catalog code and stale repair/materialization paths.
+- Keep only the derived index schema and rebuild tooling that the new design
+  still requires.
+
+Acceptance:
+
+- No dead wiki catalog-authority code remains in `internal/service` or
+  `internal/db`.
+- Docs describe the current implementation rather than the migration state.
+
+## Repo Touch Points
+
+The rewrite will span these primary areas:
+
+- `internal/service/wiki*.go`: current wiki read/write/list/history/move/search
+  logic and its eventual replacement.
+- `internal/rest/handlers_wiki.go`: route contract, transport validation, and
+  response-shape preservation or controlled redesign.
+- `internal/router/router.go`: provisional routes, cutover wiring, and any new
+  tree endpoints.
+- `internal/db/models_wiki_*.go` and migration wiring in `main.go`.
+- `internal/testharness` plus `internal/rest/*wiki*` and
+  `internal/service/*wiki*` tests.
+- `docs/architecture*.md`, `docs/module-contracts.md`, and operations docs.
+
+## Open Decisions Before Cutover
+
+- Whether `wiki_page_history` is required for acceptable history endpoint
+  latency or whether raw git history is sufficient.
+- Whether migration preserves historical revisions or establishes a clean git
+  history boundary at cutover.
+- Which git-tracked metadata format becomes the durable source for wiki labels
+  and how it remains compatible with the existing label REST contract.
+- Whether direct pushes to the bare wiki repo are rejected outright or validated
+  through hooks.
+- Whether `/wiki/pages` and `/wiki/tree` keep the current compatible shapes or
+  intentionally adopt a cleaner V2 contract in the same cutover.
+- How read-your-writes behavior is guaranteed for endpoints that currently
+  assume synchronous visibility.
+
+## Required Verification
+
+Every implementation slice that changes code must follow the repo self-review
+standard and explicitly check:
+
+- docs alignment against `docs/architecture.md`,
+  `docs/module-contracts.md`, and `docs/test-strategy.md`
+- invalid input, permission failure, not-found/conflict, and retry behavior
+- targeted tests for the touched wiki packages plus `go test ./...`
+
+Cutover-capable slices additionally require:
+
+- production-like latency measurements for `git cat-file`, `git ls-tree`, and
+  `git log -- <path>`
+- verification that git-derived indexes can be rebuilt without data loss
+- explicit acceptance and e2e coverage for CRUD, rename, prefix move, search,
+  labels, backlinks, history, and compaction before cutover
+- rollback steps and operator evidence documented in the same change set
+
+## Exit Criteria
+
+Issue #1488 is complete only when all of the following are true:
+
+- git is the only durable wiki content authority
+- list/search/label/backlink/history acceleration data in TiDB is rebuildable
+  from git
+- current or intentionally redesigned REST contracts are documented and tested
+- migration, rebuild, rollback, and lag-monitoring procedures exist in `docs/`
+- obsolete catalog-authority code has been removed after the verification window

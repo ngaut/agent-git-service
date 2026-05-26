@@ -46,6 +46,7 @@ accepted direction, or incremental work that has not fully landed yet.
 
 - [Production Deployment](production-deployment.md)
 - [CI](ci.md)
+- [Wiki Storage V2 Cutover Checklist](operations/wiki-storage-v2-cutover.md)
 - [Token Lifecycle Test Coverage](testing/token-lifecycle.md)
 - [Dependency Licensing](governance/dependency-licensing.md)
 - [Monitoring Assets](monitoring/README.md)
