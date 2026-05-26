@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"gh-server/internal/db"
 	"gh-server/internal/service"
@@ -112,6 +113,160 @@ func TestListIssuesForRESTOmitsBodyOnlyOnRESTPath(t *testing.T) {
 	}
 	if restIssues[0].Body != "" {
 		t.Fatalf("ListIssuesForREST: got body %q, want empty body", restIssues[0].Body)
+	}
+}
+
+func TestListIssuesForRESTPagePaginatesBeyondDefaultListLimit(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	setupRepoForTest(t, svc, "pageuser", "pagerepo")
+	repo, err := svc.GetRepo(ctx, "pageuser/pagerepo")
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	var author db.User
+	if err := svc.DB.First(&author, "login = ?", "pageuser").Error; err != nil {
+		t.Fatalf("load author: %v", err)
+	}
+
+	base := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	issues := make([]db.Issue, 1005)
+	for i := range issues {
+		number := i + 1
+		created := base.Add(time.Duration(number) * time.Second)
+		issues[i] = db.Issue{
+			Number:       number,
+			RepositoryID: repo.ID,
+			Title:        fmt.Sprintf("Issue %04d", number),
+			Body:         "body",
+			State:        db.StateOpen,
+			AuthorID:     author.ID,
+			CreatedAt:    created,
+			UpdatedAt:    created,
+		}
+	}
+	if err := svc.DB.CreateInBatches(&issues, 200).Error; err != nil {
+		t.Fatalf("seed issues: %v", err)
+	}
+
+	page, err := svc.ListIssuesForRESTPage(ctx, service.IssueListPageFilter{
+		RepoFullName:  repo.FullName,
+		State:         db.StateOpen,
+		Page:          11,
+		PerPage:       100,
+		OmitIssueBody: true,
+	})
+	if err != nil {
+		t.Fatalf("ListIssuesForRESTPage: %v", err)
+	}
+	if page.Total != 1005 {
+		t.Fatalf("total = %d, want 1005", page.Total)
+	}
+	if len(page.Items) != 5 {
+		t.Fatalf("page length = %d, want 5", len(page.Items))
+	}
+	for i, item := range page.Items {
+		if item.Issue == nil {
+			t.Fatalf("item %d is not an issue: %#v", i, item)
+		}
+		wantNumber := 5 - i
+		if item.Issue.Number != wantNumber {
+			t.Fatalf("item %d number = %d, want %d", i, item.Issue.Number, wantNumber)
+		}
+		if item.Issue.Body != "" {
+			t.Fatalf("item %d body = %q, want omitted body", i, item.Issue.Body)
+		}
+	}
+}
+
+func TestListIssuesForRESTPageSortsCommentsAcrossIssuesAndPRs(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	setupRepoForTest(t, svc, "commentpage", "repo")
+	repo, err := svc.GetRepo(ctx, "commentpage/repo")
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	var author db.User
+	if err := svc.DB.First(&author, "login = ?", "commentpage").Error; err != nil {
+		t.Fatalf("load author: %v", err)
+	}
+
+	base := time.Date(2026, 5, 24, 11, 0, 0, 0, time.UTC)
+	seedIssues := []db.Issue{
+		{Number: 1, RepositoryID: repo.ID, Title: "one comment", State: db.StateOpen, AuthorID: author.ID, CreatedAt: base, UpdatedAt: base},
+		{Number: 2, RepositoryID: repo.ID, Title: "three comments", State: db.StateOpen, AuthorID: author.ID, CreatedAt: base.Add(time.Second), UpdatedAt: base.Add(time.Second)},
+	}
+	if err := svc.DB.Create(&seedIssues).Error; err != nil {
+		t.Fatalf("seed issues: %v", err)
+	}
+	pr := db.PullRequest{
+		Number:           3,
+		RepositoryID:     repo.ID,
+		HeadRepositoryID: repo.ID,
+		Title:            "two comments",
+		State:            db.StateOpen,
+		AuthorID:         author.ID,
+		CreatedAt:        base.Add(2 * time.Second),
+		UpdatedAt:        base.Add(2 * time.Second),
+	}
+	if err := svc.DB.Create(&pr).Error; err != nil {
+		t.Fatalf("seed pr: %v", err)
+	}
+	var comments []db.IssueComment
+	for issueNumber, count := range map[int]int{1: 1, 2: 3, 3: 2} {
+		for i := 0; i < count; i++ {
+			comments = append(comments, db.IssueComment{
+				RepositoryID: repo.ID,
+				IssueNumber:  issueNumber,
+				Body:         db.LargeText(fmt.Sprintf("comment %d", i)),
+				AuthorID:     author.ID,
+			})
+		}
+	}
+	if err := svc.DB.Create(&comments).Error; err != nil {
+		t.Fatalf("seed comments: %v", err)
+	}
+
+	page, err := svc.ListIssuesForRESTPage(ctx, service.IssueListPageFilter{
+		RepoFullName: repo.FullName,
+		State:        db.StateOpen,
+		Sort:         "comments",
+		Direction:    "desc",
+		Page:         1,
+		PerPage:      3,
+	})
+	if err != nil {
+		t.Fatalf("ListIssuesForRESTPage: %v", err)
+	}
+	if page.Total != 3 {
+		t.Fatalf("total = %d, want 3", page.Total)
+	}
+	if len(page.Items) != 3 {
+		t.Fatalf("page length = %d, want 3", len(page.Items))
+	}
+	wantNumbers := []int{2, 3, 1}
+	wantComments := []int64{3, 2, 1}
+	for i, item := range page.Items {
+		var number int
+		switch {
+		case item.Issue != nil:
+			number = item.Issue.Number
+		case item.PullRequest != nil:
+			number = item.PullRequest.Number
+		default:
+			t.Fatalf("item %d has no issue or PR", i)
+		}
+		if number != wantNumbers[i] || item.Comments != wantComments[i] {
+			t.Fatalf("item %d = number %d comments %d, want number %d comments %d", i, number, item.Comments, wantNumbers[i], wantComments[i])
+		}
+	}
+	if page.Items[1].PullRequest == nil {
+		t.Fatalf("second item should be the PR")
 	}
 }
 

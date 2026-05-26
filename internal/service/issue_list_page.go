@@ -1,0 +1,403 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"gh-server/internal/db"
+)
+
+// IssueListPageFilter groups DB-pageable filters for the REST issues list.
+type IssueListPageFilter struct {
+	RepoFullName  string
+	State         string
+	Labels        string
+	Sort          string
+	Direction     string
+	Milestone     string
+	Since         string
+	Page          int
+	PerPage       int
+	OmitIssueBody bool
+}
+
+// IssueListPageItem is an ordered issue-or-PR row returned by ListIssuesForRESTPage.
+type IssueListPageItem struct {
+	Issue       *db.Issue
+	PullRequest *db.PullRequest
+	Comments    int64
+}
+
+// IssueListPage is one REST issues page plus the total number of matching rows.
+type IssueListPage struct {
+	Items []IssueListPageItem
+	Total int64
+}
+
+type issueListPageRow struct {
+	Kind     string
+	ID       uint
+	Number   int
+	Comments int64
+}
+
+// ListIssuesForRESTPage returns one DB-paginated /issues page across issues and PRs.
+func (s *Service) ListIssuesForRESTPage(ctx context.Context, filter IssueListPageFilter) (IssueListPage, error) {
+	rep, err := s.GetRepo(ctx, filter.RepoFullName)
+	if err != nil {
+		return IssueListPage{}, err
+	}
+	normalized, err := normalizeIssueListPageFilter(filter)
+	if err != nil {
+		return IssueListPage{}, err
+	}
+	labelNames, labelIDsByName, noLabelResults, err := s.resolveIssueListPageLabelIDs(ctx, rep.ID, filter.Labels)
+	if err != nil {
+		return IssueListPage{}, err
+	}
+	if noLabelResults {
+		return IssueListPage{}, nil
+	}
+
+	countSQL, countArgs := buildIssueListPageQuery(rep.ID, normalized, labelNames, labelIDsByName, false, false)
+	var total int64
+	if err := s.DBForCtx(ctx).Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
+		return IssueListPage{}, err
+	}
+	if total == 0 {
+		return IssueListPage{}, nil
+	}
+
+	pageSQL, pageArgs := buildIssueListPageQuery(rep.ID, normalized, labelNames, labelIDsByName, true, normalized.sort == "comments")
+	var rows []issueListPageRow
+	if err := s.DBForCtx(ctx).Raw(pageSQL, pageArgs...).Scan(&rows).Error; err != nil {
+		return IssueListPage{}, err
+	}
+	items, err := s.hydrateIssueListPageItems(ctx, rows, filter.OmitIssueBody)
+	if err != nil {
+		return IssueListPage{}, err
+	}
+	if err := s.countIssueListPageComments(ctx, items); err != nil {
+		return IssueListPage{}, err
+	}
+	return IssueListPage{Items: items, Total: total}, nil
+}
+
+type normalizedIssueListPageFilter struct {
+	state     string
+	sort      string
+	direction string
+	milestone string
+	since     *time.Time
+	page      int
+	perPage   int
+}
+
+func normalizeIssueListPageFilter(filter IssueListPageFilter) (normalizedIssueListPageFilter, error) {
+	state := strings.TrimSpace(filter.State)
+	if state == "" {
+		state = db.StateOpen
+	}
+	sortKey := strings.ToLower(strings.TrimSpace(filter.Sort))
+	switch sortKey {
+	case "", "created":
+		sortKey = "created"
+	case "updated", "comments":
+	default:
+		sortKey = "created"
+	}
+	direction := strings.ToLower(strings.TrimSpace(filter.Direction))
+	if direction != "asc" && direction != "desc" {
+		direction = "desc"
+	}
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	perPage := filter.PerPage
+	if perPage < 1 {
+		perPage = defaultListLimit
+	}
+	if perPage > defaultListLimit {
+		perPage = defaultListLimit
+	}
+	var since *time.Time
+	if rawSince := strings.TrimSpace(filter.Since); rawSince != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, rawSince)
+		if err != nil {
+			return normalizedIssueListPageFilter{}, fmt.Errorf("%w: since must be ISO 8601", ErrValidation)
+		}
+		since = &parsed
+	}
+	return normalizedIssueListPageFilter{
+		state:     state,
+		sort:      sortKey,
+		direction: direction,
+		milestone: strings.TrimSpace(filter.Milestone),
+		since:     since,
+		page:      page,
+		perPage:   perPage,
+	}, nil
+}
+
+func (s *Service) resolveIssueListPageLabelIDs(ctx context.Context, repoID uint, rawLabels string) ([]string, map[string][]uint, bool, error) {
+	labelNames := splitIssueListPageLabels(rawLabels)
+	if len(labelNames) == 0 {
+		return nil, nil, false, nil
+	}
+	wanted := make(map[string]struct{}, len(labelNames))
+	for _, name := range labelNames {
+		wanted[name] = struct{}{}
+	}
+	var labels []struct {
+		ID   uint
+		Name string
+	}
+	if err := s.DBForCtx(ctx).Model(&db.Label{}).
+		Select("id", "name").
+		Where("repository_id = ?", repoID).
+		Find(&labels).Error; err != nil {
+		return nil, nil, false, err
+	}
+	labelIDsByName := make(map[string][]uint, len(wanted))
+	for _, label := range labels {
+		key := strings.ToLower(label.Name)
+		if _, ok := wanted[key]; ok {
+			labelIDsByName[key] = append(labelIDsByName[key], label.ID)
+		}
+	}
+	for _, name := range labelNames {
+		if len(labelIDsByName[name]) == 0 {
+			return labelNames, labelIDsByName, true, nil
+		}
+	}
+	return labelNames, labelIDsByName, false, nil
+}
+
+func splitIssueListPageLabels(raw string) []string {
+	parts := strings.Split(raw, ",")
+	names := make([]string, 0, len(parts))
+	for _, part := range parts {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func buildIssueListPageQuery(repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, paginate bool, includeComments bool) (string, []any) {
+	issueSQL, issueArgs := buildIssueListPageEntitySQL("issue", "issues", repoID, filter, labelNames, labelIDsByName, includeComments)
+	prSQL, prArgs := buildIssueListPageEntitySQL("pr", "pull_requests", repoID, filter, labelNames, labelIDsByName, includeComments)
+	args := append(issueArgs, prArgs...)
+	unionSQL := issueSQL + " UNION ALL " + prSQL
+	if !paginate {
+		return "SELECT COUNT(*) FROM (" + unionSQL + ") AS combined", args
+	}
+	sortColumn := "created_at"
+	switch filter.sort {
+	case "updated":
+		sortColumn = "updated_at"
+	case "comments":
+		sortColumn = "comments"
+	}
+	direction := strings.ToUpper(filter.direction)
+	offset := (filter.page - 1) * filter.perPage
+	args = append(args, filter.perPage, offset)
+	return fmt.Sprintf(
+		"SELECT kind, id, number, comments FROM (%s) AS combined ORDER BY %s %s, number %s LIMIT ? OFFSET ?",
+		unionSQL, sortColumn, direction, direction,
+	), args
+}
+
+func buildIssueListPageEntitySQL(kind, table string, repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, includeComments bool) (string, []any) {
+	where := []string{table + ".repository_id = ?"}
+	args := []any{repoID}
+	if table == "issues" {
+		if filter.state != "all" {
+			where = append(where, table+".state = ?")
+			args = append(args, filter.state)
+		}
+	} else {
+		switch filter.state {
+		case db.StateClosed:
+			where = append(where, "("+table+".state = ? OR "+table+".merged = ?)")
+			args = append(args, db.StateClosed, true)
+		case "all":
+		default:
+			where = append(where, table+".state = ? AND "+table+".merged = ?")
+			args = append(args, db.StateOpen, false)
+		}
+	}
+	if filter.since != nil {
+		where = append(where, table+".updated_at >= ?")
+		args = append(args, *filter.since)
+	}
+	where, args = appendIssueListPageMilestoneWhere(where, args, table, repoID, filter.milestone)
+	where, args = appendIssueListPageLabelWhere(where, args, table, labelNames, labelIDsByName)
+
+	commentsExpr := "0"
+	if includeComments {
+		commentsExpr = fmt.Sprintf(
+			"(SELECT COUNT(*) FROM issue_comments ic WHERE ic.repository_id = %s.repository_id AND ic.issue_number = %s.number)",
+			table, table,
+		)
+	}
+	return fmt.Sprintf(
+		"SELECT '%s' AS kind, %s.id AS id, %s.number AS number, %s.created_at AS created_at, %s.updated_at AS updated_at, %s AS comments FROM %s WHERE %s",
+		kind, table, table, table, table, commentsExpr, table, strings.Join(where, " AND "),
+	), args
+}
+
+func appendIssueListPageMilestoneWhere(where []string, args []any, table string, repoID uint, rawMilestone string) ([]string, []any) {
+	milestone := strings.ToLower(strings.TrimSpace(rawMilestone))
+	switch milestone {
+	case "":
+		return where, args
+	case "*":
+		return append(where, table+".milestone_id IS NOT NULL"), args
+	case "none":
+		return append(where, table+".milestone_id IS NULL"), args
+	default:
+		if num, err := strconv.Atoi(rawMilestone); err == nil {
+			where = append(where, table+".milestone_id IN (SELECT id FROM milestones WHERE repository_id = ? AND (number = ? OR LOWER(title) = LOWER(?)))")
+			args = append(args, repoID, num, rawMilestone)
+			return where, args
+		}
+		where = append(where, table+".milestone_id IN (SELECT id FROM milestones WHERE repository_id = ? AND LOWER(title) = LOWER(?))")
+		args = append(args, repoID, rawMilestone)
+		return where, args
+	}
+}
+
+func appendIssueListPageLabelWhere(where []string, args []any, table string, labelNames []string, labelIDsByName map[string][]uint) ([]string, []any) {
+	if len(labelNames) == 0 {
+		return where, args
+	}
+	labelTable := "issue_labels"
+	labelFK := "issue_id"
+	if table == "pull_requests" {
+		labelTable = "pr_labels"
+		labelFK = "pull_request_id"
+	}
+	for _, labelName := range labelNames {
+		ids := labelIDsByName[labelName]
+		placeholders := make([]string, 0, len(ids))
+		for _, id := range ids {
+			placeholders = append(placeholders, "?")
+			args = append(args, id)
+		}
+		where = append(where, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM %s labels_filter WHERE labels_filter.%s = %s.id AND labels_filter.label_id IN (%s))",
+			labelTable, labelFK, table, strings.Join(placeholders, ","),
+		))
+	}
+	return where, args
+}
+
+func (s *Service) hydrateIssueListPageItems(ctx context.Context, rows []issueListPageRow, omitIssueBody bool) ([]IssueListPageItem, error) {
+	issueIDs := make([]uint, 0, len(rows))
+	prIDs := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		switch row.Kind {
+		case "issue":
+			issueIDs = append(issueIDs, row.ID)
+		case "pr":
+			prIDs = append(prIDs, row.ID)
+		}
+	}
+
+	issuesByID := make(map[uint]db.Issue, len(issueIDs))
+	if len(issueIDs) > 0 {
+		var issues []db.Issue
+		q := preloadIssue(s.DBForCtx(ctx))
+		if omitIssueBody {
+			q = q.Omit("Body")
+		}
+		if err := q.Where("issues.id IN ?", issueIDs).Find(&issues).Error; err != nil {
+			return nil, err
+		}
+		for _, issue := range issues {
+			issuesByID[issue.ID] = issue
+		}
+	}
+
+	prsByID := make(map[uint]db.PullRequest, len(prIDs))
+	if len(prIDs) > 0 {
+		var prs []db.PullRequest
+		if err := preloadPRFull(s.DBForCtx(ctx)).Where("pull_requests.id IN ?", prIDs).Find(&prs).Error; err != nil {
+			return nil, err
+		}
+		for _, pr := range prs {
+			prsByID[pr.ID] = pr
+		}
+	}
+
+	items := make([]IssueListPageItem, 0, len(rows))
+	for _, row := range rows {
+		switch row.Kind {
+		case "issue":
+			issue, ok := issuesByID[row.ID]
+			if !ok {
+				continue
+			}
+			items = append(items, IssueListPageItem{Issue: &issue, Comments: row.Comments})
+		case "pr":
+			pr, ok := prsByID[row.ID]
+			if !ok {
+				continue
+			}
+			items = append(items, IssueListPageItem{PullRequest: &pr, Comments: row.Comments})
+		}
+	}
+	return items, nil
+}
+
+func (s *Service) countIssueListPageComments(ctx context.Context, items []IssueListPageItem) error {
+	var issueNumbers []int
+	var issueRepoID uint
+	for _, item := range items {
+		if item.Issue == nil {
+			continue
+		}
+		issueNumbers = append(issueNumbers, item.Issue.Number)
+		if issueRepoID == 0 {
+			issueRepoID = item.Issue.RepositoryID
+		}
+	}
+	if len(issueNumbers) > 0 {
+		counts, err := s.CountIssueCommentsBatch(ctx, issueRepoID, issueNumbers)
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			if items[i].Issue != nil {
+				items[i].Comments = counts[items[i].Issue.Number]
+			}
+		}
+	}
+
+	var prNumbers []int
+	var prRepoID uint
+	for _, item := range items {
+		if item.PullRequest == nil {
+			continue
+		}
+		prNumbers = append(prNumbers, item.PullRequest.Number)
+		if prRepoID == 0 {
+			prRepoID = item.PullRequest.RepositoryID
+		}
+	}
+	if len(prNumbers) > 0 {
+		counts := s.CountPRCommentsBatch(ctx, prRepoID, prNumbers)
+		for i := range items {
+			if items[i].PullRequest != nil {
+				items[i].Comments = counts[items[i].PullRequest.Number]
+			}
+		}
+	}
+	return nil
+}

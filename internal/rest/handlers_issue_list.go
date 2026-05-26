@@ -59,6 +59,41 @@ func (d *Deps) ListIssues(w http.ResponseWriter, r *http.Request) {
 		respond.ValidationFailed(w, err.Error())
 		return
 	}
+	page, perPage := parsePagination(r)
+	if params.requiresLegacyIssueList() {
+		d.listIssuesLegacy(w, r, params, page, perPage)
+		return
+	}
+	result, err := d.Svc.ListIssuesForRESTPage(r.Context(), service.IssueListPageFilter{
+		RepoFullName:  params.repoFullName,
+		State:         params.state,
+		Labels:        params.labels,
+		Sort:          params.sort,
+		Direction:     params.direction,
+		Milestone:     params.milestone,
+		Since:         params.since,
+		Page:          page,
+		PerPage:       perPage,
+		OmitIssueBody: true,
+	})
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	setLinkHeader(w, r, d.Svc.BaseURL, int(result.Total), page, perPage)
+	items := issueListItemsFromPage(result.Items)
+	resolver := d.batchUserResolver(r.Context(), collectIssueListUserLogins(items))
+	assoc := d.issueListAuthorAssociationChecks(r.Context(), items)
+
+	out, err := d.buildIssueListResponse(r.Context(), items, resolver, assoc)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, 200, out)
+}
+
+func (d *Deps) listIssuesLegacy(w http.ResponseWriter, r *http.Request, params *issueListParams, page, perPage int) {
 	issues, prs, err := d.fetchIssuesAndPRs(r.Context(), params)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -78,15 +113,9 @@ func (d *Deps) ListIssues(w http.ResponseWriter, r *http.Request) {
 		sortDir = "desc"
 	}
 	sortIssueItems(items, sortKey, sortDir)
-	page, perPage := parsePagination(r)
 	paged := paginate(w, r, d.Svc.BaseURL, items, page, perPage)
 	resolver := d.batchUserResolver(r.Context(), collectIssueListUserLogins(paged))
-	var assoc transform.AuthorAssociationChecks
-	if len(issues) > 0 {
-		assoc = d.authorAssociationChecks(r.Context(), issues[0].Repository)
-	} else if len(prs) > 0 {
-		assoc = d.authorAssociationChecks(r.Context(), prs[0].Repository)
-	}
+	assoc := d.issueListAuthorAssociationChecks(r.Context(), paged)
 
 	out, err := d.buildIssueListResponse(r.Context(), paged, resolver, assoc)
 	if err != nil {
@@ -94,6 +123,49 @@ func (d *Deps) ListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, 200, out)
+}
+
+func (params *issueListParams) requiresLegacyIssueList() bool {
+	return params.assignee != "" || params.creator != "" || params.mentioned != ""
+}
+
+func issueListItemsFromPage(entries []service.IssueListPageItem) []issueListItem {
+	items := make([]issueListItem, 0, len(entries))
+	for i := range entries {
+		entry := entries[i]
+		if entry.Issue != nil {
+			items = append(items, issueListItem{
+				issue:     entry.Issue,
+				comments:  entry.Comments,
+				createdAt: entry.Issue.CreatedAt,
+				updatedAt: entry.Issue.UpdatedAt,
+				number:    entry.Issue.Number,
+			})
+			continue
+		}
+		if entry.PullRequest != nil {
+			items = append(items, issueListItem{
+				pr:        entry.PullRequest,
+				comments:  entry.Comments,
+				createdAt: entry.PullRequest.CreatedAt,
+				updatedAt: entry.PullRequest.UpdatedAt,
+				number:    entry.PullRequest.Number,
+			})
+		}
+	}
+	return items
+}
+
+func (d *Deps) issueListAuthorAssociationChecks(ctx context.Context, items []issueListItem) transform.AuthorAssociationChecks {
+	for _, item := range items {
+		if item.issue != nil {
+			return d.authorAssociationChecks(ctx, item.issue.Repository)
+		}
+		if item.pr != nil {
+			return d.authorAssociationChecks(ctx, item.pr.Repository)
+		}
+	}
+	return transform.AuthorAssociationChecks{}
 }
 
 func parseIssueListParams(r *http.Request) (*issueListParams, error) {
