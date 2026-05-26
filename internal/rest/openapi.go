@@ -296,12 +296,12 @@ func buildRESTOpenAPIPaths() map[string]any {
 			)...), response(200, "Wiki page history returned")),
 		},
 		"/api/v3/repos/{owner}/{repo}/wiki/compact": map[string]any{
-			"post": operation("compactWikiHistory", "Compact live wiki history into one synthetic admin revision per page.", auth(), jsonBody(false, map[string]any{
+			"post": operation("compactWikiHistory", "Temporarily disabled while the wiki catalog corruption incident is being contained and repaired.", auth(), jsonBody(false, map[string]any{
 				"before": stringSchema("Reserved for future bounded compaction support. Currently rejected when non-empty."),
 			}, nil), pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-			), response(202, "Wiki history compaction job accepted")),
+			), response(409, "Wiki history compaction is temporarily disabled")),
 		},
 		"/api/v3/repos/{owner}/{repo}/wiki/compact/{jobID}": map[string]any{
 			"get": operation("getWikiCompactionJob", "Get the current status for an async wiki history compaction job.", auth(), nil, pathParams(

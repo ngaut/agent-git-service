@@ -29,7 +29,15 @@ const (
 	wikiCompactionJobStaleAfter        = 5 * time.Minute
 )
 
+func wikiCompactionDisabledError() error {
+	return fmt.Errorf("%w: wiki compaction is temporarily disabled until the catalog corruption incident is resolved", ErrConflict)
+}
+
 func (s *Service) StartWikiCompaction(ctx context.Context, repoFullName string) (db.WikiCompactionJob, error) {
+	return db.WikiCompactionJob{}, wikiCompactionDisabledError()
+}
+
+func (s *Service) startWikiCompactionEnabled(ctx context.Context, repoFullName string) (db.WikiCompactionJob, error) {
 	if s.WikiCatalog == nil {
 		return db.WikiCompactionJob{}, errors.New("wiki catalog unavailable")
 	}
@@ -211,6 +219,10 @@ func isWikiCompactionJobStale(job db.WikiCompactionJob, now time.Time) bool {
 }
 
 func (s *Service) CompactWikiHistory(ctx context.Context, repoFullName string) (WikiCompactResult, error) {
+	return WikiCompactResult{}, wikiCompactionDisabledError()
+}
+
+func (s *Service) compactWikiHistoryEnabled(ctx context.Context, repoFullName string) (WikiCompactResult, error) {
 	if s.WikiCatalog == nil {
 		return WikiCompactResult{}, errors.New("wiki catalog unavailable")
 	}

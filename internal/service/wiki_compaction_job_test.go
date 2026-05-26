@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -51,48 +52,8 @@ func TestStartWikiCompaction_RestartsStaleRunningJob_Issue1462(t *testing.T) {
 		t.Fatalf("create stale job: %v", err)
 	}
 
-	started := make(chan string, 1)
-	service.SetTestWikiCompactionJobStartedForTest(svc, func(jobID string) {
-		select {
-		case started <- jobID:
-		default:
-		}
-	})
-
-	job, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full)
-	if err != nil {
-		t.Fatalf("StartWikiCompaction: %v", err)
-	}
-	if job.ID != staleJob.ID {
-		t.Fatalf("job.ID = %q, want stale job %q", job.ID, staleJob.ID)
-	}
-
-	select {
-	case got := <-started:
-		if got != staleJob.ID {
-			t.Fatalf("started job = %q, want %q", got, staleJob.ID)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for stale running job to restart")
-	}
-
-	svc.Wg.Wait()
-
-	stored, err := svc.GetWikiCompactionJob(ctx, full, staleJob.ID)
-	if err != nil {
-		t.Fatalf("GetWikiCompactionJob: %v", err)
-	}
-	if stored.Status != service.WikiCompactionJobSucceeded {
-		t.Fatalf("stored.Status = %q, want %q", stored.Status, service.WikiCompactionJobSucceeded)
-	}
-	if stored.NewHead == "" {
-		t.Fatal("stored.NewHead is empty, want completed compaction result")
-	}
-	if stored.Pages != 1 {
-		t.Fatalf("stored.Pages = %d, want 1", stored.Pages)
-	}
-	if stored.CommitsRemoved != 1 {
-		t.Fatalf("stored.CommitsRemoved = %d, want 1", stored.CommitsRemoved)
+	if _, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("StartWikiCompaction err = %v, want ErrConflict", err)
 	}
 }
 
@@ -139,25 +100,7 @@ func TestStartWikiCompaction_DoesNotRestartFreshRunningJob_Issue1462(t *testing.
 		t.Fatalf("create fresh job: %v", err)
 	}
 
-	started := make(chan string, 1)
-	service.SetTestWikiCompactionJobStartedForTest(svc, func(jobID string) {
-		select {
-		case started <- jobID:
-		default:
-		}
-	})
-
-	job, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full)
-	if err != nil {
-		t.Fatalf("StartWikiCompaction: %v", err)
-	}
-	if job.ID != freshJob.ID {
-		t.Fatalf("job.ID = %q, want fresh job %q", job.ID, freshJob.ID)
-	}
-
-	select {
-	case got := <-started:
-		t.Fatalf("started unexpected job %q for fresh running job", got)
-	case <-time.After(200 * time.Millisecond):
+	if _, err := svc.StartWikiCompaction(service.ContextWithUser(ctx, owner), full); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("StartWikiCompaction err = %v, want ErrConflict", err)
 	}
 }
