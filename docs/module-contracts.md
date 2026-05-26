@@ -664,6 +664,7 @@ Rule:
 - in multi-tenant mode, request-scoped tenant DB selection must happen before service methods run, through `controlplane.DBRouter` + `service.ContextWithDB(...)`
 - database-backed metadata is allowed even for repository or pull-request domains, but it must not replace Git as the authority for Git-native behavior
 - exception: wiki page content is authoritative in `wikicatalog` after the catalog cutover; `gitstore` keeps the sibling `*.wiki.git` bare repo as a materialized projection for Git transport compatibility
+- planned replacement: issue #1488 changes that authority model to git-as-source-of-truth with rebuildable TiDB indexes; see `docs/architecture/wiki-storage-v2.md` for the approved target design until code lands
 
 Current state:
 

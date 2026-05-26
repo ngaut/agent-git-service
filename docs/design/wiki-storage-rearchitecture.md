@@ -2,10 +2,19 @@
 
 Status: Draft
 
-This RFC proposes replacing the wiki subsystem's git-as-source-of-truth
-storage model with a relational catalog backed by a content-addressed blob
-store, while preserving the current REST contract on the existing wiki
-endpoints.
+This RFC now tracks the approved direction from issue #1488: replace the
+current catalog-first wiki subsystem with a git-first design where the sibling
+bare wiki repository is the source of truth and TiDB stores only rebuildable
+derived indexes.
+
+The concise architecture baseline for the target design lives in
+[`../architecture/wiki-storage-v2.md`](../architecture/wiki-storage-v2.md).
+The current implemented production architecture remains documented in
+[`../architecture.md`](../architecture.md) until the rewrite lands.
+
+The remainder of this document predates that decision and is retained only as
+superseded background for the rejected catalog-first approach. It must not be
+used as the implementation baseline for new wiki work.
 
 ## 1. Summary
 

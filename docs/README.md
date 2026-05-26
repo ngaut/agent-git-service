@@ -30,6 +30,7 @@ Component and cross-cutting references live in [architecture/](architecture/):
 - [Collaboration Framework](architecture/collaboration-framework.md)
 - [Error Semantics](architecture/error-semantics.md)
 - [Secrets Encryption](architecture/secrets-encryption.md)
+- [Wiki Storage V2](architecture/wiki-storage-v2.md)
 
 ## Design Records
 
