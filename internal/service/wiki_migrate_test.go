@@ -292,6 +292,11 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWikiPages after rewrite: %v", err)
 	}
+	svc.Wg.Wait()
+	pages, err = svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages after background rebuild: %v", err)
+	}
 	if len(pages) != 1 {
 		t.Fatalf("ListWikiPages after rewrite returned %d pages, want 1: %+v", len(pages), pages)
 	}
@@ -393,6 +398,11 @@ func TestGetWikiPageAndHistory_RefreshCatalogAfterNonFastForwardRewrite(t *testi
 	if err != nil {
 		t.Fatalf("GetWikiPage after rewrite: %v", err)
 	}
+	svc.Wg.Wait()
+	page, err = svc.GetWikiPage(ctx, repoFullName, "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage after background rebuild: %v", err)
+	}
 	if page.SHA != homeV1.SHA {
 		t.Fatalf("GetWikiPage returned SHA %q, want rewritten home SHA %q", page.SHA, homeV1.SHA)
 	}
@@ -456,6 +466,145 @@ func TestEnsureWikiCatalogCurrent_PreservesRESTHeadWhenGitProjectionLags_Issue14
 	}
 }
 
+func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
+	svc, cleanup := setupWikiMigrationTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "nonblocking")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage home: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, repoFullName+".wiki", "master", "about.md", "add about", []byte("about body")); err != nil {
+		t.Fatalf("git write about: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var released int32
+	svc.SetWikiBackgroundMigrationStartedHookForTest(func(fullName string) {
+		if fullName == repoFullName {
+			started <- struct{}{}
+		}
+	})
+	svc.SetWikiMigrationAfterSnapshotHookForTest(func(fullName string) {
+		if fullName == repoFullName {
+			<-release
+		}
+	})
+	defer func() {
+		svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
+		svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		if atomic.CompareAndSwapInt32(&released, 0, 1) {
+			close(release)
+		}
+	}()
+
+	begin := time.Now()
+	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages: %v", err)
+	}
+	if elapsed := time.Since(begin); elapsed > 100*time.Millisecond {
+		t.Fatalf("ListWikiPages took %s, want <= 100ms while migration runs in background", elapsed)
+	}
+	if len(pages) != 1 || pages[0].Slug != "home" {
+		t.Fatalf("initial pages = %+v, want current catalog snapshot only", pages)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for background migration to start")
+	}
+	if !svc.IsWikiBackgroundMigrationRunning(ctx, repoFullName) {
+		t.Fatal("expected background migration to be marked running")
+	}
+
+	if atomic.CompareAndSwapInt32(&released, 0, 1) {
+		close(release)
+	}
+	svc.Wg.Wait()
+
+	pages, err = svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages after background migration: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("final pages = %+v, want 2 pages after background migration", pages)
+	}
+}
+
+func TestEnsureWikiCatalogCurrent_BackgroundSingleflight(t *testing.T) {
+	svc, cleanup := setupWikiMigrationTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "singleflight")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage home: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, repoFullName+".wiki", "master", "about.md", "add about", []byte("about body")); err != nil {
+		t.Fatalf("git write about: %v", err)
+	}
+
+	var startedCount int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var released int32
+	svc.SetWikiBackgroundMigrationStartedHookForTest(func(fullName string) {
+		if fullName != repoFullName {
+			return
+		}
+		if atomic.AddInt32(&startedCount, 1) == 1 {
+			started <- struct{}{}
+		}
+	})
+	svc.SetWikiMigrationAfterSnapshotHookForTest(func(fullName string) {
+		if fullName == repoFullName {
+			<-release
+		}
+	})
+	defer func() {
+		svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
+		svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		if atomic.CompareAndSwapInt32(&released, 0, 1) {
+			close(release)
+		}
+	}()
+
+	errCh := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			_, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+			errCh <- err
+		}()
+	}
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for background migration to start")
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := atomic.LoadInt32(&startedCount); got != 1 {
+		t.Fatalf("background migration started %d times, want 1", got)
+	}
+	if !svc.IsWikiBackgroundMigrationRunning(ctx, repoFullName) {
+		t.Fatal("expected background migration to be running")
+	}
+
+	if atomic.CompareAndSwapInt32(&released, 0, 1) {
+		close(release)
+	}
+	svc.Wg.Wait()
+	for i := 0; i < 8; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("concurrent ListWikiPages[%d]: %v", i, err)
+		}
+	}
+}
+
 func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
@@ -486,6 +635,11 @@ func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
 	if err != nil {
 		t.Fatalf("ListWikiPages after branch deletion: %v", err)
+	}
+	svc.Wg.Wait()
+	pages, err = svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages after background branch cleanup: %v", err)
 	}
 	if len(pages) != 0 {
 		t.Fatalf("ListWikiPages returned %d pages after branch deletion, want 0: %+v", len(pages), pages)

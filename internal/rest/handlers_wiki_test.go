@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"gh-server/internal/db"
 	"gh-server/internal/rest/transform"
@@ -262,6 +264,132 @@ func TestWikiPageLabelsREST(t *testing.T) {
 	if len(labels) != 1 || labels[0]["name"] != "runbook" {
 		t.Fatalf("remaining labels = %#v, want runbook", labels)
 	}
+}
+
+func TestWiki_ListPagesSetsMigrationInProgressHeader(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+
+	if _, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: h.User.Login,
+		Name:       "wiki-migration-header",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	full := "testuser/wiki-migration-header"
+
+	w := h.DoRESTJSON(t, "PUT", wikiPagePath(full, "home"), map[string]any{"body": "# Home\n"})
+	assertStatusCode(t, w, http.StatusOK)
+	h.Svc.Wg.Wait()
+
+	if _, err := h.Svc.Git.WriteFile(ctx, full+".wiki", "master", "about.md", "add about", []byte("about body")); err != nil {
+		t.Fatalf("git write about: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var released int32
+	h.Svc.SetWikiBackgroundMigrationStartedHookForTest(func(repo string) {
+		if repo == full {
+			started <- struct{}{}
+		}
+	})
+	h.Svc.SetWikiMigrationAfterSnapshotHookForTest(func(repo string) {
+		if repo == full {
+			<-release
+		}
+	})
+	defer func() {
+		h.Svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
+		h.Svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		if atomic.CompareAndSwapInt32(&released, 0, 1) {
+			close(release)
+		}
+	}()
+
+	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages", nil)
+	assertStatusCode(t, w, http.StatusOK)
+	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "true" {
+		t.Fatalf("X-Wiki-Migration-In-Progress = %q, want true", got)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for background migration to start")
+	}
+
+	if atomic.CompareAndSwapInt32(&released, 0, 1) {
+		close(release)
+	}
+	h.Svc.Wg.Wait()
+
+	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages", nil)
+	assertStatusCode(t, w, http.StatusOK)
+	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "" {
+		t.Fatalf("X-Wiki-Migration-In-Progress after rebuild = %q, want empty", got)
+	}
+}
+
+func TestWiki_GetPageNotFoundStillSetsMigrationInProgressHeader(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+
+	if _, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: h.User.Login,
+		Name:       "wiki-migration-header-404",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	full := "testuser/wiki-migration-header-404"
+
+	w := h.DoRESTJSON(t, "PUT", wikiPagePath(full, "home"), map[string]any{"body": "# Home\n"})
+	assertStatusCode(t, w, http.StatusOK)
+	h.Svc.Wg.Wait()
+
+	if _, err := h.Svc.Git.WriteFile(ctx, full+".wiki", "master", "about.md", "add about", []byte("about body")); err != nil {
+		t.Fatalf("git write about: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var released int32
+	h.Svc.SetWikiBackgroundMigrationStartedHookForTest(func(repo string) {
+		if repo == full {
+			started <- struct{}{}
+		}
+	})
+	h.Svc.SetWikiMigrationAfterSnapshotHookForTest(func(repo string) {
+		if repo == full {
+			<-release
+		}
+	})
+	defer func() {
+		h.Svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
+		h.Svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		if atomic.CompareAndSwapInt32(&released, 0, 1) {
+			close(release)
+		}
+	}()
+
+	w = h.DoREST(t, "GET", wikiPagePath(full, "about"), nil)
+	assertStatusCode(t, w, http.StatusNotFound)
+	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "true" {
+		t.Fatalf("X-Wiki-Migration-In-Progress on not found = %q, want true", got)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for background migration to start")
+	}
+
+	if atomic.CompareAndSwapInt32(&released, 0, 1) {
+		close(release)
+	}
+	h.Svc.Wg.Wait()
 }
 
 func TestWikiPageLabelRoutesPreserveExistingSlugPages(t *testing.T) {

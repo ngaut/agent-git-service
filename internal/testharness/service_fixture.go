@@ -17,17 +17,19 @@ import (
 
 // ServiceConfig tunes the bare-service fixture produced by NewService. A zero
 // value yields the same defaults that the current service-package test files
-// use: file-backed SQLite with WAL, no foreign-key enforcement, no connection
-// cap, and the NopEmbedder. Set fields to opt into stricter modes.
+// use: file-backed SQLite with WAL, no foreign-key enforcement, a single DB
+// connection, and the NopEmbedder. Set fields to opt into stricter modes.
 type ServiceConfig struct {
 	// ForeignKeys enables PRAGMA foreign_keys=ON. Required for tests that
 	// assert cascade-delete behaviour; default is off because SQLite's default
 	// behaviour matches what TiDB does on delete.
 	ForeignKeys bool
 
-	// MaxOpenConns pins the SQL pool to at most N connections. Tests using
-	// foreign_keys=ON typically set this to 1 to avoid locking surprises.
-	// Zero means unlimited.
+	// MaxOpenConns pins the SQL pool to at most N connections. The default test
+	// fixture uses 1 because SQLite PRAGMAs such as busy_timeout and WAL are
+	// connection-local, and unrestricted pools reintroduce flaky "database is
+	// locked" failures when background goroutines open fresh writers.
+	// Zero means "use the fixture default".
 	MaxOpenConns int
 
 	// Embedder overrides the default NopEmbedder. Most tests want the default;
@@ -87,10 +89,12 @@ func NewService(tb testing.TB, cfg ServiceConfig) (*service.Service, func()) {
 	// Apply MaxOpenConns AFTER migrations — db.Migrate runs PRAGMA queries that
 	// can open a second connection transiently, which would deadlock under
 	// MaxOpenConns=1.
-	if cfg.MaxOpenConns > 0 {
-		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-		sqlDB.SetMaxIdleConns(cfg.MaxOpenConns)
+	maxOpenConns := cfg.MaxOpenConns
+	if maxOpenConns <= 0 {
+		maxOpenConns = 1
 	}
+	sqlDB.SetMaxOpenConns(maxOpenConns)
+	sqlDB.SetMaxIdleConns(maxOpenConns)
 
 	store, err := gitstore.New(tmpDir)
 	if err != nil {

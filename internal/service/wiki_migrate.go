@@ -20,6 +20,7 @@ import (
 
 	"gh-server/internal/db"
 	"gh-server/internal/gitstore"
+	applog "gh-server/internal/logging"
 	"gh-server/internal/wikicatalog"
 )
 
@@ -172,10 +173,63 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 	if lastMigratedSHA != "" && !last.allowGitBackfillReset() {
 		return nil
 	}
-	if _, err := s.migrateOneWiki(ctx, rep, WikiMigrationOptions{}); err != nil {
-		return fmt.Errorf("refresh catalog for %q: %w", repoFullName, err)
-	}
+	s.kickBackgroundWikiMigration(ctx, rep)
 	return nil
+}
+
+// KickBackgroundWikiMigration schedules an asynchronous repo-scoped wiki
+// migration using the caller context for repo identity lookup and the server
+// lifecycle context for the background worker. Only one background migration
+// per repo runs at a time.
+func (s *Service) KickBackgroundWikiMigration(ctx context.Context, repoFullName string) {
+	if s.Git == nil || s.WikiCatalog == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = s.ServerCtx()
+	}
+	rep, err := s.LookupRepoIdentity(ctx, repoFullName)
+	if err != nil || rep.ID == 0 {
+		return
+	}
+	s.kickBackgroundWikiMigration(ctx, rep)
+}
+
+// IsWikiBackgroundMigrationRunning reports whether a repo currently has a
+// background wiki migration in flight.
+func (s *Service) IsWikiBackgroundMigrationRunning(ctx context.Context, repoFullName string) bool {
+	rep, err := s.LookupRepoIdentity(ctx, repoFullName)
+	if err != nil || rep.ID == 0 {
+		return false
+	}
+	return s.isWikiBackgroundMigrationRunning(s.wikiRepoKey(ctx, rep))
+}
+
+func (s *Service) kickBackgroundWikiMigration(ctx context.Context, repo db.Repository) {
+	key := s.wikiRepoKey(ctx, repo)
+	if !s.claimWikiBackgroundMigration(key) {
+		return
+	}
+	if s.testWikiBackgroundMigrationStarted != nil {
+		s.testWikiBackgroundMigrationStarted(repo.FullName)
+	}
+
+	bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
+	if tenantDB, ok := DBFromContext(ctx); ok {
+		bgCtx = ContextWithDB(bgCtx, tenantDB)
+	}
+	if user, ok := UserFromContext(ctx); ok {
+		bgCtx = ContextWithUser(bgCtx, user)
+	}
+	s.Wg.Add(1)
+	go func() {
+		defer s.Wg.Done()
+		defer s.releaseWikiBackgroundMigration(key)
+
+		if _, err := s.migrateOneWiki(bgCtx, repo, WikiMigrationOptions{}); err != nil {
+			slog.ErrorContext(bgCtx, "background wiki migration failed", "repo", repo.FullName, "error", err)
+		}
+	}()
 }
 
 func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts WikiMigrationOptions) (RepoMigrationStats, error) {
@@ -185,7 +239,7 @@ func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts W
 		return stats, nil
 	}
 
-	mu := s.getWikiMigrationSyncMu(repo.FullName)
+	mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(ctx, repo))
 	mu.Lock()
 	defer mu.Unlock()
 

@@ -45,7 +45,7 @@ type WikiGCOptions struct {
 // operator can see what failed, but they do NOT roll back the
 // catalog state — the catalog is already committed by the time this
 // runs. A failed git materialization leaves catalog ahead of git; the
-// next manual cmd/wiki-migrate run is idempotent and re-materializes.
+// next background migration replay is idempotent and re-materializes.
 func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result wikicatalog.ChangeSetResult) error {
 	// Migration replays historical commits in order. If those writes
 	// fan out into unordered goroutines, the final wiki_search_documents

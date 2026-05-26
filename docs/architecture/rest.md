@@ -179,6 +179,7 @@ Wiki path-slug hierarchy rules:
 - wiki write endpoints reject `ref` because historical revision edits are out of scope for the current REST contract
 - only the exact single-segment routes `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
 - read/list/backlink operations also surface legacy on-disk wiki filenames that still contain uppercase letters, underscores, or dots
+- catalog-backed wiki read responses set `X-Wiki-Migration-In-Progress: true` while a stale repository is being replayed into the catalog in the background
 - wiki search indexing is asynchronous after successful put/move/delete/label writes, so clients must tolerate short freshness lag; when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
 
 ### Wiki Page History

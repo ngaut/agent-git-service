@@ -532,7 +532,16 @@ func (s *Service) queueWikiSearchUpsert(ctx context.Context, repoFullName string
 		if tenantDB, ok := DBFromContext(ctx); ok {
 			bgCtx = ContextWithDB(bgCtx, tenantDB)
 		}
-		if err := s.upsertWikiSearchDocument(bgCtx, repoFullName, page); err != nil {
+		repo, err := s.LookupRepoIdentity(bgCtx, repoFullName)
+		if err != nil {
+			slog.WarnContext(bgCtx, "wiki search index update skipped", "repo", repoFullName, "slug", page.Slug, "error", err)
+			return
+		}
+		mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(bgCtx, repo))
+		mu.Lock()
+		err = s.upsertWikiSearchDocument(bgCtx, repoFullName, page)
+		mu.Unlock()
+		if err != nil {
 			slog.WarnContext(bgCtx, "wiki search index update failed", "repo", repoFullName, "slug", page.Slug, "error", err)
 		}
 	}()
@@ -546,7 +555,16 @@ func (s *Service) queueWikiSearchDelete(ctx context.Context, repoFullName, slug 
 		if tenantDB, ok := DBFromContext(ctx); ok {
 			bgCtx = ContextWithDB(bgCtx, tenantDB)
 		}
-		if err := s.deleteWikiSearchDocument(bgCtx, repoFullName, slug); err != nil {
+		repo, err := s.LookupRepoIdentity(bgCtx, repoFullName)
+		if err != nil {
+			slog.WarnContext(bgCtx, "wiki search index delete skipped", "repo", repoFullName, "slug", slug, "error", err)
+			return
+		}
+		mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(bgCtx, repo))
+		mu.Lock()
+		err = s.deleteWikiSearchDocument(bgCtx, repoFullName, slug)
+		mu.Unlock()
+		if err != nil {
 			slog.WarnContext(bgCtx, "wiki search index delete failed", "repo", repoFullName, "slug", slug, "error", err)
 		}
 	}()

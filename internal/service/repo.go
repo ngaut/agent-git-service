@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -77,6 +78,10 @@ type Service struct {
 	wikiMigrationSyncMu     map[string]*sync.Mutex
 	wikiMigrationSyncMapMu  sync.Mutex
 
+	wikiBgMigrationMuOnce sync.Once
+	wikiBgMigrationMu     map[string]struct{}
+	wikiBgMigrationMapMu  sync.RWMutex
+
 	workflowStepRunner workflowStepRunner
 
 	// tokenTouchCache deduplicates TouchToken DB writes in-memory.
@@ -99,6 +104,16 @@ type Service struct {
 	// coordinate concurrent migration callers after they have loaded the
 	// migrated-commit snapshot but before they replay any git commits.
 	testWikiMigrationAfterSnapshot func(repoFullName string)
+
+	// testWikiBackgroundMigrationStarted is a test-only hook fired when a
+	// repo-scoped background wiki migration is claimed and scheduled.
+	testWikiBackgroundMigrationStarted func(repoFullName string)
+}
+
+type tenantRepoKey struct {
+	db     *sql.DB
+	repoID uint
+	repo   string
 }
 
 func (s *Service) workflowSyncMuInit() {
@@ -123,18 +138,79 @@ func (s *Service) wikiMigrationSyncMuInit() {
 	s.wikiMigrationSyncMu = make(map[string]*sync.Mutex)
 }
 
-func (s *Service) getWikiMigrationSyncMu(repoFullName string) *sync.Mutex {
+func (s *Service) getWikiMigrationSyncMu(key tenantRepoKey) *sync.Mutex {
 	s.wikiMigrationSyncMuOnce.Do(s.wikiMigrationSyncMuInit)
 
 	s.wikiMigrationSyncMapMu.Lock()
 	defer s.wikiMigrationSyncMapMu.Unlock()
 
-	mu, ok := s.wikiMigrationSyncMu[repoFullName]
+	muKey := s.tenantRepoMutexKey(key)
+	mu, ok := s.wikiMigrationSyncMu[muKey]
 	if !ok {
 		mu = &sync.Mutex{}
-		s.wikiMigrationSyncMu[repoFullName] = mu
+		s.wikiMigrationSyncMu[muKey] = mu
 	}
 	return mu
+}
+
+func (s *Service) wikiBgMigrationMuInit() {
+	s.wikiBgMigrationMu = make(map[string]struct{})
+}
+
+func (s *Service) claimWikiBackgroundMigration(key tenantRepoKey) bool {
+	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
+
+	s.wikiBgMigrationMapMu.Lock()
+	defer s.wikiBgMigrationMapMu.Unlock()
+
+	muKey := s.tenantRepoMutexKey(key)
+	if _, ok := s.wikiBgMigrationMu[muKey]; ok {
+		return false
+	}
+	s.wikiBgMigrationMu[muKey] = struct{}{}
+	return true
+}
+
+func (s *Service) releaseWikiBackgroundMigration(key tenantRepoKey) {
+	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
+
+	s.wikiBgMigrationMapMu.Lock()
+	defer s.wikiBgMigrationMapMu.Unlock()
+	delete(s.wikiBgMigrationMu, s.tenantRepoMutexKey(key))
+}
+
+func (s *Service) isWikiBackgroundMigrationRunning(key tenantRepoKey) bool {
+	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
+
+	s.wikiBgMigrationMapMu.RLock()
+	defer s.wikiBgMigrationMapMu.RUnlock()
+	_, ok := s.wikiBgMigrationMu[s.tenantRepoMutexKey(key)]
+	return ok
+}
+
+func (s *Service) wikiRepoKey(ctx context.Context, repo db.Repository) tenantRepoKey {
+	key := tenantRepoKey{
+		repoID: repo.ID,
+		repo:   repo.FullName,
+	}
+	targetDB := s.DB
+	if tenantDB, ok := DBFromContext(ctx); ok && tenantDB != nil {
+		targetDB = tenantDB
+	}
+	if targetDB != nil {
+		if sqlDB, err := s.sqlDBHandle(targetDB); err == nil {
+			key.db = sqlDB
+		}
+	}
+	return key
+}
+
+func (s *Service) tenantRepoMutexKey(key tenantRepoKey) string {
+	return fmt.Sprintf("%p:%d:%s", key.db, key.repoID, key.repo)
+}
+
+func (s *Service) sqlDBHandle(dbh interface{ DB() (*sql.DB, error) }) (*sql.DB, error) {
+	return dbh.DB()
 }
 
 // DBForCtx returns the per-request DB when one was injected via
@@ -354,7 +430,7 @@ func (s *Service) CreateRepo(ctx context.Context, in CreateRepoInput) (db.Reposi
 				if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 					principalIDs := []uint{viewer.ID}
 					if viewer.UserKind == db.UserKindAgent {
-						humanID, ok, err := s.boundHumanIDForAgent(ctx, viewer.ID)
+						humanID, ok, err := boundHumanIDForAgentQuery(tx, viewer.ID)
 						if err != nil {
 							return err
 						}
@@ -444,7 +520,7 @@ func (s *Service) ensureOrgRepoGovernanceTx(ctx context.Context, tx *gorm.DB, or
 
 	principalIDs := []uint{viewer.ID}
 	if viewer.UserKind == db.UserKindAgent {
-		humanID, ok, err := s.boundHumanIDForAgent(ctx, viewer.ID)
+		humanID, ok, err := boundHumanIDForAgentQuery(tx, viewer.ID)
 		if err != nil {
 			return err
 		}
