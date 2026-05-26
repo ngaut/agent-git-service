@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // TestHarness_RESTQuery verifies that the harness wires GET /api/v3 (API

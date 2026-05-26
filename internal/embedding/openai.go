@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gh-server/internal/httputil"
+	"github.com/ngaut/agent-git-service/internal/httputil"
 )
 
 // OpenAI implements Embedder using an OpenAI-compatible embeddings API.

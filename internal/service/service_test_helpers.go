@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // Test helper methods - exported only for testing purposes.

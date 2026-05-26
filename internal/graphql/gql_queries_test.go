@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gh-server/internal/db"
-	"gh-server/internal/graphql"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func seedOrgForQueryTest(t *testing.T, svc *service.Service, login string) db.User {

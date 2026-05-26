@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func TestReviewRequestFlow(t *testing.T) {

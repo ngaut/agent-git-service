@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -7,44 +7,40 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
-	"gh-server/internal/auth0"
-	"gh-server/internal/config"
-	"gh-server/internal/controlplane"
-	"gh-server/internal/crypto"
-	"gh-server/internal/db"
-	"gh-server/internal/embedding"
-	"gh-server/internal/githttp"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/graphql"
-	applog "gh-server/internal/logging"
-	"gh-server/internal/metrics"
-	srvmiddleware "gh-server/internal/middleware"
-	"gh-server/internal/oauth"
-	"gh-server/internal/rest"
-	"gh-server/internal/rest/transform"
-	"gh-server/internal/router"
-	"gh-server/internal/service"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/config"
+	"github.com/ngaut/agent-git-service/internal/auth0"
+	"github.com/ngaut/agent-git-service/internal/controlplane"
+	"github.com/ngaut/agent-git-service/internal/crypto"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/githttp"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/metrics"
+	srvmiddleware "github.com/ngaut/agent-git-service/internal/middleware"
+	"github.com/ngaut/agent-git-service/internal/oauth"
+	"github.com/ngaut/agent-git-service/internal/rest"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/router"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // gitSHA is set at build time via -ldflags.
 var gitSHA = "unknown"
 
-// BootstrapDeps holds all initialized dependencies for the application.
-type BootstrapDeps struct {
+// bootstrapDeps holds all initialized dependencies for the application.
+type bootstrapDeps struct {
 	Cfg          config.Config
 	DB           *gorm.DB
 	Embedder     embedding.Embedder
@@ -62,19 +58,19 @@ type BootstrapDeps struct {
 	Labels       []string
 }
 
-// BootstrapResult is returned by Bootstrap and contains all initialized components.
-type BootstrapResult struct {
-	Deps    *BootstrapDeps
+// bootstrapResult is returned by bootstrap and contains all initialized components.
+type bootstrapResult struct {
+	Deps    *bootstrapDeps
 	Err     error
-	Partial *BootstrapDeps // Contains successfully initialized deps if bootstrap failed midway
+	Partial *bootstrapDeps // Contains successfully initialized deps if bootstrap failed midway
 }
 
-func buildPartialDeps(deps *BootstrapDeps) *BootstrapDeps {
+func buildPartialDeps(deps *bootstrapDeps) *bootstrapDeps {
 	if deps == nil {
 		return nil
 	}
 
-	return &BootstrapDeps{
+	return &bootstrapDeps{
 		Cfg:          deps.Cfg,
 		DB:           deps.DB,
 		Embedder:     deps.Embedder,
@@ -93,7 +89,7 @@ func buildPartialDeps(deps *BootstrapDeps) *BootstrapDeps {
 	}
 }
 
-func (r *BootstrapResult) setPartial() {
+func (r *bootstrapResult) setPartial() {
 	r.Partial = buildPartialDeps(r.Deps)
 }
 
@@ -401,9 +397,9 @@ func initControlPlane(cfg config.Config) (controlPlaneDeps, error) {
 	return deps, nil
 }
 
-// HTTPMuxConfig holds all dependencies required to build the HTTP multiplexer.
+// httpMuxConfig holds all dependencies required to build the HTTP multiplexer.
 // This struct reduces parameter count in buildHTTPMux and related functions.
-type HTTPMuxConfig struct {
+type httpMuxConfig struct {
 	Cfg          config.Config
 	Database     *gorm.DB
 	ServiceDeps  *service.Service
@@ -414,7 +410,7 @@ type HTTPMuxConfig struct {
 	Version      string
 }
 
-func buildHTTPMux(cfg HTTPMuxConfig) (muxDeps, error) {
+func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 	handlers := &rest.Deps{
 		Svc:            cfg.ServiceDeps,
 		Router:         cfg.DBRouter,
@@ -435,7 +431,7 @@ func buildHTTPMux(cfg HTTPMuxConfig) (muxDeps, error) {
 	r.Get("/metrics", metricsHandler.ServeHTTP)
 
 	// Register readiness probe.
-	r.Get("/readyz", readyzHandler(ReadyzConfig{
+	r.Get("/readyz", readyzHandler(readyzConfig{
 		MainDB:   cfg.Database,
 		DBRouter: cfg.DBRouter,
 		Version:  cfg.Version,
@@ -482,25 +478,21 @@ func buildServers(cfg config.Config, mux http.Handler) (serverDeps, error) {
 	}, nil
 }
 
-// Bootstrap initializes all application dependencies in order.
-// It returns a BootstrapResult with either fully initialized deps or partial deps on failure.
-// This function is exported for testing the bootstrap orchestration.
-func Bootstrap() BootstrapResult {
-	result := BootstrapResult{
-		Deps: &BootstrapDeps{},
+// bootstrap initializes all application dependencies in order.
+// It returns a bootstrapResult with either fully initialized deps or partial deps on failure.
+func bootstrap() bootstrapResult {
+	result := bootstrapResult{
+		Deps: &bootstrapDeps{},
 	}
 	deps := result.Deps
 
 	// Load .env for local dev convenience.
-	_ = godotenv.Load()
-	applog.Init()
-
 	// 1. Core dependencies (config, database, embedding, gitstore).
 	core, err := initCoreDeps()
 	if err != nil {
 		result.Err = err
 		if core.cfgLoaded {
-			partial := &BootstrapDeps{Cfg: core.cfg}
+			partial := &bootstrapDeps{Cfg: core.cfg}
 			if core.db != nil {
 				partial.DB = core.db
 			}
@@ -528,7 +520,7 @@ func Bootstrap() BootstrapResult {
 	svc, err := initServiceDeps(core.cfg, core.db, core.store, core.embedder, srvCtx)
 	if err != nil {
 		result.Err = err
-		result.Partial = &BootstrapDeps{Cfg: core.cfg, DB: core.db, Embedder: core.embedder, Store: core.store, SrvCtx: srvCtx, SrvCancel: srvCancel, SvcDeps: svc.svc}
+		result.Partial = &bootstrapDeps{Cfg: core.cfg, DB: core.db, Embedder: core.embedder, Store: core.store, SrvCtx: srvCtx, SrvCancel: srvCancel, SvcDeps: svc.svc}
 		return result
 	}
 	deps.SvcDeps = svc.svc
@@ -540,13 +532,13 @@ func Bootstrap() BootstrapResult {
 	cp, err := initControlPlane(core.cfg)
 	if err != nil {
 		result.Err = err
-		result.Partial = &BootstrapDeps{Cfg: core.cfg, DB: core.db, Embedder: core.embedder, Store: core.store, SrvCtx: srvCtx, SrvCancel: srvCancel, SvcDeps: svc.svc, GqlSrv: svc.gqlSrv, GitHandler: svc.gitHandler, OauthHandler: svc.oauthHandler}
+		result.Partial = &bootstrapDeps{Cfg: core.cfg, DB: core.db, Embedder: core.embedder, Store: core.store, SrvCtx: srvCtx, SrvCancel: srvCancel, SvcDeps: svc.svc, GqlSrv: svc.gqlSrv, GitHandler: svc.gitHandler, OauthHandler: svc.oauthHandler}
 		return result
 	}
 	deps.DBRouter = cp.dbRouter
 
 	// 5. Build router and host-aware mux.
-	mux, err := buildHTTPMux(HTTPMuxConfig{
+	mux, err := buildHTTPMux(httpMuxConfig{
 		Cfg:          core.cfg,
 		Database:     core.db,
 		ServiceDeps:  svc.svc,
@@ -558,7 +550,7 @@ func Bootstrap() BootstrapResult {
 	})
 	if err != nil {
 		result.Err = err
-		result.Partial = &BootstrapDeps{
+		result.Partial = &bootstrapDeps{
 			Cfg:          core.cfg,
 			DB:           core.db,
 			Embedder:     core.embedder,
@@ -580,7 +572,7 @@ func Bootstrap() BootstrapResult {
 	srvs, err := buildServers(core.cfg, mux.mux)
 	if err != nil {
 		result.Err = err
-		result.Partial = &BootstrapDeps{
+		result.Partial = &bootstrapDeps{
 			Cfg:          core.cfg,
 			DB:           core.db,
 			Embedder:     core.embedder,
@@ -601,13 +593,13 @@ func Bootstrap() BootstrapResult {
 	return result
 }
 
-// ShutdownConfig holds configuration for shutdown behavior.
-type ShutdownConfig struct {
+// shutdownConfig holds configuration for shutdown behavior.
+type shutdownConfig struct {
 	GracePeriod time.Duration
 }
 
-// ShutdownResult captures the results of shutdown operations.
-type ShutdownResult struct {
+// shutdownResult captures the results of shutdown operations.
+type shutdownResult struct {
 	HTTPShutdownErrors []error
 	BgDrained          bool
 	BgDrainTimedOut    bool
@@ -631,10 +623,9 @@ func waitForWaitGroup(ctx context.Context, wg *sync.WaitGroup, name string, drai
 	}
 }
 
-// Shutdown gracefully stops all servers and waits for background workers.
-// This function is exported for testing the shutdown orchestration.
-func Shutdown(deps *BootstrapDeps, cfg ShutdownConfig) ShutdownResult {
-	result := ShutdownResult{}
+// shutdown gracefully stops all servers and waits for background workers.
+func shutdown(deps *bootstrapDeps, cfg shutdownConfig) shutdownResult {
+	result := shutdownResult{}
 
 	// Shutdown HTTP servers.
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.GracePeriod)
@@ -657,8 +648,8 @@ func Shutdown(deps *BootstrapDeps, cfg ShutdownConfig) ShutdownResult {
 	return result
 }
 
-func run(sigCh <-chan os.Signal, shutdownCfg ShutdownConfig) error {
-	result := Bootstrap()
+func run(sigCh <-chan struct{}, shutdownCfg shutdownConfig) error {
+	result := bootstrap()
 	if result.Err != nil {
 		return result.Err
 	}
@@ -686,13 +677,14 @@ func run(sigCh <-chan os.Signal, shutdownCfg ShutdownConfig) error {
 	<-sigCh
 	slog.Info("shutdown initiated", "grace_period", shutdownCfg.GracePeriod.String())
 
-	shutdownResult := Shutdown(deps, shutdownCfg)
+	shutdownResult := shutdown(deps, shutdownCfg)
 	_ = shutdownResult // Can be used for logging/metrics in production
 	return nil
 }
 
-func runWikiReindex(args []string) error {
-	result := Bootstrap()
+// RunWikiReindex reindexes wiki search data for one repo or all repos.
+func RunWikiReindex(args []string) error {
+	result := bootstrap()
 	if result.Err != nil {
 		return result.Err
 	}
@@ -719,39 +711,23 @@ func runWikiReindex(args []string) error {
 	return nil
 }
 
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "wiki-reindex" {
-		_ = godotenv.Load()
-		applog.Init()
-		if err := runWikiReindex(os.Args[2:]); err != nil {
-			slog.Error("wiki reindex failed", "error", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	if err := run(sigCh, ShutdownConfig{GracePeriod: 10 * time.Second}); err != nil {
-		slog.Error("bootstrap failed", "error", err)
-		os.Exit(1)
-	}
+// Run starts the gh-server listeners and blocks until shutdown is requested.
+func Run(sigCh <-chan struct{}) error {
+	return run(sigCh, shutdownConfig{GracePeriod: 10 * time.Second})
 }
 
 // readyzHandler returns an http.HandlerFunc that pings the main DB (and the
 // control-plane DB when running in multi-agent mode). Returns 200 when all
 // backing stores are reachable, 503 otherwise.
-// ReadyzConfig holds dependencies for the readiness probe handler.
+// readyzConfig holds dependencies for the readiness probe handler.
 // This struct reduces parameter count and improves clarity.
-type ReadyzConfig struct {
+type readyzConfig struct {
 	MainDB   *gorm.DB
 	DBRouter *controlplane.DBRouter
 	Version  string
 }
 
-func readyzHandler(cfg ReadyzConfig) http.HandlerFunc {
+func readyzHandler(cfg readyzConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		w.Header().Set("Content-Type", "application/json")

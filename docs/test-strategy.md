@@ -181,7 +181,7 @@ Today the repository already has useful tests in:
 - `internal/rest/transform`
 - `internal/rest` (dedicated handler tests: `handlers_branch_test.go`, `handlers_dependabot_test.go`, `handlers_deployment_test.go`, `handlers_gist_test.go`, `handlers_webhook_test.go`, `handlers_webhook_delivery_test.go`, `pagination_test.go`)
 - `internal/router` (router-level integration tests in `router_test.go`)
-- `internal/config`
+- `config`
 - `internal/controlplane`
 - `internal/auth0`
 - `internal/embedding` (including `embedder_test.go`)

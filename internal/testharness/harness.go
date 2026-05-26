@@ -18,14 +18,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/githttp"
-	"gh-server/internal/graphql"
-	"gh-server/internal/oauth"
-	"gh-server/internal/rest"
-	"gh-server/internal/rest/transform"
-	"gh-server/internal/router"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/githttp"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/oauth"
+	"github.com/ngaut/agent-git-service/internal/rest"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/router"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // transformMu serializes access to the global transform.Init state during

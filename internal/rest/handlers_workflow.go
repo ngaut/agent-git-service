@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
 )
 
 // ─── Workflow scanning ─────────────────────────────────────────────────────

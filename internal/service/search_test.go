@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"

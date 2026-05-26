@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 func TestWikiSlugCanonicalV1MatchesLegacy(t *testing.T) {

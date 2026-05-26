@@ -12,9 +12,9 @@ import (
 
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // Default TTLs documented in wikicatalog/gc.go. The service-level

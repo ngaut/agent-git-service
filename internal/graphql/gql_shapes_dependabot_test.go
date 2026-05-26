@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // TestDependabotAlertGQL_MalformedJSON seeds alerts with malformed JSON fields

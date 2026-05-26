@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // Audit action constants. Centralized so callers can't drift from the

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	modeldb "gh-server/internal/db"
+	modeldb "github.com/ngaut/agent-git-service/internal/db"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"

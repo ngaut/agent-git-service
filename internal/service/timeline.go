@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 
 	"gorm.io/gorm"
 )

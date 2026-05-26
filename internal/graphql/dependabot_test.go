@@ -13,14 +13,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gh-server/internal/db"
-	"gh-server/internal/githttp"
-	"gh-server/internal/graphql"
-	"gh-server/internal/oauth"
-	"gh-server/internal/rest"
-	"gh-server/internal/router"
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/githttp"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/oauth"
+	"github.com/ngaut/agent-git-service/internal/rest"
+	"github.com/ngaut/agent-git-service/internal/router"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // setupTestEnvironment builds the full router mux wired to a freshly-seeded

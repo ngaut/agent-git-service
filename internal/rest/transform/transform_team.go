@@ -2,7 +2,7 @@ package transform
 
 import (
 	"fmt"
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // Team converts a db.Team to a GitHub REST API team object.

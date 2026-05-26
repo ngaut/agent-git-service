@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"testing"
 
-	"gh-server/internal/crypto"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/crypto"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestCompat_UserCodespacesSecrets(t *testing.T) {

@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/embedding"
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"gorm.io/driver/sqlite"

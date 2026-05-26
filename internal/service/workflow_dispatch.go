@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	applog "gh-server/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
 
 	"gopkg.in/yaml.v3"
 )

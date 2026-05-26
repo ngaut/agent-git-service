@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // assertNilOrEmpty checks that v is either a nil interface or an empty

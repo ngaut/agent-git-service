@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 func TestWikiCatalogPostCommit_MigrationIndexesSynchronously(t *testing.T) {

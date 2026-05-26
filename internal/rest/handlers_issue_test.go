@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"testing"
 
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // ─── UpdateIssue: Issue vs PR fallback ──────────────────────────────────────

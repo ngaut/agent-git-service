@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
-	applog "gh-server/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/db"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
 
 	"gopkg.in/yaml.v3"
 )

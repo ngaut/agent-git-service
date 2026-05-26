@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // MarkIssueReadRequest represents the request body for marking an issue as read.

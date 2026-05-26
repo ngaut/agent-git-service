@@ -8,7 +8,7 @@ RUN go mod download
 COPY . .
 
 ARG GIT_SHA=unknown
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.gitSHA=${GIT_SHA}" -o gh-server .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/ngaut/agent-git-service/server.gitSHA=${GIT_SHA}" -o gh-server ./cmd/gh-server
 
 # ---- Runtime stage ----
 FROM alpine:3.21

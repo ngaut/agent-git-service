@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 // TestInit_InstallsNonFFRejectHook is the unit-level guard for the fix to

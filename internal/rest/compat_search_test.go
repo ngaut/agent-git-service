@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // ─── Search Repos Response Shape ────────────────────────────────────────────

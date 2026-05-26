@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func TestStartWikiCompaction_RestartsStaleRunningJob_Issue1462(t *testing.T) {

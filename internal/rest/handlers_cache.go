@@ -3,8 +3,8 @@ package rest
 import (
 	"net/http"
 
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
 )
 
 // ListActionsCaches handles GET /repos/{owner}/{repo}/actions/caches

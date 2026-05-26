@@ -72,7 +72,7 @@ printf 'TiDB Zero claim URL: %s\n' "$(
   printf '%s' "$ZERO_INSTANCE" | jq -r '.instance.claimInfo.claimUrl'
 )"
 
-go run .
+go run ./cmd/gh-server
 ```
 
 Claim the TiDB Zero instance from its claim URL if you want to keep the database

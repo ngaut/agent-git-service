@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/mentions"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/mentions"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"

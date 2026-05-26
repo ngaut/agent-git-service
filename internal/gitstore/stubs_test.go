@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func TestGitStore_Pass13(t *testing.T) {

@@ -13,8 +13,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"gh-server/internal/db"
-	searchsvc "gh-server/internal/service/search"
+	"github.com/ngaut/agent-git-service/internal/db"
+	searchsvc "github.com/ngaut/agent-git-service/internal/service/search"
 )
 
 // NextIssueNumber returns the next sequential issue number within a repo.

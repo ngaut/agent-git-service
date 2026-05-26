@@ -30,7 +30,7 @@ EPIC130_B_DSN ?= root:@tcp(127.0.0.1:4000)/$(EPIC130_B_DB)?parseTime=true&timeou
 
 .PHONY: build
 build: ## Build the gh-server binary
-	go build -o $(BINARY) .
+	go build -o $(BINARY) ./cmd/gh-server
 
 .PHONY: vet
 vet: ## Run go vet
@@ -38,7 +38,7 @@ vet: ## Run go vet
 
 .PHONY: fmt
 fmt: ## Run goimports on all Go files
-	$$(go env GOPATH)/bin/goimports -w internal/ *.go
+	$$(go env GOPATH)/bin/goimports -w config/ internal/ server/ cmd/gh-server/
 
 # ─── Docker ──────────────────────────────────────────────────────────────────
 

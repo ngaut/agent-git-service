@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // setupPRWithRealBranches creates a user, repo with a README, a feature branch

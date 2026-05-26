@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
 )
 
 // webhookJSON returns the standard API shape for a webhook

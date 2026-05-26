@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // compatSeedPR creates a repo with a feature branch and a PR for testing.

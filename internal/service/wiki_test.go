@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/service"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 func TestListWikiPages_ResolvesLastAuthorByCommitEmail_Issue1345(t *testing.T) {

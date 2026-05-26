@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 // --- Repository queries ---

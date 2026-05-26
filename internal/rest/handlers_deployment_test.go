@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // TestDeploymentJSON_MalformedJSON verifies that malformed PayloadJSON produces

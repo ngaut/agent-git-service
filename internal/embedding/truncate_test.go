@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/embedding"
 )
 
 func TestTruncateInputTokens(t *testing.T) {

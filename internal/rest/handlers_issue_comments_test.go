@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestCreateIssueCommentRejectsRepliesBeyondMaxDepth(t *testing.T) {

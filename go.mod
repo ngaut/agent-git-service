@@ -1,4 +1,4 @@
-module gh-server
+module github.com/ngaut/agent-git-service
 
 go 1.25.0
 

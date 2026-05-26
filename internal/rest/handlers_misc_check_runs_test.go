@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func seedCheckRunsRepo(t *testing.T, h *testharness.Harness, name string) (db.Repository, string) {

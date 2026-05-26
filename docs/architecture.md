@@ -52,8 +52,9 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 
 | Path | Responsibility |
 |---|---|
-| `main.go` | Startup, dependency wiring, TLS setup, and listeners |
-| `internal/config` | Environment-backed configuration |
+| `cmd/gh-server` | CLI entrypoint, signal handling, `.env` loading, and logging init |
+| `server` | Public startup/shutdown API, dependency wiring, TLS setup, and listeners |
+| `config` | Environment-backed configuration exposed for external consumers |
 | `internal/db` | GORM models, migrations, seed data, shared state constants |
 | `internal/service` | Business logic over DB and Git storage (includes `Embedder` and `AllowAnyToken` fields) |
 | `internal/controlplane` | Shared control-plane schema and token-to-tenant DB routing |
@@ -83,7 +84,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 
 ## Startup and Runtime
 
-`main.go` is the composition root. The startup sequence is:
+`cmd/gh-server` is the binary entrypoint and `server` is the composition root. The startup sequence is:
 
 1. Load `.env` for local development via `godotenv`.
 2. Initialize structured logging via `internal/logging`.
@@ -412,7 +413,7 @@ The canonical configuration reference is
 [`../.env.example`](../.env.example). The top section contains the required
 quick-start settings; later sections document optional runtime capabilities.
 
-Configuration is loaded from environment variables in `internal/config/config.go`
+Configuration is loaded from environment variables in `config/config.go`
 and a small number of subsystem-local environment reads for CORS, logging,
 secret encryption, Git HTTP upload limits, and embedding concurrency.
 

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 type recordedWebhookRequest struct {

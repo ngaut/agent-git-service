@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )

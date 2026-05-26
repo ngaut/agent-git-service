@@ -16,9 +16,9 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func setupTestPresenceHandlers(t *testing.T) (*PresenceHandlers, *gorm.DB, func()) {

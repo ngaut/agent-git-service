@@ -10,7 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
-	"gh-server/internal/metrics"
+	"github.com/ngaut/agent-git-service/internal/metrics"
 )
 
 type operationStateKey struct{}

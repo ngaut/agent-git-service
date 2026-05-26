@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // dependabotAlertGQL converts a db.DependabotAlert to a RepositoryVulnerabilityAlert GraphQL node.

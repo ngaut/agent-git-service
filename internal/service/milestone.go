@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // NextMilestoneNumber returns the next sequential milestone number within a repo.

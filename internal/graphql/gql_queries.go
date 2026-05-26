@@ -2,7 +2,7 @@ package graphql
 
 import (
 	"context"
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 func (s *Server) doViewer(ctx context.Context) map[string]any {

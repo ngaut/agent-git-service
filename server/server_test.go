@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -16,17 +15,17 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
-	"gh-server/internal/config"
-	"gh-server/internal/controlplane"
-	"gh-server/internal/crypto"
-	"gh-server/internal/embedding"
-	"gh-server/internal/githttp"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/graphql"
-	"gh-server/internal/oauth"
-	"gh-server/internal/rest"
-	"gh-server/internal/router"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/config"
+	"github.com/ngaut/agent-git-service/internal/controlplane"
+	"github.com/ngaut/agent-git-service/internal/crypto"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/githttp"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/oauth"
+	"github.com/ngaut/agent-git-service/internal/rest"
+	"github.com/ngaut/agent-git-service/internal/router"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func TestMain_SignalDrivenShutdown(t *testing.T) {
@@ -35,13 +34,13 @@ func TestMain_SignalDrivenShutdown(t *testing.T) {
 		"PORT":     "0",
 	})
 
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(sigCh, ShutdownConfig{GracePeriod: 200 * time.Millisecond})
+		done <- run(sigCh, shutdownConfig{GracePeriod: 200 * time.Millisecond})
 	}()
 
-	sigCh <- syscall.SIGTERM
+	sigCh <- struct{}{}
 
 	select {
 	case err := <-done:
@@ -83,7 +82,7 @@ func TestShutdown_Graceful_Success(t *testing.T) {
 
 	testServer := &http.Server{Addr: ":0", Handler: testMux}
 
-	deps := &BootstrapDeps{
+	deps := &bootstrapDeps{
 		SrvCtx:    srvCtx,
 		SrvCancel: srvCancel,
 		SvcDeps:   svcDeps,
@@ -99,7 +98,7 @@ func TestShutdown_Graceful_Success(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Shutdown with generous grace period.
-	result := Shutdown(deps, ShutdownConfig{GracePeriod: 5 * time.Second})
+	result := shutdown(deps, shutdownConfig{GracePeriod: 5 * time.Second})
 
 	if len(result.HTTPShutdownErrors) > 0 {
 		t.Errorf("expected no HTTP shutdown errors, got: %v", result.HTTPShutdownErrors)
@@ -139,7 +138,7 @@ func TestShutdown_BackgroundDrain_Timeout(t *testing.T) {
 	testMux := http.NewServeMux()
 	testServer := &http.Server{Addr: ":0", Handler: testMux}
 
-	deps := &BootstrapDeps{
+	deps := &bootstrapDeps{
 		SrvCtx:    srvCtx,
 		SrvCancel: srvCancel,
 		SvcDeps:   svcDeps,
@@ -153,7 +152,7 @@ func TestShutdown_BackgroundDrain_Timeout(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Shutdown with very short grace period to trigger timeout.
-	result := Shutdown(deps, ShutdownConfig{GracePeriod: 100 * time.Millisecond})
+	result := shutdown(deps, shutdownConfig{GracePeriod: 100 * time.Millisecond})
 
 	if !result.BgDrainTimedOut {
 		t.Error("expected background drain to timeout")
@@ -170,7 +169,7 @@ func TestShutdown_BackgroundDrain_Timeout(t *testing.T) {
 func TestReadyz_SingleDB_Healthy(t *testing.T) {
 	mainDB := openTestDB(t)
 
-	handler := readyzHandler(ReadyzConfig{
+	handler := readyzHandler(readyzConfig{
 		MainDB: mainDB,
 	})
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -203,7 +202,7 @@ func TestReadyz_WithControlPlane_BothHealthy(t *testing.T) {
 	router := controlplane.NewDBRouter(cpDB, openTenant, true, controlplane.RouterConfig{MaxAgents: 10})
 	defer router.Close()
 
-	handler := readyzHandler(ReadyzConfig{
+	handler := readyzHandler(readyzConfig{
 		MainDB:   mainDB,
 		DBRouter: router,
 	})
@@ -247,7 +246,7 @@ func TestReadyz_ControlPlaneDown_Returns503(t *testing.T) {
 	}
 	sqlDB.Close()
 
-	handler := readyzHandler(ReadyzConfig{
+	handler := readyzHandler(readyzConfig{
 		MainDB:   mainDB,
 		DBRouter: router,
 	})
@@ -286,7 +285,7 @@ func TestReadyz_MainDBDown_Returns503(t *testing.T) {
 	}
 	sqlDB.Close()
 
-	handler := readyzHandler(ReadyzConfig{
+	handler := readyzHandler(readyzConfig{
 		MainDB: mainDB,
 	})
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -326,7 +325,7 @@ func TestRouterComposition_ReadyzAfterRegisterRoutes(t *testing.T) {
 
 	r := chi.NewRouter()
 	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
-	r.Get("/readyz", readyzHandler(ReadyzConfig{
+	r.Get("/readyz", readyzHandler(readyzConfig{
 		MainDB: mainDB,
 	}))
 
@@ -366,7 +365,7 @@ func TestBuildPartialDeps_NonNilInput(t *testing.T) {
 		Git: store,
 	}
 
-	input := &BootstrapDeps{
+	input := &bootstrapDeps{
 		Cfg:          config.Config{DBdsn: "test-dsn"},
 		DB:           mainDB,
 		Embedder:     embedding.NopEmbedder{},
@@ -477,7 +476,7 @@ func TestBootstrapResult_SetPartial(t *testing.T) {
 		Git: store,
 	}
 
-	deps := &BootstrapDeps{
+	deps := &bootstrapDeps{
 		Cfg:       config.Config{DBdsn: "test-dsn"},
 		DB:        mainDB,
 		Embedder:  embedding.NopEmbedder{},
@@ -487,7 +486,7 @@ func TestBootstrapResult_SetPartial(t *testing.T) {
 		SvcDeps:   svcDeps,
 	}
 
-	result := &BootstrapResult{
+	result := &bootstrapResult{
 		Deps: deps,
 		Err:  errors.New("test error"),
 	}
@@ -607,52 +606,5 @@ func TestOpenControlPlaneTenantDB_InvalidGarbageStillFails(t *testing.T) {
 
 	if _, err := openControlPlaneTenantDB("not-a-valid-encrypted-value!!!"); err == nil {
 		t.Fatal("expected invalid garbage input to fail")
-	}
-}
-
-// ============================================================================
-// Main Entry Point Tests (Issue #857)
-// ============================================================================
-
-func TestMain_EntryPoint(t *testing.T) {
-	// This test verifies that main() can be invoked and exits cleanly
-	// when receiving a shutdown signal.
-
-	// Set up environment for successful bootstrap
-	setupBootstrapEnv(t, map[string]string{
-		"DB_DSN":      "file:test_main_entry?mode=memory&cache=shared",
-		"LISTEN_MODE": "production",
-		"PORT":        "0",
-	})
-
-	// Create a channel to track when main exits
-	exited := make(chan struct{}, 1)
-
-	// Run main in a goroutine
-	go func() {
-		main()
-		exited <- struct{}{}
-	}()
-
-	// Give main time to start servers
-	time.Sleep(500 * time.Millisecond)
-
-	// Send SIGTERM to the process to trigger shutdown
-	// Note: This sends signal to the entire process, which will be received
-	// by main's signal channel.
-	p, err := os.FindProcess(os.Getpid())
-	if err != nil {
-		t.Fatalf("failed to find process: %v", err)
-	}
-	if err := p.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("failed to send SIGTERM: %v", err)
-	}
-
-	// Wait for main to exit
-	select {
-	case <-exited:
-		// Success - main exited cleanly
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for main to exit")
 	}
 }

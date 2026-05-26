@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func doRawGql(t *testing.T, mux http.Handler, query string, vars map[string]any) map[string]any {

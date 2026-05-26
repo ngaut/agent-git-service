@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func findDeliveryByEventAction(deliveries []map[string]any, event, action string) map[string]any {

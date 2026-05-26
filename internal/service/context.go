@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"gh-server/internal/db"
-	"gh-server/internal/tenant"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/tenant"
 
 	"gorm.io/gorm"
 )

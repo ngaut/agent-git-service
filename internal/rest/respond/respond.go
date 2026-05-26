@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"gh-server/internal/apperrors"
+	"github.com/ngaut/agent-git-service/internal/apperrors"
 )
 
 // StatusClientClosedRequest is the de-facto HTTP status used by proxies when

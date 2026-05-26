@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func (s *Server) doCreateRepository(ctx context.Context, req gqlRequest) map[string]any {

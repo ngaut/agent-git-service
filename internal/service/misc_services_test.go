@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // TestDeploymentCRUD tests deployment and deployment status CRUD operations.

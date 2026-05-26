@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 
 	"github.com/go-git/go-git/v5/plumbing"
 )

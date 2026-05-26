@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // IssueListPageFilter groups DB-pageable filters for the REST issues list.

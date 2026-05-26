@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"gh-server/internal/embedding"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // mockEmbedder returns deterministic vectors for testing.

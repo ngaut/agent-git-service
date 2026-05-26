@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // UpdateRepositoryPushedAt records the most recent successful push time.

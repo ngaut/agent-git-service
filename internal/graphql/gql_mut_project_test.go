@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // TestGraphQL_ProjectV2_ItemAddRemove tests addProjectV2ItemById and deleteProjectV2Item mutations.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func TestStore_RebaseMissingBranchReturnsErrorAndDoesNotAdvanceBase(t *testing.T) {

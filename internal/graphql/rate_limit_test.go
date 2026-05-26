@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestGraphQLResponses_IncludeGraphQLRateLimitHeaders(t *testing.T) {

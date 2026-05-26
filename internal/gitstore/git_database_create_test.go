@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func TestStore_CreateTreeObjectDeleteSHA(t *testing.T) {

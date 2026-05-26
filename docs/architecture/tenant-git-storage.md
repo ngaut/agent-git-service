@@ -105,7 +105,7 @@ func TenantFromContext(ctx context.Context) (string, bool)
 ### Code Configuration
 
 ```go
-// In main.go:
+// In server/server.go:
 var gitOpts []gitstore.Option
 if cfg.ControlPlaneDSN != "" {
     gitOpts = append(gitOpts, 

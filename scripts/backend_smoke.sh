@@ -62,7 +62,7 @@ trap cleanup EXIT
 note "Building gh-server"
 (
   cd "$ROOT_DIR"
-  go build -o "$SERVER_BIN" .
+  go build -o "$SERVER_BIN" ./cmd/gh-server
 )
 
 note "Starting gh-server on $BASE_URL"

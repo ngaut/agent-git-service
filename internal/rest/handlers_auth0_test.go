@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/auth0"
-	"gh-server/internal/db"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/auth0"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // fakeAuth0DeviceFlow implements service.Auth0DeviceFlow for REST handler tests.

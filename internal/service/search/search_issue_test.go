@@ -3,7 +3,7 @@ package search
 import (
 	"testing"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 func TestFuseIssueSearchResultsPrefersCombinedSignals(t *testing.T) {

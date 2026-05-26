@@ -10,9 +10,9 @@ import (
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 
-	"gh-server/internal/authn"
-	"gh-server/internal/crypto"
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/authn"
+	"github.com/ngaut/agent-git-service/internal/crypto"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // RouterConfig holds per-tenant connection pool settings and cache limits.

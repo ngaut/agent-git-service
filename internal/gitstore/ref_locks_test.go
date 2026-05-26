@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func TestRepairRefLock_ClearsStaleLock(t *testing.T) {

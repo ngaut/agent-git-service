@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"errors"
@@ -91,7 +91,7 @@ func TestBootstrap_Success_Minimal(t *testing.T) {
 		"DB_DSN": "file:test_bootstrap_success?mode=memory&cache=shared",
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err != nil {
 		t.Fatalf("bootstrap failed: %v", result.Err)
 	}
@@ -132,7 +132,7 @@ func TestBootstrap_Failure_ConfigMissing(t *testing.T) {
 	// Set explicit empty value so .env loading cannot repopulate DB_DSN.
 	t.Setenv("DB_DSN", "")
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err == nil {
 		t.Fatal("expected bootstrap to fail without DB_DSN")
 	}
@@ -150,7 +150,7 @@ func TestBootstrap_Failure_AllowAnyTokenInProduction(t *testing.T) {
 		"ALLOW_ANY_TOKEN": "true",
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err == nil {
 		t.Fatal("expected bootstrap to fail when ALLOW_ANY_TOKEN is enabled in production")
 	}
@@ -176,7 +176,7 @@ func TestBootstrap_Failure_DBConnection(t *testing.T) {
 		"DB_DSN": "invalid://connection-string",
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err == nil {
 		t.Fatal("expected bootstrap to fail with invalid DB connection")
 	}
@@ -193,7 +193,7 @@ func TestBootstrap_Failure_GitstoreInvalidDir(t *testing.T) {
 		"GIT_REPO_DIR": "/nonexistent/path/that/does/not/exist",
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err == nil {
 		t.Fatal("expected bootstrap to fail with invalid git repo dir")
 	}
@@ -223,7 +223,7 @@ func TestBootstrap_Failure_TLS_MissingCerts(t *testing.T) {
 		_ = os.Chdir(origWD)
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err == nil {
 		t.Fatal("expected bootstrap to fail without TLS certs in development mode")
 	}
@@ -250,7 +250,7 @@ func TestBootstrap_ListenerBindFailure(t *testing.T) {
 		"PORT":     portStr,
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err != nil {
 		t.Fatalf("bootstrap failed: %v", result.Err)
 	}
@@ -290,7 +290,7 @@ func TestBootstrap_ControlPlane_Enabled(t *testing.T) {
 		"CONTROL_PLANE_DSN": fmt.Sprintf("file:test_cp_ctrl_%d?mode=memory&cache=shared", testDBCounter.Add(1)),
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err != nil {
 		t.Fatalf("bootstrap failed: %v", result.Err)
 	}
@@ -318,7 +318,7 @@ func TestBootstrap_ControlPlane_DBFailure(t *testing.T) {
 		"CONTROL_PLANE_DSN": "tcp(127.0.0.1:3306)/invalid",
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err == nil {
 		t.Fatal("expected bootstrap to fail when control plane DB cannot be opened")
 	}
@@ -350,7 +350,7 @@ func TestBootstrap_ControlPlane_MigrateFailure(t *testing.T) {
 		"CONTROL_PLANE_DSN": fmt.Sprintf("file:test_cp_mig_ctrl_%d?mode=memory&cache=shared", testDBCounter.Add(1)),
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err == nil {
 		t.Fatal("expected bootstrap to fail when control plane migration fails")
 	}
@@ -369,7 +369,7 @@ func TestBootstrap_WithEmbedding_Success(t *testing.T) {
 		"EMBEDDING_MODEL":    "test-model",
 	})
 
-	result := Bootstrap()
+	result := bootstrap()
 	if result.Err != nil {
 		t.Fatalf("bootstrap with embedding failed: %v", result.Err)
 	}

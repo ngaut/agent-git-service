@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 // TestStore_SearchCommits tests the SearchCommits function

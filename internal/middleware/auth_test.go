@@ -14,10 +14,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gh-server/internal/controlplane"
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/controlplane"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/service"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/driver/sqlite"

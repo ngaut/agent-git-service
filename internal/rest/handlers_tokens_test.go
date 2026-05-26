@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestTokenAPI_CRUD(t *testing.T) {

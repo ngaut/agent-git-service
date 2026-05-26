@@ -3,8 +3,8 @@ package rest
 import (
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
 )
 
 func init() {

@@ -15,10 +15,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"gh-server/internal/db"
-	"gh-server/internal/embedding"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // Repository lookup convention:

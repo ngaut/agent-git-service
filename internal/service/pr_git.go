@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 // ComparePR returns the ahead/behind/commit diff between two refs on a repo.

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // loadAlertWithWriteAccess fetches a Dependabot alert by ID and verifies the
