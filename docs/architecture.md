@@ -5,6 +5,8 @@ Update it when behavior, package boundaries, or the local development workflow c
 Avoid putting transient status here such as exact passing test counts; the codebase and CI are the truth for fast-moving inventory.
 This document records the current implemented architecture. Planned multi-agent changes live in [design/multi-agent.md](design/multi-agent.md) until the corresponding code lands.
 
+Wiki compaction preserves catalog/materialized-git consistency by moving the wiki git ref before committing the compacted catalog transaction. If the ref update fails, the catalog head stays unchanged; if the ref update succeeds but the catalog transaction fails, the service immediately replays the materialized git state back into the catalog.
+
 ## Purpose
 
 `agent-git-service` is a self-hosted Git-backed server for standard GitHub-compatible API and Git transport workflows. The development binary is currently named `gh-server`.
@@ -17,7 +19,9 @@ It exposes four primary surfaces:
 - OAuth device flow
 
 It also exposes additive repo-specific endpoints such as Auth0-backed human-login
-helpers under `/api/v3/auth0/*` when Auth0 is configured.
+helpers under `/api/v3/auth0/*` when Auth0 is configured, plus admin-only wiki
+maintenance endpoints such as `/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks`
+for stale wiki ref-lock recovery.
 
 From a user-facing perspective, the main entry points are GitHub-compatible clients, including `gh` CLI, plus the REST discovery/auth endpoints `/api/v3/`, `/api/v3/meta`, and `/api/v3/rate_limit`. Git Smart HTTP is typically exercised after that setup path, when a Git client or credential helper crosses into clone, fetch, or push.
 

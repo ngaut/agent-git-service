@@ -226,6 +226,7 @@ func (s *Service) CompactWikiHistory(ctx context.Context, repoFullName string) (
 
 func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Repository, repoFullName string) (WikiCompactResult, error) {
 	var result WikiCompactResult
+	refUpdated := false
 	err := s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
 		now := time.Now().UTC()
 
@@ -304,6 +305,19 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 			SynthFormatVer: synthProjectionMaterialized,
 		}
 
+		result = WikiCompactResult{
+			PreviousHead:    previousChangeset.SynthCommitSHA,
+			NewHead:         newCommitSHA,
+			CompactedBefore: now,
+			Pages:           len(livePages),
+			CommitsRemoved:  int(revisionCount) - len(livePages),
+		}
+
+		if err := s.updateWikiCompactRefLocked(ctx, repoFullName, result.NewHead); err != nil {
+			return err
+		}
+		refUpdated = true
+
 		return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&newChangeset).Error; err != nil {
 				return err
@@ -350,23 +364,14 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 			if err := tx.Where("repository_id = ? AND changeset_id <> ?", rep.ID, newChangeset.ChangesetID).Delete(&db.WikiChangeset{}).Error; err != nil {
 				return err
 			}
-
-			result = WikiCompactResult{
-				PreviousHead:    previousChangeset.SynthCommitSHA,
-				NewHead:         newCommitSHA,
-				CompactedBefore: now,
-				Pages:           len(livePages),
-				CommitsRemoved:  int(revisionCount) - len(livePages),
-			}
 			return nil
 		})
 	})
 	if err != nil {
-		return WikiCompactResult{}, err
-	}
-	if err := s.updateWikiCompactRef(ctx, repoFullName, result.NewHead); err != nil {
-		if repairErr := s.repairWikiCatalogFromGit(ctx, repoFullName); repairErr != nil {
-			return WikiCompactResult{}, fmt.Errorf("compact wiki history: update git ref: %w (catalog repair failed: %v)", err, repairErr)
+		if refUpdated {
+			if repairErr := s.repairWikiCatalogFromGit(ctx, repoFullName); repairErr != nil {
+				return WikiCompactResult{}, fmt.Errorf("compact wiki history: persist compact catalog after git ref update: %w (catalog repair failed: %v)", err, repairErr)
+			}
 		}
 		return WikiCompactResult{}, err
 	}

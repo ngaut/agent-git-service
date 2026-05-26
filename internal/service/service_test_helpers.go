@@ -114,7 +114,7 @@ func IsPublicRepoForTest(s *Service, ctx context.Context, repoID uint) bool {
 }
 
 // SetTestWikiCompactRefUpdateFailureForTest installs a test-only hook that can
-// force CompactWikiHistory to fail after the catalog transaction commits.
+// force CompactWikiHistory to fail before the compacted catalog state commits.
 func SetTestWikiCompactRefUpdateFailureForTest(s *Service, fn func(repoFullName, commitSHA string) error) {
 	s.testWikiCompactRefUpdateFailure = fn
 }

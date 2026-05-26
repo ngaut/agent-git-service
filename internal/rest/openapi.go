@@ -310,6 +310,17 @@ func buildRESTOpenAPIPaths() map[string]any {
 				param("jobID", "string"),
 			), response(200, "Wiki history compaction job returned")),
 		},
+		"/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks": map[string]any{
+			"post": operation("repairWikiLocks", "Inspect and clear stale wiki branch lock files for one repository.", auth(), jsonBody(false, map[string]any{
+				"force": map[string]any{
+					"type":        "boolean",
+					"description": "When true, clear the lock even if it is still fresh.",
+				},
+			}, nil), pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+			), response(200, "Wiki lock repair result returned")),
+		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks": map[string]any{
 			"get": operation("listWikiBacklinks", "List inbound wiki links for a page slug.", nil, nil, pathParams(
 				param("owner", "string"),
