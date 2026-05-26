@@ -30,3 +30,30 @@ type WikiIndexState struct {
 }
 
 func (WikiIndexState) TableName() string { return "wiki_index_state" }
+
+// WikiBacklink stores the current derived wiki link graph for one repository.
+type WikiBacklink struct {
+	RepositoryID uint       `gorm:"primaryKey;autoIncrement:false;index:idx_wiki_backlinks_repo_dst,priority:1;index:idx_wiki_backlinks_repo_src,priority:1"`
+	Repository   Repository `gorm:"foreignKey:RepositoryID"`
+	SrcSlug      string     `gorm:"primaryKey;type:varbinary(1024);index:idx_wiki_backlinks_repo_src,priority:2"`
+	DstSlug      string     `gorm:"primaryKey;type:varbinary(1024);index:idx_wiki_backlinks_repo_dst,priority:2"`
+	Resolved     bool       `gorm:"not null;index:idx_wiki_backlinks_repo_dst,priority:3"`
+	UpdatedAt    time.Time  `gorm:"not null"`
+}
+
+func (WikiBacklink) TableName() string { return "wiki_backlinks" }
+
+// WikiPageHistory is the optional derived history accelerator for one page.
+type WikiPageHistory struct {
+	RepositoryID    uint       `gorm:"primaryKey;autoIncrement:false;index:idx_wiki_page_history_repo_slug_committed,priority:1"`
+	Repository      Repository `gorm:"foreignKey:RepositoryID"`
+	Slug            string     `gorm:"primaryKey;type:varbinary(1024);index:idx_wiki_page_history_repo_slug_committed,priority:2"`
+	CommitSHA       string     `gorm:"primaryKey;type:char(40)"`
+	ParentCommitSHA string     `gorm:"type:char(40)"`
+	AuthorID        *uint
+	Author          *User     `gorm:"foreignKey:AuthorID"`
+	Message         string    `gorm:"type:text;not null"`
+	CommittedAt     time.Time `gorm:"not null;index:idx_wiki_page_history_repo_slug_committed,priority:3,sort:desc"`
+}
+
+func (WikiPageHistory) TableName() string { return "wiki_page_history" }

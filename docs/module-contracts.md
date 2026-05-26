@@ -507,7 +507,7 @@ Rules:
 Current state:
 
 - `service` uses `wikiv2` for slug/path parity, write-plan creation, and manual reconcile entrypoints
-- `db` owns the concrete `wiki_page_index` and `wiki_index_state` tables, while `wikiv2` owns the domain contracts those tables implement
+- `db` owns the concrete `wiki_page_index`, `wiki_index_state`, `wiki_backlinks`, and optional `wiki_page_history` tables, while `wikiv2` owns the domain contracts those tables implement
 - the package is additive and does not yet replace the existing routed wiki handlers or all catalog-derived projections
 
 ### `ratelimit`
