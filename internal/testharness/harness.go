@@ -70,7 +70,7 @@ func New(tb testing.TB) *Harness {
 	gitHandler := githttp.New(svc.Git, svc)
 	oauthHandler := oauth.New(svc)
 
-	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, nil, "/api/v3", "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
 
 	h := &Harness{
 		Svc:     svc,
@@ -87,13 +87,11 @@ func New(tb testing.TB) *Harness {
 	return h
 }
 
-// wrapTransform wraps an http.Handler with middleware that sets the global
-// transform.baseURL to this harness's base URL for the duration of each
-// request. The mutex is held only during request handling — not for the test
-// lifetime — so multiple New() calls within one test cannot deadlock.
+// wrapTransform wraps an http.Handler with middleware that scopes transform URL
+// state to this harness's base URL for the duration of each request.
 func (h *Harness) wrapTransform(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		transform.Wrap(h.transformBase.Load().(string), "/api/v3", func() {
+		transform.Wrap(h.transformBase.Load().(string), func() {
 			next.ServeHTTP(w, r)
 		})
 	})

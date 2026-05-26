@@ -40,6 +40,8 @@ import (
 // gitSHA is set at build time via -ldflags.
 var gitSHA = "unknown"
 
+const restAPIPrefix = "/api/v3"
+
 // Server exposes a programmatic server instance for embedders.
 type Server struct {
 	cfg       config.Config
@@ -441,9 +443,9 @@ func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 	metricsHandler := metrics.Init()
 	r.Use(srvmiddleware.MetricsInstrumentation())
 
-	hostMux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.DBRouter, cfg.Cfg.RESTPrefix, cfg.Cfg.ConsoleBaseURL)
+	hostMux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.DBRouter, cfg.Cfg.ConsoleBaseURL)
 	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		transform.Wrap(cfg.Cfg.BaseURL, cfg.Cfg.RESTPrefix, func() {
+		transform.Wrap(cfg.Cfg.BaseURL, func() {
 			hostMux.ServeHTTP(w, req)
 		})
 	})
@@ -764,16 +766,15 @@ func (s *Server) Handler() http.Handler { return s.handler }
 
 // RESTHandler returns a mountable handler for REST endpoints relative to "/".
 func (s *Server) RESTHandler() http.Handler {
-	prefix := s.cfg.RESTPrefix
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clone := r.Clone(r.Context())
 		path := clone.URL.Path
 		if path == "" {
 			path = "/"
 		}
-		clone.URL.Path = prefix + path
+		clone.URL.Path = restAPIPrefix + path
 		if clone.URL.RawPath != "" {
-			clone.URL.RawPath = prefix + clone.URL.RawPath
+			clone.URL.RawPath = restAPIPrefix + clone.URL.RawPath
 		}
 		s.handler.ServeHTTP(w, clone)
 	})

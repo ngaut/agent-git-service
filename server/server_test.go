@@ -329,7 +329,7 @@ func TestRouterComposition_ReadyzAfterRegisterRoutes(t *testing.T) {
 	oauthHandler := &oauth.Handler{Svc: svc}
 
 	r := chi.NewRouter()
-	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "/api/v3", "http://console.localhost")
+	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
 	r.Get("/readyz", readyzHandler(readyzConfig{
 		MainDB: mainDB,
 	}))
@@ -344,14 +344,13 @@ func TestRouterComposition_ReadyzAfterRegisterRoutes(t *testing.T) {
 }
 
 func TestNew_HandlerUsesHostAwareMuxAndPerServerTransformState(t *testing.T) {
-	makeServer := func(t *testing.T, name, baseURL, restPrefix string) *Server {
+	makeServer := func(t *testing.T, name, baseURL string) *Server {
 		t.Helper()
 		root := t.TempDir()
 		srv, err := New(config.Config{
 			DBdsn:       "file:" + filepath.Join(root, name+".db"),
 			GitRepoDir:  filepath.Join(root, "repos"),
 			BaseURL:     baseURL,
-			RESTPrefix:  restPrefix,
 			ListenMode:  "production",
 			Environment: "production",
 		})
@@ -361,8 +360,8 @@ func TestNew_HandlerUsesHostAwareMuxAndPerServerTransformState(t *testing.T) {
 		return srv
 	}
 
-	alpha := makeServer(t, "alpha", "http://alpha.local", "/api/v1")
-	beta := makeServer(t, "beta", "http://beta.local", "/api/v9")
+	alpha := makeServer(t, "alpha", "http://alpha.local")
+	beta := makeServer(t, "beta", "http://beta.local")
 
 	assertMeta := func(t *testing.T, srv *Server, want string) {
 		t.Helper()
@@ -382,18 +381,17 @@ func TestNew_HandlerUsesHostAwareMuxAndPerServerTransformState(t *testing.T) {
 		}
 	}
 
-	assertMeta(t, alpha, "http://alpha.local/api/v1/openapi.json")
-	assertMeta(t, beta, "http://beta.local/api/v9/openapi.json")
-	assertMeta(t, alpha, "http://alpha.local/api/v1/openapi.json")
+	assertMeta(t, alpha, "http://alpha.local/api/v3/openapi.json")
+	assertMeta(t, beta, "http://beta.local/api/v3/openapi.json")
+	assertMeta(t, alpha, "http://alpha.local/api/v3/openapi.json")
 }
 
-func TestNew_RESTHandlerUsesConfiguredPrefixInResponseURLs(t *testing.T) {
+func TestNew_RESTHandlerUsesDefaultPrefixInResponseURLs(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
 		DBdsn:       "file:" + filepath.Join(root, "rest-prefix.db"),
 		GitRepoDir:  filepath.Join(root, "repos"),
 		BaseURL:     "http://embed.local",
-		RESTPrefix:  "/api/v1",
 		ListenMode:  "production",
 		Environment: "production",
 	})
@@ -425,11 +423,11 @@ func TestNew_RESTHandlerUsesConfiguredPrefixInResponseURLs(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode repo response: %v", err)
 	}
-	if got := body["issues_url"]; got != "http://embed.local/api/v1/repos/admin/prefix-check/issues{/number}" {
-		t.Fatalf("issues_url = %v, want custom REST prefix", got)
+	if got := body["issues_url"]; got != "http://embed.local/api/v3/repos/admin/prefix-check/issues{/number}" {
+		t.Fatalf("issues_url = %v, want default REST prefix", got)
 	}
-	if got := body["branches_url"]; got != "http://embed.local/api/v1/repos/admin/prefix-check/branches{/branch}" {
-		t.Fatalf("branches_url = %v, want custom REST prefix", got)
+	if got := body["branches_url"]; got != "http://embed.local/api/v3/repos/admin/prefix-check/branches{/branch}" {
+		t.Fatalf("branches_url = %v, want default REST prefix", got)
 	}
 }
 
