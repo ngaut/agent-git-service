@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/wikiv2"
 )
 
@@ -36,6 +37,12 @@ type wikiV2SnapshotReplaceResult struct {
 	Applied          bool
 	CurrentHeadSHA   string
 	CurrentPageCount int
+}
+
+type wikiV2PageSnapshot struct {
+	row  db.WikiPageIndex
+	path string
+	body string
 }
 
 // KickWikiV2Reconcile persists a manual reconcile request without changing any
@@ -95,7 +102,7 @@ func (s *Service) ReconcileWikiV2(ctx context.Context, repoFullName string) (wik
 	full := wikiRepoFullName(repoFullName)
 	reconciledAt := time.Now().UTC()
 	if !s.Git.Exists(ctx, full) || s.Git.IsEmpty(ctx, full) {
-		replaceResult, err := s.replaceWikiV2Snapshot(ctx, full, rep.ID, "", nil, reconciledAt)
+		replaceResult, err := s.replaceWikiV2Snapshot(ctx, full, rep.ID, "", nil, nil, nil, reconciledAt)
 		if err != nil {
 			return wikiv2.ReconcileResult{}, err
 		}
@@ -118,6 +125,7 @@ func (s *Service) ReconcileWikiV2(ctx context.Context, repoFullName string) (wik
 	sort.Strings(paths)
 
 	rows := make([]db.WikiPageIndex, 0, len(paths))
+	snapshots := make([]wikiV2PageSnapshot, 0, len(paths))
 	for _, path := range paths {
 		slug := wikiPathToSlug(path)
 		if slug == "" {
@@ -146,9 +154,20 @@ func (s *Service) ReconcileWikiV2(ctx context.Context, repoFullName string) (wik
 			UpdatedAt:     updatedAt,
 			LastAuthorID:  lastAuthorID,
 		})
+		snapshots = append(snapshots, wikiV2PageSnapshot{
+			row:  rows[len(rows)-1],
+			path: path,
+			body: string(body),
+		})
 	}
 
-	replaceResult, err := s.replaceWikiV2Snapshot(ctx, full, rep.ID, headSHA, rows, reconciledAt)
+	backlinks := buildWikiV2Backlinks(rep.ID, reconciledAt, snapshots)
+	history, err := s.buildWikiV2History(ctx, full, rep.ID, snapshots, reconciledAt)
+	if err != nil {
+		return wikiv2.ReconcileResult{}, err
+	}
+
+	replaceResult, err := s.replaceWikiV2Snapshot(ctx, full, rep.ID, headSHA, rows, backlinks, history, reconciledAt)
 	if err != nil {
 		return wikiv2.ReconcileResult{}, err
 	}
@@ -200,7 +219,7 @@ func (s *Service) loadWikiV2State(ctx context.Context, repoID uint) (wikiv2.Inde
 	}, nil
 }
 
-func (s *Service) replaceWikiV2Snapshot(ctx context.Context, repoFullName string, repoID uint, headSHA string, rows []db.WikiPageIndex, indexedAt time.Time) (wikiV2SnapshotReplaceResult, error) {
+func (s *Service) replaceWikiV2Snapshot(ctx context.Context, repoFullName string, repoID uint, headSHA string, rows []db.WikiPageIndex, backlinks []db.WikiBacklink, history []db.WikiPageHistory, indexedAt time.Time) (wikiV2SnapshotReplaceResult, error) {
 	var result wikiV2SnapshotReplaceResult
 	err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 		var current db.WikiIndexState
@@ -229,21 +248,39 @@ func (s *Service) replaceWikiV2Snapshot(ctx context.Context, repoFullName string
 		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiPageIndex{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiBacklink{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiPageHistory{}).Error; err != nil {
+			return err
+		}
 		if len(rows) > 0 {
 			if err := tx.CreateInBatches(rows, 100).Error; err != nil {
 				return err
 			}
 		}
+		if len(backlinks) > 0 {
+			if err := tx.CreateInBatches(backlinks, 100).Error; err != nil {
+				return err
+			}
+		}
+		if len(history) > 0 {
+			if err := tx.CreateInBatches(history, 100).Error; err != nil {
+				return err
+			}
+		}
 
 		state := db.WikiIndexState{
-			RepositoryID:     repoID,
-			IndexedCommitSHA: candidateHeadSHA,
-			IndexedAt:        &indexedAt,
+			RepositoryID:        repoID,
+			IndexedCommitSHA:    candidateHeadSHA,
+			BacklinksIndexedSHA: candidateHeadSHA,
+			IndexedAt:           &indexedAt,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "repository_id"}},
 			DoUpdates: clause.Assignments(map[string]any{
 				"indexed_commit_sha":     state.IndexedCommitSHA,
+				"backlinks_indexed_sha":  state.BacklinksIndexedSHA,
 				"indexed_at":             state.IndexedAt,
 				"reconcile_requested_at": nil,
 				"reconciler_lease_until": nil,
@@ -297,4 +334,107 @@ func countCurrentWikiV2Rows(tx *gorm.DB, repoID uint) int {
 		return 0
 	}
 	return int(rowCount)
+}
+
+func buildWikiV2Backlinks(repoID uint, updatedAt time.Time, snapshots []wikiV2PageSnapshot) []db.WikiBacklink {
+	pages := make(map[string]struct{}, len(snapshots))
+	topLevelPages := make(map[string]struct{}, len(snapshots))
+	canonicalPages := make(map[string]string, len(snapshots))
+	canonicalTopLevelPages := make(map[string]string, len(snapshots))
+	for _, snapshot := range snapshots {
+		slug := snapshot.row.Slug
+		pages[slug] = struct{}{}
+		if !strings.Contains(slug, "/") {
+			topLevelPages[slug] = struct{}{}
+		}
+		if canonical := canonicalWikiLookupSlug(slug); canonical != "" {
+			canonicalPages[canonical] = slug
+			if !strings.Contains(slug, "/") {
+				canonicalTopLevelPages[canonical] = slug
+			}
+		}
+	}
+
+	backlinks := make([]db.WikiBacklink, 0)
+	seen := make(map[string]struct{})
+	for _, snapshot := range snapshots {
+		for _, match := range extractWikiLinkMatches(snapshot.body) {
+			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages, canonicalPages, canonicalTopLevelPages)
+			if !ok {
+				continue
+			}
+			key := snapshot.row.Slug + "\x00" + resolvedTarget
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			backlinks = append(backlinks, db.WikiBacklink{
+				RepositoryID: repoID,
+				SrcSlug:      snapshot.row.Slug,
+				DstSlug:      resolvedTarget,
+				Resolved:     true,
+				UpdatedAt:    updatedAt,
+			})
+		}
+	}
+	sort.Slice(backlinks, func(i, j int) bool {
+		if backlinks[i].DstSlug == backlinks[j].DstSlug {
+			return backlinks[i].SrcSlug < backlinks[j].SrcSlug
+		}
+		return backlinks[i].DstSlug < backlinks[j].DstSlug
+	})
+	return backlinks
+}
+
+func (s *Service) buildWikiV2History(ctx context.Context, wikiRepoFullName string, repoID uint, snapshots []wikiV2PageSnapshot, fallback time.Time) ([]db.WikiPageHistory, error) {
+	history := make([]db.WikiPageHistory, 0, len(snapshots)*2)
+	for _, snapshot := range snapshots {
+		commits, err := s.Git.ListAllCommits(ctx, wikiRepoFullName, &gitstore.ListCommitsOptions{Path: snapshot.path})
+		if err != nil {
+			return nil, fmt.Errorf("wiki v2 reconcile: load history for %s: %w", snapshot.path, err)
+		}
+		for idx, commit := range commits {
+			authorID, err := s.lookupWikiV2AuthorID(ctx, commit.Email)
+			if err != nil {
+				return nil, err
+			}
+			committerID, err := s.lookupWikiV2AuthorID(ctx, commit.CommitterEmail)
+			if err != nil {
+				return nil, err
+			}
+			bodySize := 0
+			if body, err := s.Git.ReadFileAtRef(ctx, wikiRepoFullName, snapshot.path, commit.SHA); err == nil {
+				bodySize = len(body)
+			}
+			parentSHA := ""
+			if len(commit.ParentSHAs) > 0 {
+				parentSHA = commit.ParentSHAs[0]
+			}
+			history = append(history, db.WikiPageHistory{
+				RepositoryID:    repoID,
+				Slug:            snapshot.row.Slug,
+				CommitSHA:       strings.ToLower(strings.TrimSpace(commit.SHA)),
+				ParentCommitSHA: strings.ToLower(strings.TrimSpace(parentSHA)),
+				PathSequence:    len(commits) - idx,
+				AuthorID:        authorID,
+				CommitterID:     committerID,
+				Message:         strings.TrimSpace(commit.Message),
+				BodySize:        bodySize,
+				CommittedAt:     parseWikiV2CommitTime(commit.CommitterDate, fallback),
+			})
+		}
+	}
+	sort.Slice(history, func(i, j int) bool {
+		if history[i].Slug == history[j].Slug {
+			if history[i].CommittedAt.Equal(history[j].CommittedAt) {
+				if history[i].PathSequence == history[j].PathSequence {
+					return history[i].CommitSHA > history[j].CommitSHA
+				}
+				return history[i].PathSequence > history[j].PathSequence
+			}
+			return history[i].CommittedAt.After(history[j].CommittedAt)
+		}
+		return history[i].Slug < history[j].Slug
+	})
+	return history, nil
 }

@@ -23,6 +23,7 @@ type WikiIndexState struct {
 	RepositoryID         uint       `gorm:"primaryKey;autoIncrement:false"`
 	Repository           Repository `gorm:"foreignKey:RepositoryID"`
 	IndexedCommitSHA     string     `gorm:"type:char(40)"`
+	BacklinksIndexedSHA  string     `gorm:"type:char(40)"`
 	IndexedAt            *time.Time
 	ReconcileRequestedAt *time.Time
 	ReconcilerLeaseUntil *time.Time
@@ -50,9 +51,13 @@ type WikiPageHistory struct {
 	Slug            string     `gorm:"primaryKey;type:varbinary(1024);index:idx_wiki_page_history_repo_slug_committed,priority:2"`
 	CommitSHA       string     `gorm:"primaryKey;type:char(40)"`
 	ParentCommitSHA string     `gorm:"type:char(40)"`
+	PathSequence    int        `gorm:"not null;default:0;index:idx_wiki_page_history_repo_slug_committed,priority:4,sort:desc"`
 	AuthorID        *uint
-	Author          *User     `gorm:"foreignKey:AuthorID"`
+	Author          *User `gorm:"foreignKey:AuthorID"`
+	CommitterID     *uint
+	Committer       *User     `gorm:"foreignKey:CommitterID"`
 	Message         string    `gorm:"type:text;not null"`
+	BodySize        int       `gorm:"not null"`
 	CommittedAt     time.Time `gorm:"not null;index:idx_wiki_page_history_repo_slug_committed,priority:3,sort:desc"`
 }
 

@@ -76,6 +76,7 @@ func TestWikiV2RoundTrip(t *testing.T) {
 	state := WikiIndexState{
 		RepositoryID:         repo.ID,
 		IndexedCommitSHA:     "1111111111111111111111111111111111111111",
+		BacklinksIndexedSHA:  "1111111111111111111111111111111111111111",
 		IndexedAt:            &now,
 		ReconcileRequestedAt: &now,
 	}
@@ -101,7 +102,7 @@ func TestWikiV2RoundTrip(t *testing.T) {
 	if err := gdb.First(&gotState, "repository_id = ?", repo.ID).Error; err != nil {
 		t.Fatalf("read state: %v", err)
 	}
-	if gotState.IndexedCommitSHA != state.IndexedCommitSHA || gotState.IndexedAt == nil || !gotState.IndexedAt.Equal(now) {
+	if gotState.IndexedCommitSHA != state.IndexedCommitSHA || gotState.BacklinksIndexedSHA != state.BacklinksIndexedSHA || gotState.IndexedAt == nil || !gotState.IndexedAt.Equal(now) {
 		t.Fatalf("state round-trip mismatch: %+v", gotState)
 	}
 
@@ -129,8 +130,11 @@ func TestWikiV2RoundTrip(t *testing.T) {
 		Slug:            row.Slug,
 		CommitSHA:       "3333333333333333333333333333333333333333",
 		ParentCommitSHA: state.IndexedCommitSHA,
+		PathSequence:    2,
 		AuthorID:        &user.ID,
+		CommitterID:     &user.ID,
 		Message:         "Import wiki page snapshot",
+		BodySize:        42,
 		CommittedAt:     now,
 	}
 	if err := gdb.Create(&history).Error; err != nil {
@@ -149,7 +153,7 @@ func TestWikiV2RoundTrip(t *testing.T) {
 	if err := gdb.First(&gotHistory, "repository_id = ? AND slug = ? AND commit_sha = ?", repo.ID, history.Slug, history.CommitSHA).Error; err != nil {
 		t.Fatalf("read history row: %v", err)
 	}
-	if gotHistory.ParentCommitSHA != history.ParentCommitSHA || gotHistory.Message != history.Message || !gotHistory.CommittedAt.Equal(history.CommittedAt) {
+	if gotHistory.ParentCommitSHA != history.ParentCommitSHA || gotHistory.PathSequence != history.PathSequence || gotHistory.Message != history.Message || gotHistory.BodySize != history.BodySize || !gotHistory.CommittedAt.Equal(history.CommittedAt) {
 		t.Fatalf("history round-trip mismatch: %+v", gotHistory)
 	}
 }

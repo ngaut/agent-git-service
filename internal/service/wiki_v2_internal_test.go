@@ -36,7 +36,7 @@ func TestReplaceWikiV2SnapshotSkipsStaleEmptyCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRepo: %v", err)
 	}
-	result, err := svc.replaceWikiV2Snapshot(ctx, wikiRepoFullName(full), repo.ID, "", nil, time.Now().UTC())
+	result, err := svc.replaceWikiV2Snapshot(ctx, wikiRepoFullName(full), repo.ID, "", nil, nil, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("replaceWikiV2Snapshot empty candidate: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestReplaceWikiV2SnapshotSkipsStaleNonEmptyCandidate(t *testing.T) {
 		Size:          len("# Home\n"),
 		UpdatedAt:     time.Now().UTC(),
 	}}
-	result, err := svc.replaceWikiV2Snapshot(ctx, wikiRepoFullName(full), repo.ID, first.IndexedCommitSHA, staleRows, time.Now().UTC())
+	result, err := svc.replaceWikiV2Snapshot(ctx, wikiRepoFullName(full), repo.ID, first.IndexedCommitSHA, staleRows, nil, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("replaceWikiV2Snapshot stale head: %v", err)
 	}
