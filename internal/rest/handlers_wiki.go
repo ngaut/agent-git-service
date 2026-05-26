@@ -496,6 +496,38 @@ func (d *Deps) GetWikiCompactionJob(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, wikiCompactionJobResponse(job, "/api/v3/repos/"+full+"/wiki/compact/"+job.ID))
 }
 
+// RepairWikiLocks handles POST /api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks
+func (d *Deps) RepairWikiLocks(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	repo := d.mustGetRepo(w, r)
+	if repo == nil {
+		return
+	}
+	if !d.requireRepoPermission(w, r, repo.ID, service.RepoPermissionAdmin) {
+		return
+	}
+	var body struct {
+		Force bool `json:"force"`
+	}
+	if err := decodeBodyStrictOptional(r, &body); err != nil {
+		respond.ValidationFailed(w, "invalid body")
+		return
+	}
+	result, err := d.Svc.RepairWikiRefLocks(r.Context(), full, body.Force)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"ref":         result.Ref,
+		"lock_path":   result.LockPath,
+		"present":     result.Present,
+		"cleared":     result.Cleared,
+		"force":       result.Force,
+		"age_seconds": result.AgeSeconds,
+	})
+}
+
 func wikiCompactionJobResponse(job db.WikiCompactionJob, statusURL string) map[string]any {
 	resp := map[string]any{
 		"job_id":      job.ID,

@@ -5,6 +5,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -177,5 +179,52 @@ func TestWiki_CompactHistory_CompletesAfterRequestContextCanceled_Issue1462(t *t
 	rowsAfter := testharness.DecodeJSONArray(t, after)
 	if len(rowsAfter) != 1 {
 		t.Fatalf("rowsAfter len = %d, want 1", len(rowsAfter))
+	}
+}
+
+func TestWiki_RepairLocks_AdminOnly(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+	owner, ownerToken := seedHarnessUser(t, h, "wiki-repair-lock-owner", false)
+	_, strangerToken := seedHarnessUser(t, h, "wiki-repair-lock-stranger", false)
+	if _, err := h.Svc.CreateRepo(service.ContextWithUser(ctx, owner), service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "wiki-repair-locks",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	full := owner.Login + "/wiki-repair-locks"
+	repoPath, err := h.Svc.Git.GetRepoPath(ctx, full+".wiki")
+	if err != nil {
+		t.Fatalf("GetRepoPath: %v", err)
+	}
+	lockPath := filepath.Join(repoPath, "refs", "heads", "master.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("lock"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	blocked := h.DoRESTJSONWithToken(t, "POST", "/api/v3/admin/wiki/repos/"+full+"/repair-locks", strangerToken, map[string]any{})
+	if blocked.Code != http.StatusForbidden && blocked.Code != http.StatusNotFound {
+		t.Fatalf("non-admin repair expected 403/404, got %d: %s", blocked.Code, blocked.Body.String())
+	}
+
+	fresh := h.DoRESTJSONWithToken(t, "POST", "/api/v3/admin/wiki/repos/"+full+"/repair-locks", ownerToken, map[string]any{})
+	assertStatusCode(t, fresh, http.StatusConflict)
+
+	forced := h.DoRESTJSONWithToken(t, "POST", "/api/v3/admin/wiki/repos/"+full+"/repair-locks", ownerToken, map[string]any{"force": true})
+	assertStatusCode(t, forced, http.StatusOK)
+	body := testharness.DecodeJSON(t, forced)
+	if body["ref"] != "refs/heads/master" {
+		t.Fatalf("ref = %v, want refs/heads/master", body["ref"])
+	}
+	if body["cleared"] != true {
+		t.Fatalf("cleared = %v, want true", body["cleared"])
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("lock should be removed, stat err = %v", err)
 	}
 }
