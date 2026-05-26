@@ -35,6 +35,45 @@ func (semanticWikiEmbedder) Embed(_ context.Context, text string) ([]float32, er
 
 func (semanticWikiEmbedder) Dimensions() int { return 3 }
 
+type noisyWikiEmbedder struct{}
+
+func (noisyWikiEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	switch {
+	case strings.TrimSpace(text) == "xiangz":
+		return []float32{9, 9, 9}, nil
+	case strings.Contains(text, "xiangz"):
+		return []float32{1, 0, 0}, nil
+	case strings.Contains(text, "# x"):
+		return []float32{0, 1, 0}, nil
+	default:
+		return []float32{0, 0, 1}, nil
+	}
+}
+
+func (noisyWikiEmbedder) Dimensions() int { return 3 }
+
+type semanticPaginationEmbedder struct{}
+
+func (semanticPaginationEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	if strings.TrimSpace(text) == "semantic offset query" {
+		return []float32{1, 0, 0}, nil
+	}
+	return []float32{0, 0, 1}, nil
+}
+
+func (semanticPaginationEmbedder) Dimensions() int { return 3 }
+
+type hybridFusionFallbackEmbedder struct{}
+
+func (hybridFusionFallbackEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	if strings.TrimSpace(text) == "fusion" {
+		return []float32{1, 0, 0}, nil
+	}
+	return []float32{0, 0, 1}, nil
+}
+
+func (hybridFusionFallbackEmbedder) Dimensions() int { return 3 }
+
 func TestWikiSearchLifecycleAndFallback_Issue1362(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
@@ -323,6 +362,553 @@ func TestWikiSearchSemanticUsesDatabaseVectorDistance(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&vectorCalls); got < 2 {
 		t.Fatalf("VEC_COSINE_DISTANCE calls = %d, want database vector path to run", got)
+	}
+}
+
+func TestWikiSearchSemanticDBPaginationBeyondExactWindow(t *testing.T) {
+	driverName := fmt.Sprintf("sqlite3_wiki_db_pagination_%d", time.Now().UnixNano())
+	sql.Register(driverName, &sqlite3.SQLiteDriver{
+		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
+				if embedding == query {
+					return 0
+				}
+				return 1
+			}, true)
+		},
+	})
+
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: semanticPaginationEmbedder{},
+		OpenDB: func(dbPath string) (*gorm.DB, error) {
+			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
+		},
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-db-pagination",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-db-pagination"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	baseTime := time.Date(2026, time.January, 3, 0, 0, 0, 0, time.UTC)
+	docs := make([]db.WikiSearchDocument, 0, 1005)
+	for i := 0; i < 1005; i++ {
+		docs = append(docs, db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         fmt.Sprintf("db-semantic-%04d", i),
+			Title:        fmt.Sprintf("DB Semantic %04d", i),
+			Body:         db.LargeText("unrelated body text"),
+			Embedding:    "[1,0,0]",
+			CreatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+		})
+	}
+	if err := svc.DB.CreateInBatches(docs, 200).Error; err != nil {
+		t.Fatalf("seed wiki search docs: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "semantic offset query", 20, 1000)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "vector" {
+		t.Fatalf("method = %q, want vector", resp.Method)
+	}
+	if len(resp.Results) != 5 {
+		t.Fatalf("len(results) = %d, want 5", len(resp.Results))
+	}
+	want := []string{"db-semantic-0004", "db-semantic-0003", "db-semantic-0002", "db-semantic-0001", "db-semantic-0000"}
+	for i, slug := range want {
+		if resp.Results[i].Slug != slug {
+			t.Fatalf("results[%d].Slug = %q, want %q", i, resp.Results[i].Slug, slug)
+		}
+	}
+}
+
+func TestWikiSearchMatchesSlugSegmentsWithoutTitleOrBodyHit(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-slug-match",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-slug-match"
+	if _, err := svc.PutWikiPage(ctx, full, "guides/plain-page", "# Overview\n\nBody text without the path token.", "create page", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	resp, err := svc.SearchWikiPages(ctx, full, "guides", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "guides/plain-page" {
+		t.Fatalf("results[0].Slug = %q, want guides/plain-page", resp.Results[0].Slug)
+	}
+}
+
+func TestWikiSearchHybridKeepsLexicalMatchAndFiltersWeakSemanticOnly(t *testing.T) {
+	driverName := fmt.Sprintf("sqlite3_wiki_hybrid_vec_%d", time.Now().UnixNano())
+	sql.Register(driverName, &sqlite3.SQLiteDriver{
+		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
+				switch embedding {
+				case "[1,0,0]":
+					return 0.43
+				case "[0,1,0]":
+					return 0.625
+				case "[0,0,1]":
+					return 0.735
+				default:
+					return 1
+				}
+			}, true)
+		},
+	})
+
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: noisyWikiEmbedder{},
+		OpenDB: func(dbPath string) (*gorm.DB, error) {
+			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
+		},
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-hybrid",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-hybrid"
+	if _, err := svc.PutWikiPage(ctx, full, "hello", "... xiangz", "create hello", ""); err != nil {
+		t.Fatalf("PutWikiPage(hello): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "hello1", "# x", "create hello1", ""); err != nil {
+		t.Fatalf("PutWikiPage(hello1): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "x/y", "# y", "create y", ""); err != nil {
+		t.Fatalf("PutWikiPage(y): %v", err)
+	}
+	svc.Wg.Wait()
+
+	resp, err := svc.SearchWikiPages(ctx, full, "xiangz", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "vector" {
+		t.Fatalf("method = %q, want vector hybrid path", resp.Method)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Slug != "hello" {
+		t.Fatalf("results = %#v, want only lexical xiangz match", resp.Results)
+	}
+}
+
+func TestWikiSearchHybridFallbackUsesFullSemanticRanking(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: hybridFusionFallbackEmbedder{},
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-hybrid-fallback",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-hybrid-fallback"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	baseTime := time.Date(2026, time.January, 4, 0, 0, 0, 0, time.UTC)
+	docs := []db.WikiSearchDocument{
+		{RepositoryID: repo.ID, Slug: "a-first", Title: "A First", Body: db.LargeText("fusion"), Embedding: "[0.8,0.2,0]", CreatedAt: baseTime.Add(4 * time.Second), UpdatedAt: baseTime.Add(4 * time.Second)},
+		{RepositoryID: repo.ID, Slug: "b-second", Title: "B Second", Body: db.LargeText("fusion"), Embedding: "[0.7,0.3,0]", CreatedAt: baseTime.Add(3 * time.Second), UpdatedAt: baseTime.Add(3 * time.Second)},
+		{RepositoryID: repo.ID, Slug: "c-third", Title: "C Third", Body: db.LargeText("fusion"), Embedding: "[1,0,0]", CreatedAt: baseTime.Add(2 * time.Second), UpdatedAt: baseTime.Add(2 * time.Second)},
+		{RepositoryID: repo.ID, Slug: "d-fourth", Title: "D Fourth", Body: db.LargeText("fusion"), Embedding: "[0.9,0.1,0]", CreatedAt: baseTime.Add(1 * time.Second), UpdatedAt: baseTime.Add(1 * time.Second)},
+	}
+	if err := svc.DB.Create(&docs).Error; err != nil {
+		t.Fatalf("seed wiki search docs: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "fusion", 2, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "vector" {
+		t.Fatalf("method = %q, want vector", resp.Method)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(resp.Results))
+	}
+	want := []string{"a-first", "c-third"}
+	for i, slug := range want {
+		if resp.Results[i].Slug != slug {
+			t.Fatalf("results[%d].Slug = %q, want %q", i, resp.Results[i].Slug, slug)
+		}
+	}
+}
+
+func TestWikiSearchLexicalPaginationBeyondSemanticWindow(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-lexical-pagination",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-lexical-pagination"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	baseTime := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	docs := make([]db.WikiSearchDocument, 0, 1005)
+	for i := 0; i < 1005; i++ {
+		docs = append(docs, db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         fmt.Sprintf("page-%04d", i),
+			Title:        fmt.Sprintf("Page %04d", i),
+			Body:         db.LargeText("needle"),
+			CreatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+		})
+	}
+	if err := svc.DB.CreateInBatches(docs, 200).Error; err != nil {
+		t.Fatalf("seed wiki search docs: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "needle", 20, 1000)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "substring" {
+		t.Fatalf("method = %q, want substring", resp.Method)
+	}
+	if len(resp.Results) != 5 {
+		t.Fatalf("len(results) = %d, want 5", len(resp.Results))
+	}
+	want := []string{"page-0004", "page-0003", "page-0002", "page-0001", "page-0000"}
+	for i, slug := range want {
+		if resp.Results[i].Slug != slug {
+			t.Fatalf("results[%d].Slug = %q, want %q", i, resp.Results[i].Slug, slug)
+		}
+	}
+}
+
+func TestWikiSearchSemanticFallbackPaginationBeyondExactWindow(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: semanticPaginationEmbedder{},
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-semantic-pagination",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-semantic-pagination"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	baseTime := time.Date(2026, time.January, 2, 0, 0, 0, 0, time.UTC)
+	docs := make([]db.WikiSearchDocument, 0, 1005)
+	for i := 0; i < 1005; i++ {
+		docs = append(docs, db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         fmt.Sprintf("semantic-%04d", i),
+			Title:        fmt.Sprintf("Semantic %04d", i),
+			Body:         db.LargeText("unrelated body text"),
+			Embedding:    "[1,0,0]",
+			CreatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+		})
+	}
+	if err := svc.DB.CreateInBatches(docs, 200).Error; err != nil {
+		t.Fatalf("seed wiki search docs: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "semantic offset query", 20, 1000)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "vector" {
+		t.Fatalf("method = %q, want vector", resp.Method)
+	}
+	if len(resp.Results) != 5 {
+		t.Fatalf("len(results) = %d, want 5", len(resp.Results))
+	}
+	want := []string{"semantic-0004", "semantic-0003", "semantic-0002", "semantic-0001", "semantic-0000"}
+	for i, slug := range want {
+		if resp.Results[i].Slug != slug {
+			t.Fatalf("results[%d].Slug = %q, want %q", i, resp.Results[i].Slug, slug)
+		}
+	}
+}
+
+func TestWikiSearchSemanticDBPaginationReordersAfterLabelBoost(t *testing.T) {
+	driverName := fmt.Sprintf("sqlite3_wiki_db_label_pagination_%d", time.Now().UnixNano())
+	sql.Register(driverName, &sqlite3.SQLiteDriver{
+		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
+				switch embedding {
+				case "[1,0,0]":
+					return 0.01
+				case "[0.95,0.05,0]":
+					return 0.02
+				case "[0.7,0.3,0]":
+					return 0.03
+				case "[0.69,0.31,0]":
+					return 0.035
+				case "[0.68,0.32,0]":
+					return 0.04
+				default:
+					return 1
+				}
+			}, true)
+		},
+	})
+
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: semanticPaginationEmbedder{},
+		OpenDB: func(dbPath string) (*gorm.DB, error) {
+			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
+		},
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-db-label-pagination",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-db-label-pagination"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	baseTime := time.Date(2026, time.January, 5, 0, 0, 0, 0, time.UTC)
+	docs := []db.WikiSearchDocument{
+		{RepositoryID: repo.ID, Slug: "rank-a", Title: "Rank A", Body: db.LargeText("unrelated"), Embedding: "[1,0,0]", CreatedAt: baseTime.Add(5 * time.Second), UpdatedAt: baseTime.Add(5 * time.Second)},
+		{RepositoryID: repo.ID, Slug: "rank-b", Title: "Rank B", Body: db.LargeText("unrelated"), Embedding: "[0.95,0.05,0]", CreatedAt: baseTime.Add(4 * time.Second), UpdatedAt: baseTime.Add(4 * time.Second)},
+		{RepositoryID: repo.ID, Slug: "rank-c", Title: "Rank C", Body: db.LargeText("unrelated"), Embedding: "[0.7,0.3,0]", CreatedAt: baseTime.Add(3 * time.Second), UpdatedAt: baseTime.Add(3 * time.Second)},
+		{RepositoryID: repo.ID, Slug: "rank-d", Title: "Rank D", Body: db.LargeText("unrelated"), Embedding: "[0.69,0.31,0]", CreatedAt: baseTime.Add(2 * time.Second), UpdatedAt: baseTime.Add(2 * time.Second)},
+		{RepositoryID: repo.ID, Slug: "rank-e", Title: "Rank E", Body: db.LargeText("unrelated"), Embedding: "[0.68,0.32,0]", CreatedAt: baseTime.Add(1 * time.Second), UpdatedAt: baseTime.Add(1 * time.Second)},
+	}
+	if err := svc.DB.Create(&docs).Error; err != nil {
+		t.Fatalf("seed wiki search docs: %v", err)
+	}
+	if _, err := svc.CreateLabel(ctx, full, "offset-query", "0052CC", "label match"); err != nil {
+		t.Fatalf("CreateLabel: %v", err)
+	}
+	label, err := svc.GetLabel(ctx, full, "offset-query")
+	if err != nil {
+		t.Fatalf("GetLabel: %v", err)
+	}
+	if err := svc.DB.Create(&db.WikiPageLabel{
+		RepositoryID: repo.ID,
+		Slug:         "rank-e",
+		LabelID:      label.ID,
+	}).Error; err != nil {
+		t.Fatalf("create wiki label relation: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "semantic offset query", 2, 2)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "vector" {
+		t.Fatalf("method = %q, want vector", resp.Method)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(resp.Results))
+	}
+	want := []string{"rank-b", "rank-c"}
+	for i, slug := range want {
+		if resp.Results[i].Slug != slug {
+			t.Fatalf("results[%d].Slug = %q, want %q", i, resp.Results[i].Slug, slug)
+		}
+	}
+}
+
+func TestWikiSearchSemanticDBPaginationPromotesLabelBoostBeyondOldPrefix(t *testing.T) {
+	driverName := fmt.Sprintf("sqlite3_wiki_db_label_boost_promotion_%d", time.Now().UnixNano())
+	var vectorCalls int64
+	sql.Register(driverName, &sqlite3.SQLiteDriver{
+		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
+				atomic.AddInt64(&vectorCalls, 1)
+				if embedding == query {
+					return 0
+				}
+				if strings.HasPrefix(embedding, "[0.79,") {
+					return 0.21
+				}
+				return 0.10
+			}, true)
+		},
+	})
+
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: semanticPaginationEmbedder{},
+		OpenDB: func(dbPath string) (*gorm.DB, error) {
+			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
+		},
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-db-label-boost-promotion",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-db-label-boost-promotion"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	if _, err := svc.CreateLabel(ctx, full, "semantic", "d73a4a", ""); err != nil {
+		t.Fatalf("CreateLabel: %v", err)
+	}
+	label, err := svc.GetLabel(ctx, full, "semantic")
+	if err != nil {
+		t.Fatalf("GetLabel: %v", err)
+	}
+
+	baseTime := time.Date(2026, time.January, 6, 0, 0, 0, 0, time.UTC)
+	docs := make([]db.WikiSearchDocument, 0, 260)
+	for i := 0; i < 260; i++ {
+		embeddingValue := "[0.90,0,0]"
+		slug := fmt.Sprintf("boosted-%03d", i)
+		if i == 240 {
+			embeddingValue = "[0.79,0,0]"
+			slug = "boosted-winner"
+		}
+		docs = append(docs, db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         slug,
+			Title:        fmt.Sprintf("Boosted %03d", i),
+			Body:         db.LargeText("unrelated body text"),
+			Embedding:    embeddingValue,
+			CreatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
+		})
+	}
+	if err := svc.DB.CreateInBatches(docs, 50).Error; err != nil {
+		t.Fatalf("seed wiki search docs: %v", err)
+	}
+	if err := svc.DB.Create(&db.WikiPageLabel{
+		RepositoryID: repo.ID,
+		Slug:         "boosted-winner",
+		LabelID:      label.ID,
+	}).Error; err != nil {
+		t.Fatalf("create wiki label relation: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "semantic offset query", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "vector" {
+		t.Fatalf("method = %q, want vector", resp.Method)
+	}
+	if len(resp.Results) != 20 {
+		t.Fatalf("len(results) = %d, want 20", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "boosted-winner" {
+		t.Fatalf("results[0].Slug = %q, want boosted-winner", resp.Results[0].Slug)
+	}
+	if got := atomic.LoadInt64(&vectorCalls); got < 241 {
+		t.Fatalf("VEC_COSINE_DISTANCE calls = %d, want the promoted winner to be ranked past the old 200-row prefix", got)
 	}
 }
 
