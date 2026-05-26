@@ -295,6 +295,14 @@ func buildRESTOpenAPIPaths() map[string]any {
 				param("per_page", "integer"),
 			)...), response(200, "Wiki page history returned")),
 		},
+		"/api/v3/repos/{owner}/{repo}/wiki/compact": map[string]any{
+			"post": operation("compactWikiHistory", "Compact live wiki history into one synthetic admin revision per page.", auth(), jsonBody(false, map[string]any{
+				"before": stringSchema("Reserved for future bounded compaction support. Currently rejected when non-empty."),
+			}, nil), pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+			), response(200, "Wiki history compacted")),
+		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks": map[string]any{
 			"get": operation("listWikiBacklinks", "List inbound wiki links for a page slug.", nil, nil, pathParams(
 				param("owner", "string"),

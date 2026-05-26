@@ -173,6 +173,7 @@ Wiki path-slug hierarchy rules:
 - `GET /api/v3/repos/{owner}/{repo}/wiki/search` accepts `q`, `limit`, `offset`, `label`/`labels`, and `exclude_label`/`exclude_labels`, returns `{results, query, method, elapsed_ms}`, and caps `limit` server-side at 50
 - `GET/POST/PUT/DELETE /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` attaches repo-scoped labels to wiki pages; labels are metadata, not git-tracked page content
 - `POST /api/v3/repos/{owner}/{repo}/wiki/move` atomically renames every page whose slug equals `from` or starts with `from/`, requires an `if_match` SHA map that covers the full source set, and returns one commit for the entire move
+- `POST /api/v3/repos/{owner}/{repo}/wiki/compact` requires repo-admin permission and compacts every live wiki page to one synthetic revision rooted at the current HEAD content
 - `POST /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move` performs an atomic rename with `new_slug` and `if_match`, rewrites eligible inbound wiki references in the same commit, and returns `{ moved, rewrites, skipped }`
 - wiki page get/list/search/backlink response `title` values are deterministically derived from the page slug leaf, not from the markdown body heading; for example `guides/plain-page` returns `Plain Page`
 - wiki page get/list/search responses include `labels`, shaped with the existing repository label JSON contract
@@ -192,6 +193,17 @@ Wiki path-slug hierarchy rules:
 - paginate with the shared `pagination.go` helpers so `page`, `per_page`, and RFC 5988 `Link` headers match the rest of the REST surface
 - transform each entry to `{ sha, message, author, committer, date, body_size }`
 - rely on the standard service error mapping so missing wiki pages stay `404`
+
+### Wiki History Compaction
+
+`POST /api/v3/repos/{owner}/{repo}/wiki/compact` follows the standard REST pattern:
+
+- resolve `{owner}` and `{repo}` from the path
+- require `RepoPermissionAdmin`
+- reject `ref` and any non-empty `before` payload because bounded compaction is not implemented yet
+- compact the catalog-backed wiki history so each live page keeps only one synthetic revision pointing at the current HEAD body
+- rewrite the materialized wiki git branch to one parentless commit whose tree matches the current wiki HEAD
+- return `{ previous_head, new_head, compacted_before, pages, commits_removed }`
 
 ### Git-Backed REST Request
 

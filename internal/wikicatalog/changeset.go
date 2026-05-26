@@ -71,6 +71,7 @@ type Source string
 
 const (
 	SourceREST      Source = "rest"
+	SourceAdmin     Source = "admin"
 	SourceBatch     Source = "batch"
 	SourceMigration Source = "migration"
 	SourcePush      Source = "push" // reserved for the future git façade
