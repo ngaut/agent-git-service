@@ -89,7 +89,7 @@ document the relevant contract below in the same change.
 | `service` | business logic and cross-store orchestration |
 | `tenant` | gitstore tenant context helpers for physical repo scoping |
 | `testharness` | production-wired service and router test fixtures |
-| `wikicatalog` | catalog-backed wiki storage primitive, slug canonicalization, and blob CAS coordination |
+| `wikicatalog` | legacy wiki catalog primitives, slug canonicalization, and transitional blob/CAS helpers |
 | `wikiv2` | git-authoritative wiki write planning, derived index contracts, and reconcile primitives |
 
 ## Dependency Rules
@@ -687,8 +687,9 @@ Rule:
 - only `service` coordinates tenant-local GORM state and Git state together
 - in multi-tenant mode, request-scoped tenant DB selection must happen before service methods run, through `controlplane.DBRouter` + `service.ContextWithDB(...)`
 - database-backed metadata is allowed even for repository or pull-request domains, but it must not replace Git as the authority for Git-native behavior
-- exception: wiki page content is authoritative in `wikicatalog` after the catalog cutover; `gitstore` keeps the sibling `*.wiki.git` bare repo as a materialized projection for Git transport compatibility
-- planned replacement: issue #1488 changes that authority model to git-as-source-of-truth with rebuildable TiDB indexes; see `docs/architecture/wiki-storage-v2.md` for the approved target design until code lands
+- current wiki rule: the sibling `*.wiki.git` repo is authoritative for wiki page content, path layout, and commit history, while TiDB-backed wiki tables remain rebuildable derived indexes and transitional compatibility surfaces until the final #1488 cleanup lands
+- `wikicatalog` remains in the tree only as transitional logic that still backs some routed handlers and migration paths; it must not be treated as the long-term durable authority
+- issue #1488 tracks the remaining cleanup toward a fully git-authoritative wiki stack; see `docs/architecture/wiki-storage-v2.md` for the approved target design
 
 Current state:
 
