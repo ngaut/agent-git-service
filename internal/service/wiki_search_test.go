@@ -320,6 +320,250 @@ func TestWikiSearchFallsBackToGitScanWhenIndexUnavailable(t *testing.T) {
 	}
 }
 
+func TestWikiSearchHydratesReturnedSnippetFromLivePage(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-hydrate",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-hydrate"
+
+	if _, err := svc.PutWikiPage(ctx, full, "guides/auth", "# Auth\n\nCurrent token flow uses refresh tokens for rotation.", "create auth", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	if err := svc.DB.Model(&db.WikiSearchDocument{}).
+		Where("repository_id > 0 AND slug = ?", "guides/auth").
+		Updates(map[string]any{
+			"title": "Stale Auth",
+			"body":  "Stale token flow from the old index snapshot.",
+		}).Error; err != nil {
+		t.Fatalf("mutate search doc: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "token flow", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("results = %#v, want one result", resp.Results)
+	}
+	if !strings.Contains(resp.Results[0].Snippet, "uses refresh") {
+		t.Fatalf("snippet = %q, want current git body", resp.Results[0].Snippet)
+	}
+	if strings.Contains(resp.Results[0].Snippet, "Stale token flow") {
+		t.Fatalf("snippet = %q, should not use stale indexed body", resp.Results[0].Snippet)
+	}
+}
+
+func TestWikiSearchDropsStaleIndexedRowsForDeletedPages(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-stale-delete",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-stale-delete"
+
+	page, err := svc.PutWikiPage(ctx, full, "guides/auth", "# Auth\n\nDelete me after indexing.", "create auth", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	if err := svc.DeleteWikiPage(ctx, full, "guides/auth", "delete auth"); err != nil {
+		t.Fatalf("DeleteWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	if err := svc.DB.Create(&db.WikiSearchDocument{
+		RepositoryID: repo.ID,
+		Slug:         "guides/auth",
+		Title:        "Auth",
+		Body:         db.LargeText("Delete me after indexing."),
+		RevisionSHA:  page.SHA,
+	}).Error; err != nil {
+		t.Fatalf("reinsert stale doc: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "delete me", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 0 {
+		t.Fatalf("results = %#v, want empty after filtering deleted git page", resp.Results)
+	}
+}
+
+func TestWikiSearchBackfillsPageAfterFilteringStaleIndexedRows(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-stale-backfill",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-stale-backfill"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	if _, err := svc.PutWikiPage(ctx, full, "guides/live", "# Live\n\nBackfill me after stale rows.", "create live", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	baseTime := time.Date(2026, time.January, 7, 0, 0, 0, 0, time.UTC)
+	staleDocs := make([]db.WikiSearchDocument, 0, 20)
+	for i := 0; i < 20; i++ {
+		staleDocs = append(staleDocs, db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         fmt.Sprintf("guides/stale-%02d", i),
+			Title:        fmt.Sprintf("Stale %02d", i),
+			Body:         db.LargeText("Backfill me after stale rows."),
+			CreatedAt:    baseTime.Add(time.Duration(20-i) * time.Second),
+			UpdatedAt:    baseTime.Add(time.Duration(20-i) * time.Second),
+		})
+	}
+	if err := svc.DB.CreateInBatches(staleDocs, 20).Error; err != nil {
+		t.Fatalf("seed stale docs: %v", err)
+	}
+	if err := svc.DB.Model(&db.WikiSearchDocument{}).
+		Where("repository_id = ? AND slug = ?", repo.ID, "guides/live").
+		Updates(map[string]any{
+			"body":       "Backfill me after stale rows.",
+			"updated_at": baseTime,
+		}).Error; err != nil {
+		t.Fatalf("downgrade live doc ordering: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "backfill me after stale rows", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1 live result after backfill", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "guides/live" {
+		t.Fatalf("results[0].Slug = %q, want guides/live", resp.Results[0].Slug)
+	}
+}
+
+func TestWikiSearchSemanticBackfillsPageAfterFilteringStaleIndexedRows(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: semanticPaginationEmbedder{},
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-semantic-stale-backfill",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-semantic-stale-backfill"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	if _, err := svc.PutWikiPage(ctx, full, "guides/live", "# Live\n\nCurrent live page body.", "create live", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	baseTime := time.Date(2026, time.January, 8, 0, 0, 0, 0, time.UTC)
+	staleDocs := make([]db.WikiSearchDocument, 0, 20)
+	for i := 0; i < 20; i++ {
+		staleDocs = append(staleDocs, db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         fmt.Sprintf("guides/stale-semantic-%02d", i),
+			Title:        fmt.Sprintf("Stale Semantic %02d", i),
+			Body:         db.LargeText("semantic-only stale row"),
+			Embedding:    "[1,0,0]",
+			CreatedAt:    baseTime.Add(time.Duration(20-i) * time.Second),
+			UpdatedAt:    baseTime.Add(time.Duration(20-i) * time.Second),
+		})
+	}
+	if err := svc.DB.CreateInBatches(staleDocs, 20).Error; err != nil {
+		t.Fatalf("seed stale docs: %v", err)
+	}
+	if err := svc.DB.Model(&db.WikiSearchDocument{}).
+		Where("repository_id = ? AND slug = ?", repo.ID, "guides/live").
+		Updates(map[string]any{
+			"body":       "semantic-only live row",
+			"embedding":  "[1,0,0]",
+			"updated_at": baseTime,
+		}).Error; err != nil {
+		t.Fatalf("downgrade live doc ordering: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "semantic offset query", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if resp.Method != "vector" {
+		t.Fatalf("method = %q, want vector", resp.Method)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1 live semantic result after backfill", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "guides/live" {
+		t.Fatalf("results[0].Slug = %q, want guides/live", resp.Results[0].Slug)
+	}
+}
+
 func TestWikiSearchVectorUnavailableFallsBackToLexicalAndReindex_Issue1362(t *testing.T) {
 	embedder := semanticWikiEmbedder{}
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{Embedder: embedder})

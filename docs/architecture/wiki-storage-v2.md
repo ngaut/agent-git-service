@@ -1,11 +1,12 @@
 # Wiki Storage V2
 
-Status: Proposed
+Status: Partially implemented, cleanup and final cutover still in progress
 
 This document records the approved target architecture for the wiki storage
-rewrite tracked by issue #1488. It is a design baseline for implementation
-planning; the current production architecture remains documented in
-[`../architecture.md`](../architecture.md).
+rewrite tracked by issue #1488. Large parts of this model are already present
+in the repo today, but cleanup, migration completion, and final authority
+alignment are still being finished. The current production architecture remains
+documented in [`../architecture.md`](../architecture.md).
 
 ## Summary
 
@@ -15,10 +16,12 @@ semantics, and compaction. TiDB remains in the architecture, but only for
 rebuildable derived indexes such as page listings, labels, backlinks, search,
 history acceleration, and reconciler progress.
 
-The current catalog-first model stores authoritative wiki state in relational
-tables and then projects that state back into git. Wiki V2 removes that
-dual-authority boundary so page writes become real git commits and all git-like
-wiki reads come directly from git.
+The historical catalog-first model stored authoritative wiki state in
+relational tables and then projected that state back into git. Wiki V2 removes
+that dual-authority boundary so page writes become real git commits and all
+git-like wiki reads come directly from git. Remaining work is primarily about
+removing transitional tables/paths and making every derived index obviously
+rebuildable from git alone.
 
 ## Goals
 

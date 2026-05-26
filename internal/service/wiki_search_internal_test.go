@@ -57,7 +57,7 @@ func TestFuseWikiSearchResultsIncludesCrossWindowWinner(t *testing.T) {
 	lexical = append(lexical, WikiSearchResult{Slug: "joint-21", Score: 1})
 	semantic = append(semantic, WikiSearchResult{Slug: "joint-21", Score: 1})
 
-	results := fuseWikiSearchResults(lexical, semantic, 1, 0)
+	results := paginateWikiSearchResultList(fuseWikiSearchResults(lexical, semantic), 1, 0)
 	if len(results) != 1 {
 		t.Fatalf("len(results) = %d, want 1", len(results))
 	}

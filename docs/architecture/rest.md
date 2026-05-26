@@ -181,7 +181,7 @@ Wiki path-slug hierarchy rules:
 - only the exact single-segment routes `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
 - read/list/backlink operations also surface legacy on-disk wiki filenames that still contain uppercase letters, underscores, or dots
 - catalog-backed wiki read responses set `X-Wiki-Migration-In-Progress: true` while a stale repository is being replayed into the catalog in the background
-- wiki search indexing is asynchronous after successful put/move/delete/label writes, so clients must tolerate short freshness lag; when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
+- wiki search indexing is asynchronous after successful put/move/delete/label writes, so candidate selection can lag briefly; before paginating the response, stale missing pages are filtered out and surviving results are refreshed through the current catalog-backed live page read path so titles/snippets/labels reflect the latest page view, and when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
 
 ### Wiki Page History
 

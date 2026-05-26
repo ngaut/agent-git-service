@@ -99,6 +99,10 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 	limit := clampWikiSearchLimit(opts.Limit)
 	offset := normalizeWikiSearchOffset(opts.Offset)
 	labelFilters := WikiLabelFilters{Labels: opts.Labels, ExcludeLabels: opts.ExcludeLabels}
+	wikiRepoLive := false
+	if _, err := s.Git.HeadSHA(ctx, wikiRepoFullName(repoFullName), wikiDefaultBranch); err == nil {
+		wikiRepoLive = true
+	}
 
 	method := "substring"
 	lexical, err := s.searchWikiLexical(ctx, repo.ID, query, labelFilters)
@@ -109,19 +113,30 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 			return WikiSearchResponse{}, err
 		}
 	}
-	results := paginateWikiSearchResultList(lexical, limit, offset)
+	results := lexical
+	resultsAlreadyPaginated := false
 
 	if s.Embedder != nil && !embedding.IsNop(s.Embedder) {
-		if semantic, ok, semanticErr := s.searchWikiSemantic(ctx, repo.ID, query, labelFilters, limit, offset, len(lexical) == 0); semanticErr != nil {
+		paginateBeforeHydration := len(lexical) == 0 && !wikiRepoLive
+		if semantic, ok, semanticErr := s.searchWikiSemantic(ctx, repo.ID, query, labelFilters, limit, offset, len(lexical) == 0, paginateBeforeHydration); semanticErr != nil {
 			slog.WarnContext(ctx, "wiki search semantic path failed; falling back to substring", "repo", repo.FullName, "error", semanticErr)
 		} else if ok {
 			method = "vector"
 			if len(lexical) == 0 {
 				results = semantic
+				resultsAlreadyPaginated = paginateBeforeHydration
 			} else {
-				results = fuseWikiSearchResults(lexical, semantic, limit, offset)
+				results = fuseWikiSearchResults(lexical, semantic)
 			}
 		}
+	}
+
+	results, err = s.hydrateWikiSearchResults(ctx, repoFullName, results, query, wikiRepoLive)
+	if err != nil {
+		return WikiSearchResponse{}, err
+	}
+	if !resultsAlreadyPaginated {
+		results = paginateWikiSearchResultList(results, limit, offset)
 	}
 
 	return WikiSearchResponse{
@@ -130,6 +145,30 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 		Method:    method,
 		ElapsedMS: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+func (s *Service) hydrateWikiSearchResults(ctx context.Context, repoFullName string, results []WikiSearchResult, query string, wikiRepoLive bool) ([]WikiSearchResult, error) {
+	if len(results) == 0 {
+		return []WikiSearchResult{}, nil
+	}
+	if !wikiRepoLive {
+		return results, nil
+	}
+	hydrated := make([]WikiSearchResult, 0, len(results))
+	for _, result := range results {
+		page, err := s.GetWikiPage(ctx, repoFullName, result.Slug)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		result.Title = page.Title
+		result.Snippet = buildWikiSnippet(page.Body, query)
+		result.Labels = page.Labels
+		hydrated = append(hydrated, result)
+	}
+	return hydrated, nil
 }
 
 func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query string, filters WikiLabelFilters) ([]WikiSearchResult, error) {
@@ -352,7 +391,7 @@ func (s *Service) wikiSearchDocumentsFullText(ctx context.Context, repoID uint, 
 	return docs, nil
 }
 
-func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, limit, offset int, lexicalEmpty bool) ([]WikiSearchResult, bool, error) {
+func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, limit, offset int, lexicalEmpty, paginateBeforeHydration bool) ([]WikiSearchResult, bool, error) {
 	query = embedding.TruncateInput(query)
 	vec, err := s.Embedder.Embed(ctx, query)
 	if err != nil {
@@ -362,15 +401,18 @@ func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query str
 		return nil, false, nil
 	}
 	if !db.SupportsVectorDistance(s.DBForCtx(ctx)) {
-		return s.searchWikiSemanticInMemory(ctx, repoID, query, vec, limit, offset, filters, !lexicalEmpty)
+		return s.searchWikiSemanticInMemory(ctx, repoID, query, vec, limit, offset, filters, paginateBeforeHydration)
 	}
 	if lexicalEmpty {
-		return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters, false)
+		if paginateBeforeHydration {
+			return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters, false, true)
+		}
+		return s.searchWikiSemanticDB(ctx, repoID, query, vec, wikiSemanticMaxExact, 0, filters, false, false)
 	}
-	return s.searchWikiSemanticDB(ctx, repoID, query, vec, wikiSemanticMaxExact, 0, filters, true)
+	return s.searchWikiSemanticDB(ctx, repoID, query, vec, wikiSemanticMaxExact, 0, filters, true, false)
 }
 
-func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, forFusion bool) ([]WikiSearchResult, bool, error) {
+func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, paginateBeforeHydration bool) ([]WikiSearchResult, bool, error) {
 	docs, err := s.wikiSearchDocuments(ctx, repoID, query, true, filters)
 	if err != nil {
 		return nil, false, err
@@ -404,7 +446,7 @@ func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, q
 		return nil, false, nil
 	}
 	sortWikiScoredDocuments(scored)
-	if !forFusion {
+	if paginateBeforeHydration {
 		return paginateWikiSearchResults(scored, query, limit, offset), true, nil
 	}
 	return buildWikiSearchResults(scored, query), true, nil
@@ -430,7 +472,7 @@ func wikiSemanticExactLimit(limit, offset int) int {
 	return n
 }
 
-func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, exactWindow bool) ([]WikiSearchResult, bool, error) {
+func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, exactWindow, paginateBeforeHydration bool) ([]WikiSearchResult, bool, error) {
 	candidateLimit := wikiSemanticPageLimit(limit)
 	dbOffset := offset
 	if exactWindow {
@@ -508,8 +550,8 @@ func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query s
 		return nil, false, nil
 	}
 	sortWikiScoredDocuments(scored)
-	if exactWindow {
-		return paginateWikiSearchResults(scored, query, limit, offset), true, nil
+	if paginateBeforeHydration {
+		return buildWikiSearchResults(scored, query), true, nil
 	}
 	return buildWikiSearchResults(scored, query), true, nil
 }
@@ -607,7 +649,7 @@ func wikiReciprocalRankScore(rank int) float64 {
 	return 1.0 / (60.0 + float64(rank))
 }
 
-func fuseWikiSearchResults(lexical, semantic []WikiSearchResult, limit, offset int) []WikiSearchResult {
+func fuseWikiSearchResults(lexical, semantic []WikiSearchResult) []WikiSearchResult {
 	bySlug := make(map[string]*wikiFusedSearchResult, len(lexical)+len(semantic))
 	for idx, result := range lexical {
 		rank := idx + 1
@@ -655,7 +697,7 @@ func fuseWikiSearchResults(lexical, semantic []WikiSearchResult, limit, offset i
 	for _, entry := range ranked {
 		results = append(results, entry.result)
 	}
-	return paginateWikiSearchResultList(results, limit, offset)
+	return results
 }
 
 func (s *Service) wikiSearchDocuments(ctx context.Context, repoID uint, query string, requireEmbedding bool, filters WikiLabelFilters) ([]db.WikiSearchDocument, error) {
