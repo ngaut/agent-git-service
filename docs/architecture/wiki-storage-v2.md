@@ -1,11 +1,9 @@
 # Wiki Storage V2
 
-Status: Partially implemented, cleanup and final cutover still in progress
+Status: Approved target, cutover and cleanup still in progress
 
-This document records the approved target architecture for the wiki storage
-rewrite tracked by issue #1488. Large parts of this model are already present
-in the repo today, but cleanup, migration completion, and final authority
-alignment are still being finished. The current production architecture remains
+This document records the target architecture for the wiki storage rewrite
+tracked by issue `#1488`. The current production architecture remains
 documented in [`../architecture.md`](../architecture.md).
 
 ## Summary
@@ -19,9 +17,7 @@ history acceleration, and reconciler progress.
 The historical catalog-first model stored authoritative wiki state in
 relational tables and then projected that state back into git. Wiki V2 removes
 that dual-authority boundary so page writes become real git commits and all
-git-like wiki reads come directly from git. Remaining work is primarily about
-removing transitional tables/paths and making every derived index obviously
-rebuildable from git alone.
+git-like wiki reads come directly from git.
 
 ## Goals
 
@@ -91,8 +87,8 @@ All of these tables must be rebuildable from git history and current trees.
    endpoints that require read-your-writes behavior.
 
 Write correctness relies on git ref atomicity. The service layer may add a
-process-local guard, but git ref CAS is the durable concurrency primitive across
-multiple pods.
+process-local guard, but git ref CAS is the durable concurrency primitive
+across multiple pods.
 
 ## Read Path
 
@@ -103,9 +99,9 @@ multiple pods.
 - Flat lists, label filters, backlinks, and search come from TiDB-derived
   indexes.
 
-The key rule is simple: if a read is fundamentally about git content or history,
-git is the authority; if it is an indexed query over current wiki metadata,
-TiDB may answer it.
+The key rule is simple: if a read is fundamentally about git content or
+history, git is the authority; if it is an indexed query over current wiki
+metadata, TiDB may answer it.
 
 ## Migration
 
@@ -133,11 +129,12 @@ The migration must explicitly decide and document:
 
 - Measure `git cat-file`, `git ls-tree`, and `git log -- <path>` latency on the
   production wiki filesystem before cutover claims are accepted.
-- Export reconciler lag metrics and alert when `indexed_commit_sha` falls behind.
+- Export reconciler lag metrics and alert when `indexed_commit_sha` falls
+  behind.
 - Keep an index rebuild procedure that can reconstruct TiDB wiki indexes from
   git without human data repair.
-- Block or validate direct pushes to the bare wiki repo so API invariants cannot
-  be bypassed.
+- Block or validate direct pushes to the bare wiki repo so API invariants
+  cannot be bypassed.
 
 ## Testing Requirements
 
