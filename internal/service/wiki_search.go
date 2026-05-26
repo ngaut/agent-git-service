@@ -26,6 +26,7 @@ const (
 	wikiSearchMaxLimit     = 50
 	wikiSnippetBudget      = 180
 	wikiSemanticMinScore   = 0.2
+	wikiSemanticMaxExact   = 1000
 )
 
 type WikiSearchResult struct {
@@ -120,10 +121,22 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 }
 
 func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query string, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, error) {
+	if db.SupportsTiDBSearch(s.DBForCtx(ctx)) {
+		docs, err := s.wikiSearchDocumentsFullText(ctx, repoID, query, filters)
+		if err == nil {
+			return s.rankWikiLexicalDocuments(ctx, repoID, docs, query, limit, offset)
+		}
+		slog.WarnContext(ctx, "wiki search TiDB full-text query failed; falling back to LIKE", "repo_id", repoID, "error", err)
+	}
+
 	docs, err := s.wikiSearchDocuments(ctx, repoID, query, false, filters)
 	if err != nil {
 		return nil, err
 	}
+	return s.rankWikiLexicalDocuments(ctx, repoID, docs, query, limit, offset)
+}
+
+func (s *Service) rankWikiLexicalDocuments(ctx context.Context, repoID uint, docs []db.WikiSearchDocument, query string, limit, offset int) ([]WikiSearchResult, error) {
 	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
 		return nil, err
 	}
@@ -212,6 +225,121 @@ type wikiScoredDocument struct {
 	labels []db.Label
 }
 
+func wikiSearchMySQLStringLiteral(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case 0:
+			b.WriteString(`\0`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\'':
+			b.WriteString(`''`)
+		case 0x1a:
+			b.WriteString(`\Z`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
+}
+
+func wikiSearchFullTextSubquery(database *gorm.DB, column, token string) *gorm.DB {
+	field := "wiki_search_documents.body"
+	if column == "title" {
+		field = "wiki_search_documents.title"
+	}
+	return database.Session(&gorm.Session{NewDB: true}).
+		Table("wiki_search_documents").
+		Select("wiki_search_documents.id").
+		Where("FTS_MATCH_WORD(" + wikiSearchMySQLStringLiteral(token) + ", " + field + ")")
+}
+
+func wikiSearchLabelTokenExistsSQL(likeEscape string) string {
+	return "EXISTS (" +
+		"SELECT 1 FROM wiki_page_labels " +
+		"JOIN labels ON labels.id = wiki_page_labels.label_id " +
+		"WHERE wiki_page_labels.repository_id = wiki_search_documents.repository_id " +
+		"AND wiki_page_labels.slug = wiki_search_documents.slug " +
+		"AND (labels.name LIKE ?" + likeEscape + " OR labels.description LIKE ?" + likeEscape + ")" +
+		")"
+}
+
+func (s *Service) applyWikiSearchLabelPredicates(ctx context.Context, repoID uint, q *gorm.DB, filters WikiLabelFilters) (*gorm.DB, bool, error) {
+	if !hasWikiLabelFilters(filters) {
+		return q, false, nil
+	}
+	for _, labelName := range uniqueLabelNames(filters.Labels) {
+		label, err := s.repoLabelByName(ctx, repoID, labelName)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return q.Where("1 = 0"), true, nil
+			}
+			return nil, false, err
+		}
+		q = q.Where(
+			"EXISTS (SELECT 1 FROM wiki_page_labels WHERE wiki_page_labels.repository_id = wiki_search_documents.repository_id AND wiki_page_labels.slug = wiki_search_documents.slug AND wiki_page_labels.label_id = ?)",
+			label.ID,
+		)
+	}
+
+	excludeLabels, err := s.resolveRepoLabels(ctx, repoID, filters.ExcludeLabels)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(excludeLabels) > 0 {
+		labelIDs := make([]uint, 0, len(excludeLabels))
+		for _, label := range excludeLabels {
+			labelIDs = append(labelIDs, label.ID)
+		}
+		q = q.Where(
+			"NOT EXISTS (SELECT 1 FROM wiki_page_labels WHERE wiki_page_labels.repository_id = wiki_search_documents.repository_id AND wiki_page_labels.slug = wiki_search_documents.slug AND wiki_page_labels.label_id IN ?)",
+			labelIDs,
+		)
+	}
+	return q, false, nil
+}
+
+func (s *Service) wikiSearchDocumentsFullText(ctx context.Context, repoID uint, query string, filters WikiLabelFilters) ([]db.WikiSearchDocument, error) {
+	database := s.DBForCtx(ctx)
+	q := database.Model(&db.WikiSearchDocument{}).Where("wiki_search_documents.repository_id = ?", repoID)
+	var noResults bool
+	var err error
+	q, noResults, err = s.applyWikiSearchLabelPredicates(ctx, repoID, q, filters)
+	if err != nil {
+		return nil, err
+	}
+	if noResults {
+		return []db.WikiSearchDocument{}, nil
+	}
+
+	likeEscape := wikiSearchLikeEscapeClause(database)
+	for _, token := range wikiSearchTokens(query) {
+		like := "%" + escapeWikiSearchLike(token) + "%"
+		q = q.Where(
+			"(wiki_search_documents.id IN (?) OR wiki_search_documents.id IN (?) OR wiki_search_documents.slug LIKE ?"+likeEscape+" OR "+wikiSearchLabelTokenExistsSQL(likeEscape)+")",
+			wikiSearchFullTextSubquery(database, "title", token),
+			wikiSearchFullTextSubquery(database, "body", token),
+			like,
+			like,
+			like,
+		)
+	}
+
+	var docs []db.WikiSearchDocument
+	if err := q.Order("wiki_search_documents.updated_at desc").Find(&docs).Error; err != nil {
+		return nil, err
+	}
+	return docs, nil
+}
+
 func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query string, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, bool, error) {
 	vec, err := s.Embedder.Embed(ctx, query)
 	if err != nil {
@@ -220,7 +348,13 @@ func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query str
 	if len(vec) == 0 {
 		return nil, false, nil
 	}
+	if !db.SupportsVectorDistance(s.DBForCtx(ctx)) {
+		return s.searchWikiSemanticInMemory(ctx, repoID, query, vec, limit, offset, filters)
+	}
+	return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters)
+}
 
+func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, bool, error) {
 	docs, err := s.wikiSearchDocuments(ctx, repoID, query, true, filters)
 	if err != nil {
 		return nil, false, err
@@ -238,17 +372,96 @@ func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query str
 
 	scored := make([]wikiScoredDocument, 0, len(docs))
 	for _, doc := range docs {
-		docVec, ok := parseStoredVector(doc.Embedding)
-		if !ok || len(docVec) != len(vec) {
+		storedVec, ok := parseStoredEmbedding(doc.Embedding)
+		if !ok || len(storedVec) != len(vec) {
 			continue
 		}
-		score := cosineSimilarity(vec, docVec)
-		if math.IsNaN(score) || math.IsInf(score, 0) {
+		score := cosineSimilarity(storedVec, vec)
+		if math.IsNaN(score) || math.IsInf(score, 0) || score < wikiSemanticMinScore {
 			continue
 		}
-		if score < wikiSemanticMinScore {
+		labels := labelsBySlug[doc.Slug]
+		score += wikiLabelLexicalScore(labels, query) * 0.05
+		scored = append(scored, wikiScoredDocument{doc: doc, score: score, labels: labels})
+	}
+	if len(scored) == 0 {
+		return nil, false, nil
+	}
+	sortWikiScoredDocuments(scored)
+	return paginateWikiSearchResults(scored, query, limit, offset), true, nil
+}
+
+type wikiSemanticDBRow struct {
+	db.WikiSearchDocument `gorm:"embedded"`
+	SemanticDistance      float64 `gorm:"column:semantic_distance"`
+}
+
+func wikiSemanticExactLimit(limit, offset int) int {
+	if offset > wikiSemanticMaxExact {
+		return 0
+	}
+	n := offset + limit
+	if n <= 0 {
+		n = wikiSearchDefaultLimit
+	}
+	if n > wikiSemanticMaxExact {
+		n = wikiSemanticMaxExact
+	}
+	return n
+}
+
+func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, bool, error) {
+	candidateLimit := wikiSemanticExactLimit(limit, offset)
+	if candidateLimit == 0 {
+		return nil, false, nil
+	}
+	vecLiteral := embedding.FormatVector(vec)
+	database := s.DBForCtx(ctx)
+	q := database.Model(&db.WikiSearchDocument{}).
+		Where("wiki_search_documents.repository_id = ?", repoID).
+		Where("wiki_search_documents.embedding IS NOT NULL")
+	var noResults bool
+	var err error
+	q, noResults, err = s.applyWikiSearchLabelPredicates(ctx, repoID, q, filters)
+	if err != nil {
+		return nil, false, err
+	}
+	if noResults {
+		return nil, false, nil
+	}
+
+	var rows []wikiSemanticDBRow
+	err = q.
+		Select("wiki_search_documents.*, VEC_COSINE_DISTANCE(wiki_search_documents.embedding, ?) AS semantic_distance", vecLiteral).
+		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: "semantic_distance ASC, wiki_search_documents.updated_at DESC, wiki_search_documents.slug ASC"}}).
+		Limit(candidateLimit).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, false, err
+	}
+	if len(rows) == 0 {
+		return nil, false, nil
+	}
+
+	docs := make([]db.WikiSearchDocument, 0, len(rows))
+	for _, row := range rows {
+		docs = append(docs, row.WikiSearchDocument)
+	}
+	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
+		return nil, false, err
+	}
+	labelsBySlug, err := s.wikiSearchLabelsBySlug(ctx, repoID, docs)
+	if err != nil {
+		return nil, false, err
+	}
+
+	scored := make([]wikiScoredDocument, 0, len(rows))
+	for i, row := range rows {
+		score := 1 - row.SemanticDistance
+		if math.IsNaN(score) || math.IsInf(score, 0) || score < wikiSemanticMinScore {
 			continue
 		}
+		doc := docs[i]
 		labels := labelsBySlug[doc.Slug]
 		score += wikiLabelLexicalScore(labels, query) * 0.05
 		scored = append(scored, wikiScoredDocument{doc: doc, score: score, labels: labels})
@@ -320,7 +533,6 @@ func (s *Service) wikiSearchDocuments(ctx context.Context, repoID uint, query st
 				"wiki_search_documents.title",
 				"wiki_search_documents.body",
 				"wiki_search_documents.revision_sha",
-				"wiki_search_documents.embedding",
 				"wiki_search_documents.created_at",
 				"wiki_search_documents.updated_at",
 			)
@@ -487,43 +699,6 @@ func highlightSnippet(snippet, query string) string {
 	return out
 }
 
-func parseStoredVector(raw string) ([]float32, bool) {
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "[")
-	raw = strings.TrimSuffix(raw, "]")
-	if raw == "" {
-		return nil, false
-	}
-	parts := strings.Split(raw, ",")
-	vec := make([]float32, 0, len(parts))
-	for _, part := range parts {
-		v, err := strconv.ParseFloat(strings.TrimSpace(part), 32)
-		if err != nil {
-			return nil, false
-		}
-		vec = append(vec, float32(v))
-	}
-	return vec, true
-}
-
-func cosineSimilarity(a, b []float32) float64 {
-	if len(a) == 0 || len(a) != len(b) {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		av := float64(a[i])
-		bv := float64(b[i])
-		dot += av * bv
-		normA += av * av
-		normB += bv * bv
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
-}
-
 func (s *Service) queueWikiSearchUpsert(ctx context.Context, repoFullName string, page WikiPage) {
 	s.Wg.Add(1)
 	go func() {
@@ -575,31 +750,45 @@ func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName str
 	if err != nil {
 		return err
 	}
+	targetDB := s.DBForCtx(ctx)
 	title := titleFromSlug(page.Slug)
-	doc := db.WikiSearchDocument{
-		RepositoryID: repo.ID,
-		Slug:         page.Slug,
-		Title:        title,
-		Body:         db.LargeText(page.Body),
-		RevisionSHA:  page.SHA,
-		Embedding:    "",
+	now := time.Now()
+	values := map[string]any{
+		"repository_id": repo.ID,
+		"slug":          page.Slug,
+		"title":         title,
+		"body":          db.LargeText(page.Body),
+		"revision_sha":  page.SHA,
+		"created_at":    now,
+		"updated_at":    now,
 	}
+	updateColumns := []string{"title", "body", "revision_sha", "updated_at"}
 	if s.Embedder != nil && !embedding.IsNop(s.Embedder) {
 		text := title + "\n" + wikiPageLabelsText(page.Labels) + "\n" + page.Body
 		if len(text) > 32000 {
 			text = text[:32000]
 		}
+		hasEmbeddingColumn := targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
 		vec, err := s.embedWithRetry(ctx, text)
 		if err != nil {
 			slog.WarnContext(ctx, "wiki search embedding failed; storing lexical document only", "repo", repoFullName, "slug", page.Slug, "error", err)
+			if hasEmbeddingColumn {
+				values["embedding"] = nil
+				updateColumns = append(updateColumns, "embedding")
+			}
 		} else if len(vec) > 0 {
-			doc.Embedding = embedding.FormatVector(vec)
+			s.ensureVectorInit(targetDB, len(vec))
+			hasEmbeddingColumn = targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
+			if hasEmbeddingColumn {
+				values["embedding"] = embedding.FormatVector(vec)
+				updateColumns = append(updateColumns, "embedding")
+			}
 		}
 	}
-	return s.DBForCtx(ctx).Clauses(clause.OnConflict{
+	return targetDB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "repository_id"}, {Name: "slug"}},
-		DoUpdates: clause.AssignmentColumns([]string{"title", "body", "revision_sha", "embedding", "updated_at"}),
-	}).Create(&doc).Error
+		DoUpdates: clause.AssignmentColumns(updateColumns),
+	}).Model(&db.WikiSearchDocument{}).Create(values).Error
 }
 
 func (s *Service) deleteWikiSearchDocument(ctx context.Context, repoFullName, slug string) error {
@@ -650,4 +839,164 @@ func (s *Service) ReindexAllWikiSearch(ctx context.Context) (int, error) {
 		total += n
 	}
 	return total, nil
+}
+
+func (s *Service) QueueWikiSearchAutoReindex() {
+	if s == nil || s.Embedder == nil || embedding.IsNop(s.Embedder) {
+		return
+	}
+	s.Wg.Add(1)
+	go func() {
+		defer s.Wg.Done()
+		for _, targetCtx := range s.wikiSearchAutoReindexTargets() {
+			needsReindex, reason, err := s.needsWikiSearchAutoReindex(targetCtx)
+			if err != nil {
+				slog.WarnContext(targetCtx, "wiki search auto reindex check failed", "error", err)
+				continue
+			}
+			if !needsReindex {
+				continue
+			}
+			slog.InfoContext(targetCtx, "wiki search auto reindex started", "reason", reason)
+			count, err := s.ReindexAllWikiSearch(targetCtx)
+			if err != nil {
+				slog.WarnContext(targetCtx, "wiki search auto reindex failed", "reason", reason, "indexed", count, "error", err)
+				continue
+			}
+			slog.InfoContext(targetCtx, "wiki search auto reindex completed", "reason", reason, "indexed", count)
+		}
+	}()
+}
+
+func (s *Service) wikiSearchAutoReindexTargets() []context.Context {
+	baseCtx := s.ServerCtx()
+	targets := []context.Context{baseCtx}
+	if s != nil && s.TenantContexts != nil {
+		tenantCtxs, err := s.TenantContexts(baseCtx)
+		if err != nil {
+			slog.WarnContext(baseCtx, "wiki search tenant context enumeration failed", "error", err)
+			return targets
+		}
+		for _, tenantCtx := range tenantCtxs {
+			if tenantCtx != nil {
+				targets = append(targets, tenantCtx)
+			}
+		}
+		return targets
+	}
+	if s == nil || s.TenantDBs == nil {
+		return targets
+	}
+	tenantDBs, err := s.TenantDBs(baseCtx)
+	if err != nil {
+		slog.WarnContext(baseCtx, "wiki search tenant DB enumeration failed", "error", err)
+		return targets
+	}
+	for _, tenantDB := range tenantDBs {
+		if tenantDB == nil {
+			continue
+		}
+		targets = append(targets, ContextWithDB(baseCtx, tenantDB))
+	}
+	return targets
+}
+
+func parseStoredEmbedding(raw string) ([]float32, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, false
+	}
+	raw = strings.TrimPrefix(raw, "[")
+	raw = strings.TrimSuffix(raw, "]")
+	if strings.TrimSpace(raw) == "" {
+		return nil, false
+	}
+	parts := strings.Split(raw, ",")
+	vec := make([]float32, 0, len(parts))
+	for _, part := range parts {
+		value, err := strconv.ParseFloat(strings.TrimSpace(part), 32)
+		if err != nil {
+			return nil, false
+		}
+		vec = append(vec, float32(value))
+	}
+	return vec, true
+}
+
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, magA, magB float64
+	for i := range a {
+		af := float64(a[i])
+		bf := float64(b[i])
+		dot += af * bf
+		magA += af * af
+		magB += bf * bf
+	}
+	if magA == 0 || magB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(magA) * math.Sqrt(magB))
+}
+
+func (s *Service) needsWikiSearchAutoReindex(ctx context.Context) (bool, string, error) {
+	database := s.DBForCtx(ctx)
+	migrator := database.Migrator()
+	if !migrator.HasTable("wiki_search_documents") {
+		return false, "", nil
+	}
+
+	var docs int64
+	if err := database.Model(&db.WikiSearchDocument{}).Count(&docs).Error; err != nil {
+		return false, "", err
+	}
+	if docs == 0 {
+		var wikiRepos int64
+		if err := database.Model(&db.Repository{}).Where("has_wiki = ?", true).Count(&wikiRepos).Error; err != nil {
+			return false, "", err
+		}
+		if wikiRepos > 0 {
+			return true, "empty wiki search index", nil
+		}
+		return false, "", nil
+	}
+
+	if !migrator.HasColumn("wiki_search_documents", "embedding") {
+		return true, "missing embedding column", nil
+	}
+	if db.SupportsTiDBSearch(database) && !wikiSearchEmbeddingColumnIsNativeVector(database) {
+		return true, "legacy embedding column", nil
+	}
+
+	var missing int64
+	missingQuery := "embedding IS NULL"
+	if !wikiSearchEmbeddingColumnIsNativeVector(database) {
+		missingQuery = "embedding IS NULL OR embedding = ''"
+	}
+	if err := database.Model(&db.WikiSearchDocument{}).Where(missingQuery).Count(&missing).Error; err != nil {
+		return false, "", err
+	}
+	if missing > 0 {
+		return true, "missing embedding values", nil
+	}
+	return false, "", nil
+}
+
+func wikiSearchEmbeddingColumnIsNativeVector(database *gorm.DB) bool {
+	if database == nil {
+		return false
+	}
+	cols, err := database.Migrator().ColumnTypes("wiki_search_documents")
+	if err != nil {
+		return false
+	}
+	for _, col := range cols {
+		if !strings.EqualFold(col.Name(), "embedding") {
+			continue
+		}
+		return strings.Contains(strings.ToLower(col.DatabaseTypeName()), "vector")
+	}
+	return false
 }

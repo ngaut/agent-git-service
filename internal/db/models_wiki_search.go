@@ -3,8 +3,8 @@ package db
 import "time"
 
 // WikiSearchDocument stores one searchable wiki page snapshot per repository slug.
-// Embedding is stored as a serialized vector string so non-TiDB test backends can
-// exercise semantic ranking logic without requiring native VECTOR support.
+// Embedding is managed by wiki search migrations: non-TiDB backends keep a text
+// column, while TiDB deployments can convert it to VECTOR(dims) during InitVector.
 type WikiSearchDocument struct {
 	ID           uint       `gorm:"primaryKey;autoIncrement"`
 	RepositoryID uint       `gorm:"not null;index;uniqueIndex:idx_wiki_search_repo_slug"`
@@ -13,7 +13,7 @@ type WikiSearchDocument struct {
 	Title        string     `gorm:"size:1024;not null"`
 	Body         LargeText
 	RevisionSHA  string `gorm:"size:40;not null"`
-	Embedding    string `gorm:"type:text"`
+	Embedding    string `gorm:"column:embedding;-:migration"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
