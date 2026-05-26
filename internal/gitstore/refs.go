@@ -115,6 +115,32 @@ func (s *Store) UpdateRef(ctx context.Context, fullName, ref, sha string) error 
 	return nil
 }
 
+// UpdateRefCAS atomically updates ref from expectedOldSHA to newSHA.
+func (s *Store) UpdateRefCAS(ctx context.Context, fullName, ref, newSHA, expectedOldSHA string) error {
+	if !plumbing.IsHash(newSHA) {
+		return fmt.Errorf("%w: %q", ErrInvalidSHA, newSHA)
+	}
+	if expectedOldSHA != "" && !plumbing.IsHash(expectedOldSHA) {
+		return fmt.Errorf("%w: %q", ErrInvalidSHA, expectedOldSHA)
+	}
+	dir, err := s.repoPath(ctx, fullName)
+	if err != nil {
+		return err
+	}
+	args := []string{"-C", dir, "update-ref", ref, newSHA, expectedOldSHA}
+	out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if expectedOldSHA == "" && strings.Contains(string(out), "reference already exists") {
+		return ErrRefAlreadyExists
+	}
+	if isRefChangedOutput(string(out)) {
+		return ErrRefChanged
+	}
+	return fmt.Errorf("git update-ref %s %s %s: %v\n%s", ref, newSHA, expectedOldSHA, err, out)
+}
+
 // ErrNonFastForward is returned by UpdateRefSafe when the proposed SHA
 // is not a fast-forward of the existing ref's SHA and the caller has
 // not opted into the force path. Callers (REST PATCH /git/refs/...)
@@ -172,6 +198,28 @@ func (s *Store) UpdateRefSafe(ctx context.Context, fullName, ref, newSHA string,
 		return fmt.Errorf("git update-ref %s %s %s: %v\n%s", ref, newSHA, currentSHA, err, out)
 	}
 	return nil
+}
+
+// IsAncestor reports whether older is reachable from newer.
+func (s *Store) IsAncestor(ctx context.Context, fullName, older, newer string) (bool, error) {
+	if !plumbing.IsHash(older) {
+		return false, fmt.Errorf("%w: %q", ErrInvalidSHA, older)
+	}
+	if !plumbing.IsHash(newer) {
+		return false, fmt.Errorf("%w: %q", ErrInvalidSHA, newer)
+	}
+	dir, err := s.repoPath(ctx, fullName)
+	if err != nil {
+		return false, err
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "merge-base", "--is-ancestor", older, newer)
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("git merge-base --is-ancestor: %w", err)
+	}
+	return true, nil
 }
 
 // RefInfo pairs a full ref name (e.g. "refs/locks/issue-42") with its

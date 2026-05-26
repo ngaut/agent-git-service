@@ -36,6 +36,30 @@ func (s *Store) CommitDetails(ctx context.Context, fullName, sha string) (Commit
 	return details, nil
 }
 
+// CommitForPathAtRef returns the most recent commit that touched path from the
+// content snapshot resolved by ref.
+func (s *Store) CommitForPathAtRef(ctx context.Context, fullName, ref, path string) (GitCommitObject, error) {
+	dir, err := s.repoPath(ctx, fullName)
+	if err != nil {
+		return GitCommitObject{}, err
+	}
+	commit, err := s.resolveContentCommit(ctx, dir, ref)
+	if err != nil {
+		return GitCommitObject{}, err
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "log", "-1", "--format=%H", commit, "--", path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return GitCommitObject{}, fmt.Errorf("git log path %s at %s failed: %v\n%s", path, commit, err, out)
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return GitCommitObject{}, ErrCommitNotFound
+	}
+	return s.GetGitCommitObject(ctx, fullName, sha)
+}
+
 func commitInfo(ctx context.Context, dir, sha string) (SearchCommitInfo, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "log", "-1", "--format=%H|%an|%ae|%aI|%s|%P", sha)
 	out, err := cmd.CombinedOutput()

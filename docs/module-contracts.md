@@ -90,6 +90,7 @@ document the relevant contract below in the same change.
 | `tenant` | gitstore tenant context helpers for physical repo scoping |
 | `testharness` | production-wired service and router test fixtures |
 | `wikicatalog` | catalog-backed wiki storage primitive, slug canonicalization, and blob CAS coordination |
+| `wikiv2` | git-authoritative wiki write planning, derived index contracts, and reconcile primitives |
 
 ## Dependency Rules
 
@@ -485,6 +486,29 @@ Current state:
 
 - `gitstore` depends on `tenant.FromContext(...)` for per-tenant filesystem roots and lock keys
 - `service.ContextWithTenant(...)` and `service.TenantFromContext(...)` now delegate to the shared `tenant` package for compatibility, so middleware and gitstore use one tenant-context contract
+
+### `wikiv2`
+
+Component reference: [architecture/wiki-storage-v2.md](architecture/wiki-storage-v2.md)
+
+Ownership:
+
+- git-authoritative wiki path and slug translation helpers
+- durable ref compare-and-swap primitives for wiki writes
+- derived index contracts for reconcile progress and live page projections
+- manual reconcile request and result types shared by service orchestration
+
+Rules:
+
+- `wikiv2` defines storage and reconcile primitives, not HTTP handlers or route contracts
+- it may depend on low-level git and wiki catalog validation helpers, but it must not issue GORM queries or shape transport responses
+- service owns permission checks, orchestration, and lifecycle policy around these primitives
+
+Current state:
+
+- `service` uses `wikiv2` for slug/path parity, write-plan creation, and manual reconcile entrypoints
+- `db` owns the concrete `wiki_page_index` and `wiki_index_state` tables, while `wikiv2` owns the domain contracts those tables implement
+- the package is additive and does not yet replace the existing routed wiki handlers or all catalog-derived projections
 
 ### `ratelimit`
 
