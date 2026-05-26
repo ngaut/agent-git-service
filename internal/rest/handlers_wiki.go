@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
@@ -435,6 +436,45 @@ func (d *Deps) listWikiPageHistory(w http.ResponseWriter, r *http.Request, full,
 		out = append(out, transform.WikiPageHistoryEntry(entry))
 	}
 	respond.JSON(w, 200, out)
+}
+
+// CompactWikiHistory handles POST /api/v3/repos/{owner}/{repo}/wiki/compact
+func (d *Deps) CompactWikiHistory(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	repo := d.mustGetRepo(w, r)
+	if repo == nil {
+		return
+	}
+	if !d.requireRepoPermission(w, r, repo.ID, service.RepoPermissionAdmin) {
+		return
+	}
+	if strings.TrimSpace(r.URL.Query().Get("ref")) != "" {
+		respond.Error(w, http.StatusBadRequest, "ref query parameter is not supported for wiki writes")
+		return
+	}
+	var body struct {
+		Before string `json:"before"`
+	}
+	if err := decodeBodyStrictOptional(r, &body); err != nil {
+		respond.ValidationFailed(w, "invalid body")
+		return
+	}
+	if strings.TrimSpace(body.Before) != "" {
+		respond.ValidationFailed(w, "before is not supported for wiki compact")
+		return
+	}
+	result, err := d.Svc.CompactWikiHistory(r.Context(), full)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"previous_head":    result.PreviousHead,
+		"new_head":         result.NewHead,
+		"compacted_before": result.CompactedBefore.Format(time.RFC3339),
+		"pages":            result.Pages,
+		"commits_removed":  result.CommitsRemoved,
+	})
 }
 
 // ListWikiBacklinks handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks

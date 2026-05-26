@@ -108,6 +108,10 @@ type Service struct {
 	// testWikiBackgroundMigrationStarted is a test-only hook fired when a
 	// repo-scoped background wiki migration is claimed and scheduled.
 	testWikiBackgroundMigrationStarted func(repoFullName string)
+
+	// testWikiCompactRefUpdateFailure lets tests force the compact ref update
+	// path to fail after the catalog transaction commits.
+	testWikiCompactRefUpdateFailure func(repoFullName, commitSHA string) error
 }
 
 type tenantRepoKey struct {
