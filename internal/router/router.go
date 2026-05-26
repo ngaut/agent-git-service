@@ -326,6 +326,7 @@ func registerPresenceRoutes(r chi.Router, handlers *rest.Deps) {
 func registerAgentBindingRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/agent-invites", handlers.CreateAgentInvite)
 	r.Post("/api/v3/agent-bindings/confirm", handlers.ConfirmAgentBinding)
+	r.Patch("/api/v3/agent-bindings/{agent_login}", handlers.RenameBoundAgent)
 	r.Post("/api/v3/agent-bindings/{agent_login}/reset-token", handlers.ResetAgentToken)
 }
 
