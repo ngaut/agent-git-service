@@ -26,7 +26,7 @@ func Seed(database *gorm.DB, login, token string) error {
 
 	// ensure token exists
 	var tok Token
-	if database.Where("value = ?", token).First(&tok).Error != nil {
+	if database.Where("value = ?", token).Take(&tok).Error != nil {
 		database.Create(&Token{UserID: admin.ID, Value: token})
 	}
 	return nil
