@@ -210,7 +210,7 @@ func workflowCheckApp(repoFullName string) map[string]any {
 }
 
 func workflowJobCheckRun(repoFullName string, run db.WorkflowRun, job db.WorkflowRunJob) map[string]any {
-	apiURL := fmt.Sprintf("%s/api/v3/repos/%s/check-runs/%d", transform.Base(), repoFullName, job.ID)
+	apiURL := fmt.Sprintf("%s/repos/%s/check-runs/%d", transform.APIBase(), repoFullName, job.ID)
 	detailsURL := fmt.Sprintf("%s/%s/actions/runs/%d/job/%d", transform.HTMLBase(), repoFullName, run.ID, job.ID)
 	return map[string]any{
 		"id":           job.ID,
@@ -234,7 +234,7 @@ func workflowJobCheckRun(repoFullName string, run db.WorkflowRun, job db.Workflo
 			"summary":           "Workflow-backed check run compatibility result",
 			"text":              fmt.Sprintf("workflow run %d, job %d", run.ID, job.ID),
 			"annotations_count": 0,
-			"annotations_url":   fmt.Sprintf("%s/api/v3/repos/%s/check-runs/%d/annotations", transform.Base(), repoFullName, job.ID),
+			"annotations_url":   fmt.Sprintf("%s/repos/%s/check-runs/%d/annotations", transform.APIBase(), repoFullName, job.ID),
 		},
 	}
 }
@@ -583,7 +583,7 @@ func (d *Deps) notificationSubject(ctx context.Context, notification db.Notifica
 		}
 		return map[string]any{
 			"title":              issue.Title,
-			"url":                fmt.Sprintf("%s/api/v3/repos/%s/issues/%d", d.Svc.BaseURL, issue.Repository.FullName, issue.Number),
+			"url":                fmt.Sprintf("%s/repos/%s/issues/%d", transform.APIBase(), issue.Repository.FullName, issue.Number),
 			"latest_comment_url": notificationLatestCommentURL(notification.LatestCommentURL),
 			"type":               "Issue",
 		}, nil
@@ -594,7 +594,7 @@ func (d *Deps) notificationSubject(ctx context.Context, notification db.Notifica
 		}
 		return map[string]any{
 			"title":              pr.Title,
-			"url":                fmt.Sprintf("%s/api/v3/repos/%s/pulls/%d", d.Svc.BaseURL, pr.Repository.FullName, pr.Number),
+			"url":                fmt.Sprintf("%s/repos/%s/pulls/%d", transform.APIBase(), pr.Repository.FullName, pr.Number),
 			"latest_comment_url": notificationLatestCommentURL(notification.LatestCommentURL),
 			"type":               "PullRequest",
 		}, nil
@@ -609,7 +609,7 @@ func (d *Deps) notificationSubject(ctx context.Context, notification db.Notifica
 		}
 		return map[string]any{
 			"title":              title,
-			"url":                fmt.Sprintf("%s/api/v3/repos/%s/actions/runs/%d", d.Svc.BaseURL, notification.Repository.FullName, run.ID),
+			"url":                fmt.Sprintf("%s/repos/%s/actions/runs/%d", transform.APIBase(), notification.Repository.FullName, run.ID),
 			"latest_comment_url": nil,
 			"type":               "WorkflowRun",
 		}, nil

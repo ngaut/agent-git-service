@@ -88,7 +88,7 @@ func Issue(i db.Issue, resolver UserResolver, assoc AuthorAssociationChecks, cou
 	if i.StateReason != "" {
 		stateReason = i.StateReason
 	}
-	issueURL := fmt.Sprintf("%s/api/v3/repos/%s/issues/%s", base(), i.Repository.FullName, num)
+	issueURL := fmt.Sprintf("%s/repos/%s/issues/%s", apiBase(), i.Repository.FullName, num)
 	return map[string]any{
 		"id":                       i.ID,
 		"node_id":                  nodeID("Issue", i.ID),
@@ -109,10 +109,10 @@ func Issue(i db.Issue, resolver UserResolver, assoc AuthorAssociationChecks, cou
 		"url":                      issueURL,
 		"html_url":                 fmt.Sprintf("%s/%s/issues/%s", htmlBase(), i.Repository.FullName, num),
 		"repository_url":           repoAPIURL(i.Repository.FullName),
-		"comments_url":             fmt.Sprintf("%s/api/v3/repos/%s/issues/%s/comments", base(), i.Repository.FullName, num),
-		"events_url":               fmt.Sprintf("%s/api/v3/repos/%s/issues/%s/events", base(), i.Repository.FullName, num),
-		"timeline_url":             fmt.Sprintf("%s/api/v3/repos/%s/issues/%d/timeline", base(), i.Repository.FullName, i.Number),
-		"labels_url":               fmt.Sprintf("%s/api/v3/repos/%s/issues/%s/labels{/name}", base(), i.Repository.FullName, num),
+		"comments_url":             fmt.Sprintf("%s/repos/%s/issues/%s/comments", apiBase(), i.Repository.FullName, num),
+		"events_url":               fmt.Sprintf("%s/repos/%s/issues/%s/events", apiBase(), i.Repository.FullName, num),
+		"timeline_url":             fmt.Sprintf("%s/repos/%s/issues/%d/timeline", apiBase(), i.Repository.FullName, i.Number),
+		"labels_url":               fmt.Sprintf("%s/repos/%s/issues/%s/labels{/name}", apiBase(), i.Repository.FullName, num),
 		"comments":                 comments,
 		"sub_issues_summary":       nil,
 		"reactions":                Reactions(issueURL, reactionCounts),
@@ -154,7 +154,7 @@ func IssueFromPR(p db.PullRequest, resolver UserResolver, assoc AuthorAssociatio
 		closedAt = p.ClosedAt.Format(time.RFC3339)
 	}
 	num := strconv.Itoa(p.Number)
-	issueURL := fmt.Sprintf("%s/api/v3/repos/%s/issues/%s", base(), p.Repository.FullName, num)
+	issueURL := fmt.Sprintf("%s/repos/%s/issues/%s", apiBase(), p.Repository.FullName, num)
 
 	state := p.State
 	if p.Merged {
@@ -179,14 +179,14 @@ func IssueFromPR(p db.PullRequest, resolver UserResolver, assoc AuthorAssociatio
 		"url":                issueURL,
 		"html_url":           fmt.Sprintf("%s/%s/pull/%s", htmlBase(), p.Repository.FullName, num),
 		"repository_url":     repoAPIURL(p.Repository.FullName),
-		"comments_url":       fmt.Sprintf("%s/api/v3/repos/%s/issues/%s/comments", base(), p.Repository.FullName, num),
-		"events_url":         fmt.Sprintf("%s/api/v3/repos/%s/issues/%s/events", base(), p.Repository.FullName, num),
-		"labels_url":         fmt.Sprintf("%s/api/v3/repos/%s/issues/%s/labels{/name}", base(), p.Repository.FullName, num),
+		"comments_url":       fmt.Sprintf("%s/repos/%s/issues/%s/comments", apiBase(), p.Repository.FullName, num),
+		"events_url":         fmt.Sprintf("%s/repos/%s/issues/%s/events", apiBase(), p.Repository.FullName, num),
+		"labels_url":         fmt.Sprintf("%s/repos/%s/issues/%s/labels{/name}", apiBase(), p.Repository.FullName, num),
 		"comments":           comments,
 		"reactions":          Reactions(issueURL, nil),
 		"author_association": AuthorAssociation(p.Author.ID, p.Repository.Owner.ID, assoc),
 		"pull_request": map[string]any{
-			"url":       fmt.Sprintf("%s/api/v3/repos/%s/pulls/%s", base(), p.Repository.FullName, num),
+			"url":       fmt.Sprintf("%s/repos/%s/pulls/%s", apiBase(), p.Repository.FullName, num),
 			"html_url":  fmt.Sprintf("%s/%s/pull/%s", htmlBase(), p.Repository.FullName, num),
 			"diff_url":  fmt.Sprintf("%s/%s/pull/%s.diff", base(), p.Repository.FullName, num),
 			"patch_url": fmt.Sprintf("%s/%s/pull/%s.patch", base(), p.Repository.FullName, num),
@@ -237,7 +237,7 @@ func PR(p db.PullRequest, resolver UserResolver, assoc AuthorAssociationChecks, 
 		headRepo = Repo(p.HeadRepository)
 		headOwner = p.HeadRepository.Owner
 	}
-	prURL := fmt.Sprintf("%s/api/v3/repos/%s/pulls/%s", base(), p.Repository.FullName, num)
+	prURL := fmt.Sprintf("%s/repos/%s/pulls/%s", apiBase(), p.Repository.FullName, num)
 	assignees := issueAssignees(p.AssigneeLogins, resolver)
 	var assignee any
 	if len(assignees) > 0 {
@@ -260,12 +260,12 @@ func PR(p db.PullRequest, resolver UserResolver, assoc AuthorAssociationChecks, 
 		"html_url":              fmt.Sprintf("%s/%s/pull/%s", htmlBase(), p.Repository.FullName, num),
 		"diff_url":              fmt.Sprintf("%s/%s/pull/%s.diff", base(), p.Repository.FullName, num),
 		"patch_url":             fmt.Sprintf("%s/%s/pull/%s.patch", base(), p.Repository.FullName, num),
-		"issue_url":             fmt.Sprintf("%s/api/v3/repos/%s/issues/%s", base(), p.Repository.FullName, num),
-		"comments_url":          fmt.Sprintf("%s/api/v3/repos/%s/issues/%s/comments", base(), p.Repository.FullName, num),
-		"commits_url":           fmt.Sprintf("%s/api/v3/repos/%s/pulls/%s/commits", base(), p.Repository.FullName, num),
-		"review_comments_url":   fmt.Sprintf("%s/api/v3/repos/%s/pulls/%s/comments", base(), p.Repository.FullName, num),
-		"review_comment_url":    fmt.Sprintf("%s/api/v3/repos/%s/pulls/comments{/number}", base(), p.Repository.FullName),
-		"statuses_url":          fmt.Sprintf("%s/api/v3/repos/%s/statuses/%s", base(), p.Repository.FullName, headSHA),
+		"issue_url":             fmt.Sprintf("%s/repos/%s/issues/%s", apiBase(), p.Repository.FullName, num),
+		"comments_url":          fmt.Sprintf("%s/repos/%s/issues/%s/comments", apiBase(), p.Repository.FullName, num),
+		"commits_url":           fmt.Sprintf("%s/repos/%s/pulls/%s/commits", apiBase(), p.Repository.FullName, num),
+		"review_comments_url":   fmt.Sprintf("%s/repos/%s/pulls/%s/comments", apiBase(), p.Repository.FullName, num),
+		"review_comment_url":    fmt.Sprintf("%s/repos/%s/pulls/comments{/number}", apiBase(), p.Repository.FullName),
+		"statuses_url":          fmt.Sprintf("%s/repos/%s/statuses/%s", apiBase(), p.Repository.FullName, headSHA),
 		"head": map[string]any{
 			"ref":   p.HeadRef,
 			"sha":   headSHA,
@@ -322,7 +322,7 @@ func IssueComment(c db.IssueComment, assoc AuthorAssociationChecks, reactionCoun
 	if c.ThreadRootID != nil {
 		threadRootID = *c.ThreadRootID
 	}
-	commentURL := fmt.Sprintf("%s/api/v3/repos/%s/issues/comments/%d", base(), c.Repository.FullName, c.ID)
+	commentURL := fmt.Sprintf("%s/repos/%s/issues/comments/%d", apiBase(), c.Repository.FullName, c.ID)
 	return map[string]any{
 		"id":                       c.ID,
 		"node_id":                  nodeID("IssueComment", c.ID),
@@ -331,7 +331,7 @@ func IssueComment(c db.IssueComment, assoc AuthorAssociationChecks, reactionCoun
 		"author_association":       AuthorAssociation(c.Author.ID, c.Repository.Owner.ID, assoc),
 		"performed_via_github_app": nil,
 		"url":                      commentURL,
-		"issue_url":                fmt.Sprintf("%s/api/v3/repos/%s/issues/%d", base(), c.Repository.FullName, c.IssueNumber),
+		"issue_url":                fmt.Sprintf("%s/repos/%s/issues/%d", apiBase(), c.Repository.FullName, c.IssueNumber),
 		"html_url":                 fmt.Sprintf("%s/%s/issues/%d#issuecomment-%d", htmlBase(), c.Repository.FullName, c.IssueNumber, c.ID),
 		"reactions":                Reactions(commentURL, counts),
 		"is_pinned":                c.IsPinned,
@@ -358,7 +358,7 @@ func PRReview(rv db.PullRequestReview, repoFullName string, prNumber int, ownerL
 		ownLogin = ownerLogin[0]
 	}
 	htmlURL := fmt.Sprintf("%s/%s/pull/%d#pullrequestreview-%d", htmlBase(), repoFullName, prNumber, rv.ID)
-	prURL := fmt.Sprintf("%s/api/v3/repos/%s/pulls/%d", base(), repoFullName, prNumber)
+	prURL := fmt.Sprintf("%s/repos/%s/pulls/%d", apiBase(), repoFullName, prNumber)
 	return map[string]any{
 		"id":                 rv.ID,
 		"node_id":            nodeID("PRReview", rv.ID),
@@ -398,9 +398,9 @@ func PRReviewComment(c db.PRReviewComment, repoFullName string, prNumber int) ma
 	if subjectType == "" {
 		subjectType = "line"
 	}
-	selfURL := fmt.Sprintf("%s/api/v3/repos/%s/pulls/comments/%d", base(), repoFullName, c.ID)
+	selfURL := fmt.Sprintf("%s/repos/%s/pulls/comments/%d", apiBase(), repoFullName, c.ID)
 	htmlURL := fmt.Sprintf("%s/%s/pull/%d#discussion_r%d", htmlBase(), repoFullName, prNumber, c.ID)
-	prURL := fmt.Sprintf("%s/api/v3/repos/%s/pulls/%d", base(), repoFullName, prNumber)
+	prURL := fmt.Sprintf("%s/repos/%s/pulls/%d", apiBase(), repoFullName, prNumber)
 	return map[string]any{
 		"id":                     c.ID,
 		"node_id":                nodeID("PRReviewComment", c.ID),

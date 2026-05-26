@@ -40,7 +40,7 @@ func organizationInvitationJSON(inv db.OrganizationInvitation) map[string]any {
 		"role":         inv.Role,
 		"team_ids":     teamIDs,
 		"created_at":   inv.CreatedAt.Format(time.RFC3339),
-		"url":          fmt.Sprintf("%s/api/v3/user/organization_invitations/%d", transform.Base(), inv.ID),
+		"url":          fmt.Sprintf("%s/user/organization_invitations/%d", transform.APIBase(), inv.ID),
 	}
 	if inv.Organization.Login != "" {
 		payload["html_url"] = fmt.Sprintf("%s/orgs/%s/invitations/%d", transform.HTMLBase(), inv.Organization.Login, inv.ID)

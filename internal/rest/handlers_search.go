@@ -819,7 +819,7 @@ func (d *Deps) SearchCode(w http.ResponseWriter, r *http.Request) {
 					"sha":        "HEAD",
 					"score":      1.0,
 					"html_url":   fmt.Sprintf("%s/%s/blob/HEAD/%s", transform.HTMLBase(), rep.FullName, f.Path),
-					"url":        fmt.Sprintf("%s/api/v3/repos/%s/contents/%s", transform.Base(), rep.FullName, f.Path),
+					"url":        fmt.Sprintf("%s/repos/%s/contents/%s", transform.APIBase(), rep.FullName, f.Path),
 					"repository": transform.Repo(rep),
 				}
 

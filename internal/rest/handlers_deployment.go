@@ -34,7 +34,7 @@ func (d *Deps) deploymentJSON(r *http.Request, dep db.Deployment) map[string]any
 		}
 	}
 
-	repoURL := fmt.Sprintf("%s/api/v3/repos/%s", transform.Base(), dep.Repository.FullName)
+	repoURL := fmt.Sprintf("%s/repos/%s", transform.APIBase(), dep.Repository.FullName)
 	return map[string]any{
 		"id":                     dep.ID,
 		"sha":                    sha, // Resolved via Git service, falling back to ref
@@ -59,7 +59,7 @@ func deploymentStatusJSON(s db.DeploymentStatus) map[string]any {
 	if s.Creator.ID != 0 {
 		creator = transform.User(s.Creator)
 	}
-	repoURL := fmt.Sprintf("%s/api/v3/repos/%s", transform.Base(), s.Deployment.Repository.FullName)
+	repoURL := fmt.Sprintf("%s/repos/%s", transform.APIBase(), s.Deployment.Repository.FullName)
 	return map[string]any{
 		"id":              s.ID,
 		"state":           s.State,

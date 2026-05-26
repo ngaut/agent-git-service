@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,6 +39,15 @@ import (
 
 // gitSHA is set at build time via -ldflags.
 var gitSHA = "unknown"
+
+// Server exposes a programmatic server instance for embedders.
+type Server struct {
+	cfg       config.Config
+	deps      *bootstrapDeps
+	handler   http.Handler
+	listeners []net.Listener
+	started   bool
+}
 
 // bootstrapDeps holds all initialized dependencies for the application.
 type bootstrapDeps struct {
@@ -228,6 +238,11 @@ func initCoreDeps() (coreDeps, error) {
 	if err != nil {
 		return deps, fmt.Errorf("config: %w", err)
 	}
+	return initCoreDepsFromConfig(cfg)
+}
+
+func initCoreDepsFromConfig(cfg config.Config) (coreDeps, error) {
+	var deps coreDeps
 	deps.cfg = cfg
 	deps.cfgLoaded = true
 
@@ -367,7 +382,6 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	} else {
 		slog.Info("auth0 disabled", "reason", "AUTH0_ISSUER/AUTH0_CLIENT_ID not set")
 	}
-	transform.Init(cfg.BaseURL)
 	deps.gqlSrv = graphql.NewServer(svcDeps)
 	deps.gitHandler = githttp.New(store, svcDeps)
 	deps.oauthHandler = oauth.New(svcDeps)
@@ -427,7 +441,12 @@ func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 	metricsHandler := metrics.Init()
 	r.Use(srvmiddleware.MetricsInstrumentation())
 
-	mux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.DBRouter, cfg.Cfg.ConsoleBaseURL)
+	hostMux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.DBRouter, cfg.Cfg.RESTPrefix, cfg.Cfg.ConsoleBaseURL)
+	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		transform.Wrap(cfg.Cfg.BaseURL, cfg.Cfg.RESTPrefix, func() {
+			hostMux.ServeHTTP(w, req)
+		})
+	})
 	r.Get("/metrics", metricsHandler.ServeHTTP)
 
 	// Register readiness probe.
@@ -481,14 +500,21 @@ func buildServers(cfg config.Config, mux http.Handler) (serverDeps, error) {
 // bootstrap initializes all application dependencies in order.
 // It returns a bootstrapResult with either fully initialized deps or partial deps on failure.
 func bootstrap() bootstrapResult {
+	cfg, err := config.New()
+	if err != nil {
+		return bootstrapResult{Deps: &bootstrapDeps{}, Err: fmt.Errorf("config: %w", err)}
+	}
+	return bootstrapWithConfig(cfg)
+}
+
+func bootstrapWithConfig(cfg config.Config) bootstrapResult {
 	result := bootstrapResult{
 		Deps: &bootstrapDeps{},
 	}
 	deps := result.Deps
 
-	// Load .env for local dev convenience.
 	// 1. Core dependencies (config, database, embedding, gitstore).
-	core, err := initCoreDeps()
+	core, err := initCoreDepsFromConfig(cfg)
 	if err != nil {
 		result.Err = err
 		if core.cfgLoaded {
@@ -566,7 +592,7 @@ func bootstrap() bootstrapResult {
 		return result
 	}
 	deps.Handlers = mux.handlers
-	deps.Mux = mux.router
+	deps.Mux = mux.mux
 
 	// 6. Set up HTTP servers.
 	srvs, err := buildServers(core.cfg, mux.mux)
@@ -714,6 +740,141 @@ func RunWikiReindex(args []string) error {
 // Run starts the gh-server listeners and blocks until shutdown is requested.
 func Run(sigCh <-chan struct{}) error {
 	return run(sigCh, shutdownConfig{GracePeriod: 10 * time.Second})
+}
+
+// New constructs a server from a caller-supplied config.
+func New(cfg config.Config) (*Server, error) {
+	normalized, err := config.Normalize(cfg)
+	if err != nil {
+		return nil, err
+	}
+	result := bootstrapWithConfig(normalized)
+	if result.Err != nil {
+		return nil, result.Err
+	}
+	return &Server{
+		cfg:     normalized,
+		deps:    result.Deps,
+		handler: result.Deps.Mux,
+	}, nil
+}
+
+// Handler returns the fully wired application handler tree.
+func (s *Server) Handler() http.Handler { return s.handler }
+
+// RESTHandler returns a mountable handler for REST endpoints relative to "/".
+func (s *Server) RESTHandler() http.Handler {
+	prefix := s.cfg.RESTPrefix
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clone := r.Clone(r.Context())
+		path := clone.URL.Path
+		if path == "" {
+			path = "/"
+		}
+		clone.URL.Path = prefix + path
+		if clone.URL.RawPath != "" {
+			clone.URL.RawPath = prefix + clone.URL.RawPath
+		}
+		s.handler.ServeHTTP(w, clone)
+	})
+}
+
+// GraphQLHandler returns a mountable handler for the GraphQL surface.
+func (s *Server) GraphQLHandler() http.Handler {
+	return srvmiddleware.TokenAuth(s.deps.SvcDeps, s.deps.DBRouter)(http.HandlerFunc(s.deps.GqlSrv.Handler))
+}
+
+// GitHTTPHandler returns the mountable Git Smart HTTP handler.
+func (s *Server) GitHTTPHandler() http.Handler {
+	r := chi.NewRouter()
+	var authMw func(http.Handler) http.Handler
+	if s.deps.DBRouter != nil {
+		authMw = srvmiddleware.TokenAuth(s.deps.SvcDeps, s.deps.DBRouter)
+	} else {
+		authMw = srvmiddleware.OptionalTokenAuth(s.deps.SvcDeps, s.deps.DBRouter)
+	}
+	r.With(authMw).Get("/{owner}/{repo}.git/info/refs", s.deps.GitHandler.InfoRefs)
+	r.With(authMw).Post("/{owner}/{repo}.git/git-upload-pack", s.deps.GitHandler.UploadPack)
+	r.With(authMw).Post("/{owner}/{repo}.git/git-receive-pack", s.deps.GitHandler.ReceivePack)
+	return r
+}
+
+// OAuthHandler returns a mountable handler for the OAuth device-flow surface.
+func (s *Server) OAuthHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clone := r.Clone(r.Context())
+		if !strings.HasPrefix(clone.URL.Path, "/login/") {
+			clone.URL.Path = "/login" + clone.URL.Path
+			if clone.URL.RawPath != "" {
+				clone.URL.RawPath = "/login" + clone.URL.RawPath
+			}
+		}
+		s.handler.ServeHTTP(w, clone)
+	})
+}
+
+// Start binds listeners and serves traffic in background goroutines.
+func (s *Server) Start() error {
+	if s.started {
+		return nil
+	}
+	listeners := make([]net.Listener, 0, len(s.deps.Servers))
+	for _, srv := range s.deps.Servers {
+		ln, err := net.Listen("tcp", srv.Addr)
+		if err != nil {
+			for _, opened := range listeners {
+				_ = opened.Close()
+			}
+			return err
+		}
+		listeners = append(listeners, ln)
+	}
+	s.listeners = listeners
+	for i, srv := range s.deps.Servers {
+		lbl := s.deps.Labels[i]
+		ln := s.listeners[i]
+		go func(srv *http.Server, ln net.Listener, label string) {
+			fmt.Printf("gh-server listening on %s\n", label)
+			var err error
+			if srv.TLSConfig != nil {
+				err = srv.Serve(tls.NewListener(ln, srv.TLSConfig))
+			} else {
+				err = srv.Serve(ln)
+			}
+			if err != nil && err != http.ErrServerClosed {
+				slog.Error("listener exited unexpectedly", "listener", label, "error", err)
+			}
+		}(srv, ln, lbl)
+	}
+	s.started = true
+	return nil
+}
+
+// Shutdown gracefully stops listeners and background work.
+func (s *Server) Shutdown(ctx context.Context) error {
+	var errs []string
+	for _, srv := range s.deps.Servers {
+		if err := srv.Shutdown(ctx); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if s.deps.SrvCancel != nil {
+		s.deps.SrvCancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.deps.SvcDeps.Wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		errs = append(errs, ctx.Err().Error())
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("shutdown: %s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // readyzHandler returns an http.HandlerFunc that pings the main DB (and the

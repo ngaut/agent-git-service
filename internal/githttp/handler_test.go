@@ -104,7 +104,7 @@ func setupTestServer(t *testing.T, owner, repo, defaultBranch string, seed bool)
 	oauthHandler := oauth.New(svc)
 
 	r := chi.NewRouter()
-	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "/api/v3", "http://console.localhost")
 
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)

@@ -1,12 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +22,7 @@ import (
 	"github.com/ngaut/agent-git-service/config"
 	"github.com/ngaut/agent-git-service/internal/controlplane"
 	"github.com/ngaut/agent-git-service/internal/crypto"
+	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 	"github.com/ngaut/agent-git-service/internal/githttp"
 	"github.com/ngaut/agent-git-service/internal/gitstore"
@@ -324,7 +329,7 @@ func TestRouterComposition_ReadyzAfterRegisterRoutes(t *testing.T) {
 	oauthHandler := &oauth.Handler{Svc: svc}
 
 	r := chi.NewRouter()
-	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "/api/v3", "http://console.localhost")
 	r.Get("/readyz", readyzHandler(readyzConfig{
 		MainDB: mainDB,
 	}))
@@ -336,6 +341,309 @@ func TestRouterComposition_ReadyzAfterRegisterRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestNew_HandlerUsesHostAwareMuxAndPerServerTransformState(t *testing.T) {
+	makeServer := func(t *testing.T, name, baseURL, restPrefix string) *Server {
+		t.Helper()
+		root := t.TempDir()
+		srv, err := New(config.Config{
+			DBdsn:       "file:" + filepath.Join(root, name+".db"),
+			GitRepoDir:  filepath.Join(root, "repos"),
+			BaseURL:     baseURL,
+			RESTPrefix:  restPrefix,
+			ListenMode:  "production",
+			Environment: "production",
+		})
+		if err != nil {
+			t.Fatalf("New(%s): %v", name, err)
+		}
+		return srv
+	}
+
+	alpha := makeServer(t, "alpha", "http://alpha.local", "/api/v1")
+	beta := makeServer(t, "beta", "http://beta.local", "/api/v9")
+
+	assertMeta := func(t *testing.T, srv *Server, want string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "http://api.github.localhost/", nil)
+		req.Host = "api.github.localhost"
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode meta response: %v", err)
+		}
+		if got := body["openapi_url"]; got != want {
+			t.Fatalf("expected openapi_url %q, got %v", want, got)
+		}
+	}
+
+	assertMeta(t, alpha, "http://alpha.local/api/v1/openapi.json")
+	assertMeta(t, beta, "http://beta.local/api/v9/openapi.json")
+	assertMeta(t, alpha, "http://alpha.local/api/v1/openapi.json")
+}
+
+func TestNew_RESTHandlerUsesConfiguredPrefixInResponseURLs(t *testing.T) {
+	root := t.TempDir()
+	srv, err := New(config.Config{
+		DBdsn:       "file:" + filepath.Join(root, "rest-prefix.db"),
+		GitRepoDir:  filepath.Join(root, "repos"),
+		BaseURL:     "http://embed.local",
+		RESTPrefix:  "/api/v1",
+		ListenMode:  "production",
+		Environment: "production",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	admin := db.User{Login: "admin", Name: "Admin", Type: "User", Status: "active"}
+	if err := srv.deps.SvcDeps.DB.FirstOrCreate(&admin, db.User{Login: "admin"}).Error; err != nil {
+		t.Fatalf("seed admin user: %v", err)
+	}
+	if _, err := srv.deps.SvcDeps.CreateRepo(context.Background(), service.CreateRepoInput{
+		OwnerLogin: "admin",
+		Name:       "prefix-check",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/repos/admin/prefix-check", nil)
+	rec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode repo response: %v", err)
+	}
+	if got := body["issues_url"]; got != "http://embed.local/api/v1/repos/admin/prefix-check/issues{/number}" {
+		t.Fatalf("issues_url = %v, want custom REST prefix", got)
+	}
+	if got := body["branches_url"]; got != "http://embed.local/api/v1/repos/admin/prefix-check/branches{/branch}" {
+		t.Fatalf("branches_url = %v, want custom REST prefix", got)
+	}
+}
+
+func TestNew_GraphQLHandlerRequiresRouteEquivalentAuth(t *testing.T) {
+	root := t.TempDir()
+	srv, err := New(config.Config{
+		DBdsn:       "file:" + filepath.Join(root, "graphql-auth.db"),
+		GitRepoDir:  filepath.Join(root, "repos"),
+		BaseURL:     "http://embed.local",
+		ListenMode:  "production",
+		Environment: "production",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	query, err := json.Marshal(map[string]any{"query": `{ viewer { login } }`})
+	if err != nil {
+		t.Fatalf("marshal query: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(query))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.GraphQLHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	admin := db.User{Login: "admin", Name: "Admin", Type: "User", Status: "active"}
+	if err := srv.deps.SvcDeps.DB.FirstOrCreate(&admin, db.User{Login: "admin"}).Error; err != nil {
+		t.Fatalf("seed admin user: %v", err)
+	}
+	if err := srv.deps.SvcDeps.DB.Create(&db.Token{UserID: admin.ID, Value: "embed-token"}).Error; err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+
+	authReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(query))
+	authReq.Header.Set("Content-Type", "application/json")
+	authReq.Header.Set("Authorization", "token embed-token")
+	authRec := httptest.NewRecorder()
+	srv.GraphQLHandler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", authRec.Code, authRec.Body.String())
+	}
+}
+
+func TestNew_GitHTTPHandlerIsGitOnly(t *testing.T) {
+	root := t.TempDir()
+	srv, err := New(config.Config{
+		DBdsn:       "file:" + filepath.Join(root, "git-only.db"),
+		GitRepoDir:  filepath.Join(root, "repos"),
+		BaseURL:     "http://embed.local",
+		ListenMode:  "production",
+		Environment: "production",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v3/user", nil)
+	rec := httptest.NewRecorder()
+	srv.GitHTTPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected git-only handler to return 404 for non-git paths, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStart_BindsAllListenersBeforeServing(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy port: %v", err)
+	}
+	defer occupied.Close()
+
+	free1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve free port 1: %v", err)
+	}
+	addr1 := free1.Addr().String()
+	free1.Close()
+
+	free2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve free port 2: %v", err)
+	}
+	addr2 := free2.Addr().String()
+	free2.Close()
+
+	srv := &Server{
+		deps: &bootstrapDeps{
+			Servers: []*http.Server{
+				{Addr: addr1, Handler: http.NewServeMux()},
+				{Addr: occupied.Addr().String(), Handler: http.NewServeMux()},
+				{Addr: addr2, Handler: http.NewServeMux()},
+			},
+			Labels: []string{"one", "blocked", "two"},
+		},
+	}
+
+	err = srv.Start()
+	if err == nil {
+		t.Fatal("expected Start to fail when one listener cannot bind")
+	}
+	if srv.started {
+		t.Fatal("server should not be marked started on partial bind failure")
+	}
+	if len(srv.listeners) != 0 {
+		t.Fatalf("listeners should not be retained on failure, got %d", len(srv.listeners))
+	}
+
+	for _, addr := range []string{addr1, addr2} {
+		ln, listenErr := net.Listen("tcp", addr)
+		if listenErr != nil {
+			t.Fatalf("expected %s to be released after Start failure: %v", addr, listenErr)
+		}
+		ln.Close()
+	}
+}
+
+func TestStart_MarksStartedAfterSuccessfulBind(t *testing.T) {
+	addr1 := allocateLoopbackAddr(t)
+	addr2 := allocateLoopbackAddr(t)
+	handler := http.NewServeMux()
+	handler.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv := &Server{
+		deps: &bootstrapDeps{
+			Servers: []*http.Server{
+				{Addr: addr1, Handler: handler},
+				{Addr: addr2, Handler: handler},
+			},
+			Labels:    []string{"one", "two"},
+			SvcDeps:   &service.Service{},
+			SrvCancel: func() {},
+		},
+	}
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+
+	if !srv.started {
+		t.Fatal("server should be marked started after successful Start")
+	}
+	if len(srv.listeners) != 2 {
+		t.Fatalf("expected 2 listeners, got %d", len(srv.listeners))
+	}
+
+	for _, addr := range []string{addr1, addr2} {
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/healthz", addr), nil)
+		if err != nil {
+			t.Fatalf("build request for %s: %v", addr, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request %s: %v", addr, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("status for %s = %d, want %d", addr, resp.StatusCode, http.StatusNoContent)
+		}
+	}
+}
+
+func TestShutdown_CancelsServerContextBeforeWaitingForWorkers(t *testing.T) {
+	srvCtx, srvCancel := context.WithCancel(context.Background())
+	svc := &service.Service{Ctx: srvCtx}
+	svc.Wg.Add(1)
+	workerExited := make(chan struct{})
+	go func() {
+		defer svc.Wg.Done()
+		defer close(workerExited)
+		<-svc.ServerCtx().Done()
+	}()
+
+	srv := &Server{
+		deps: &bootstrapDeps{
+			SvcDeps:   svc,
+			SrvCancel: srvCancel,
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	select {
+	case <-workerExited:
+	case <-time.After(time.Second):
+		t.Fatal("expected worker to exit after shutdown canceled server context")
+	}
+}
+
+func allocateLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocate loopback addr: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("release loopback addr: %v", err)
+	}
+	return addr
 }
 
 // ============================================================================

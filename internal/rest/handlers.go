@@ -133,12 +133,13 @@ type Deps struct {
 // GetMeta handles GET /api/v3/
 func (d *Deps) GetMeta(w http.ResponseWriter, r *http.Request) {
 	b := d.Svc.BaseURL
+	apiBase := transform.APIPrefix()
 	respond.JSON(w, 200, map[string]any{
-		"current_user_url":                   b + "/api/v3/user",
-		"repository_url":                     b + "/api/v3/repos/{owner}/{repo}",
-		"user_url":                           b + "/api/v3/users/{user}",
-		"organization_url":                   b + "/api/v3/orgs/{org}",
-		"openapi_url":                        b + "/api/v3/openapi.json",
+		"current_user_url":                   b + apiBase + "/user",
+		"repository_url":                     b + apiBase + "/repos/{owner}/{repo}",
+		"user_url":                           b + apiBase + "/users/{user}",
+		"organization_url":                   b + apiBase + "/orgs/{org}",
+		"openapi_url":                        b + apiBase + "/openapi.json",
 		"verifiable_password_authentication": true,
 	})
 }
