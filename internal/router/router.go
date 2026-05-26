@@ -458,6 +458,7 @@ func registerRepoPagesRoutes(r chi.Router, handlers *rest.Deps) {
 
 func registerRepoWikiRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/compact", handlers.CompactWikiHistory)
+	r.Get("/api/v3/repos/{owner}/{repo}/wiki/compact/{jobID}", handlers.GetWikiCompactionJob)
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/move", handlers.MoveWikiPagePrefix)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages", handlers.ListWikiPages)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/search", handlers.SearchWikiPages)

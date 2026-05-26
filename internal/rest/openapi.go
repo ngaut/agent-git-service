@@ -301,7 +301,14 @@ func buildRESTOpenAPIPaths() map[string]any {
 			}, nil), pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-			), response(200, "Wiki history compacted")),
+			), response(202, "Wiki history compaction job accepted")),
+		},
+		"/api/v3/repos/{owner}/{repo}/wiki/compact/{jobID}": map[string]any{
+			"get": operation("getWikiCompactionJob", "Get the current status for an async wiki history compaction job.", auth(), nil, pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+				param("jobID", "string"),
+			), response(200, "Wiki history compaction job returned")),
 		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks": map[string]any{
 			"get": operation("listWikiBacklinks", "List inbound wiki links for a page slug.", nil, nil, pathParams(

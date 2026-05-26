@@ -111,6 +111,15 @@ func TestDeleteRepo_CascadeHonorsFKs(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create wiki search document: %v", err)
 	}
+	if err := svc.DB.Create(&db.WikiCompactionJob{
+		ID:           "delete-repo-job",
+		RepositoryID: repo.ID,
+		Status:       service.WikiCompactionJobSucceeded,
+		PreviousHead: "1111111111111111111111111111111111111111",
+		NewHead:      "2222222222222222222222222222222222222222",
+	}).Error; err != nil {
+		t.Fatalf("create wiki compaction job: %v", err)
+	}
 
 	if err := svc.DeleteRepo(ctx, repo.FullName); err != nil {
 		t.Fatalf("delete repo: %v", err)
@@ -122,5 +131,11 @@ func TestDeleteRepo_CascadeHonorsFKs(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("wiki search documents remaining after repo delete: %d", count)
+	}
+	if err := svc.DB.Model(&db.WikiCompactionJob{}).Where("repository_id = ?", repo.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count wiki compaction jobs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("wiki compaction jobs remaining after repo delete: %d", count)
 	}
 }

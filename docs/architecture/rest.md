@@ -201,9 +201,12 @@ Wiki path-slug hierarchy rules:
 - resolve `{owner}` and `{repo}` from the path
 - require `RepoPermissionAdmin`
 - reject `ref` and any non-empty `before` payload because bounded compaction is not implemented yet
-- compact the catalog-backed wiki history so each live page keeps only one synthetic revision pointing at the current HEAD body
-- rewrite the materialized wiki git branch to one parentless commit whose tree matches the current wiki HEAD
-- return `{ previous_head, new_head, compacted_before, pages, commits_removed }`
+- create or reuse one repository-scoped async compaction job and return `202 Accepted`
+- set `Location: /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}`
+- return `{ job_id, status, status_url, started_at, finished_at, previous_head, new_head, compacted_before, pages, commits_removed, error }`
+- execute the catalog compaction and wiki ref rewrite on a server-lifecycle background context so client disconnects do not cancel the job
+
+`GET /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}` requires `RepoPermissionAdmin` and returns the current async job status for polling. Successful jobs include the final `{ previous_head, new_head, compacted_before, pages, commits_removed }` result fields.
 
 ### Git-Backed REST Request
 

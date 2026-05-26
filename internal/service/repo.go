@@ -82,6 +82,10 @@ type Service struct {
 	wikiBgMigrationMu     map[string]struct{}
 	wikiBgMigrationMapMu  sync.RWMutex
 
+	wikiBgCompactionMuOnce sync.Once
+	wikiBgCompactionMu     map[string]string
+	wikiBgCompactionMapMu  sync.RWMutex
+
 	workflowStepRunner workflowStepRunner
 
 	// tokenTouchCache deduplicates TouchToken DB writes in-memory.
@@ -112,6 +116,14 @@ type Service struct {
 	// testWikiCompactRefUpdateFailure lets tests force the compact ref update
 	// path to fail after the catalog transaction commits.
 	testWikiCompactRefUpdateFailure func(repoFullName, commitSHA string) error
+
+	// testWikiCompactionJobStarted is a test-only hook fired after the async
+	// compaction worker marks a job running.
+	testWikiCompactionJobStarted func(jobID string)
+
+	// testWikiCompactionJobContinue is a test-only hook that can block the
+	// async compaction worker until tests allow it to proceed.
+	testWikiCompactionJobContinue func(jobID string)
 }
 
 type tenantRepoKey struct {
@@ -161,6 +173,10 @@ func (s *Service) wikiBgMigrationMuInit() {
 	s.wikiBgMigrationMu = make(map[string]struct{})
 }
 
+func (s *Service) wikiBgCompactionMuInit() {
+	s.wikiBgCompactionMu = make(map[string]string)
+}
+
 func (s *Service) claimWikiBackgroundMigration(key tenantRepoKey) bool {
 	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
 
@@ -181,6 +197,32 @@ func (s *Service) releaseWikiBackgroundMigration(key tenantRepoKey) {
 	s.wikiBgMigrationMapMu.Lock()
 	defer s.wikiBgMigrationMapMu.Unlock()
 	delete(s.wikiBgMigrationMu, s.tenantRepoMutexKey(key))
+}
+
+func (s *Service) claimWikiBackgroundCompaction(key tenantRepoKey, jobID string) bool {
+	s.wikiBgCompactionMuOnce.Do(s.wikiBgCompactionMuInit)
+
+	s.wikiBgCompactionMapMu.Lock()
+	defer s.wikiBgCompactionMapMu.Unlock()
+
+	muKey := s.tenantRepoMutexKey(key)
+	if _, ok := s.wikiBgCompactionMu[muKey]; ok {
+		return false
+	}
+	s.wikiBgCompactionMu[muKey] = jobID
+	return true
+}
+
+func (s *Service) releaseWikiBackgroundCompaction(key tenantRepoKey, jobID string) {
+	s.wikiBgCompactionMuOnce.Do(s.wikiBgCompactionMuInit)
+
+	s.wikiBgCompactionMapMu.Lock()
+	defer s.wikiBgCompactionMapMu.Unlock()
+
+	muKey := s.tenantRepoMutexKey(key)
+	if activeJobID, ok := s.wikiBgCompactionMu[muKey]; ok && activeJobID == jobID {
+		delete(s.wikiBgCompactionMu, muKey)
+	}
 }
 
 func (s *Service) isWikiBackgroundMigrationRunning(key tenantRepoKey) bool {
@@ -863,6 +905,9 @@ func (s *Service) deleteRepoCascade(tx *gorm.DB, repoID uint, fullName string) e
 		return err
 	}
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.CommitStatus{})); err != nil {
+		return err
+	}
+	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.WikiCompactionJob{})); err != nil {
 		return err
 	}
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.WikiSearchDocument{})); err != nil {
