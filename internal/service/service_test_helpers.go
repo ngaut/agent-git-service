@@ -108,6 +108,29 @@ func (s *Service) SetWikiBackgroundMigrationStartedHookForTest(fn func(repoFullN
 	s.testWikiBackgroundMigrationStarted = fn
 }
 
+// IsPublicRepoForTest exposes isPublicRepo to external-package tests.
+func IsPublicRepoForTest(s *Service, ctx context.Context, repoID uint) bool {
+	return s.isPublicRepo(ctx, repoID)
+}
+
+// SetTestWikiCompactRefUpdateFailureForTest installs a test-only hook that can
+// force CompactWikiHistory to fail after the catalog transaction commits.
+func SetTestWikiCompactRefUpdateFailureForTest(s *Service, fn func(repoFullName, commitSHA string) error) {
+	s.testWikiCompactRefUpdateFailure = fn
+}
+
+// SetTestWikiCompactionJobStartedForTest installs a test-only hook fired after
+// the async compaction worker marks a job running.
+func SetTestWikiCompactionJobStartedForTest(s *Service, fn func(jobID string)) {
+	s.testWikiCompactionJobStarted = fn
+}
+
+// SetTestWikiCompactionJobContinueForTest installs a test-only hook that can
+// block the async compaction worker until tests allow it to proceed.
+func SetTestWikiCompactionJobContinueForTest(s *Service, fn func(jobID string)) {
+	s.testWikiCompactionJobContinue = fn
+}
+
 // ClaimWikiBackgroundMigrationForTest exposes background migration slot claims for tests.
 func (s *Service) ClaimWikiBackgroundMigrationForTest(ctx context.Context, repoFullName string) bool {
 	repo, err := s.LookupRepoIdentity(ctx, repoFullName)

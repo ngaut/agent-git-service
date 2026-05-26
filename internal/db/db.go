@@ -317,6 +317,7 @@ func Migrate(database *gorm.DB) error {
 		&WikiPageRevision{},
 		&WikiChangeset{},
 		&WikiRepoHead{},
+		&WikiCompactionJob{},
 		&WikiDirIndex{},
 		&WikiPageLink{},
 		&WikiBlobRef{},

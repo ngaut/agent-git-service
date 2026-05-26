@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"gh-server/internal/db"
 	"gh-server/internal/rest/respond"
 	"gh-server/internal/rest/transform"
 	"gh-server/internal/service"
@@ -17,6 +18,10 @@ import (
 
 func wikiSlugParam(r *http.Request) string {
 	return pathParam(r, "slug")
+}
+
+func wikiCompactionJobIDParam(r *http.Request) string {
+	return pathParam(r, "jobID")
 }
 
 func wikiLabelFiltersFromQuery(q url.Values) (labels, excludeLabels []string) {
@@ -463,18 +468,68 @@ func (d *Deps) CompactWikiHistory(w http.ResponseWriter, r *http.Request) {
 		respond.ValidationFailed(w, "before is not supported for wiki compact")
 		return
 	}
-	result, err := d.Svc.CompactWikiHistory(r.Context(), full)
+	job, err := d.Svc.StartWikiCompaction(r.Context(), full)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{
-		"previous_head":    result.PreviousHead,
-		"new_head":         result.NewHead,
-		"compacted_before": result.CompactedBefore.Format(time.RFC3339),
-		"pages":            result.Pages,
-		"commits_removed":  result.CommitsRemoved,
-	})
+	statusURL := "/api/v3/repos/" + full + "/wiki/compact/" + job.ID
+	w.Header().Set("Location", statusURL)
+	respond.JSON(w, http.StatusAccepted, wikiCompactionJobResponse(job, statusURL))
+}
+
+// GetWikiCompactionJob handles GET /api/v3/repos/{owner}/{repo}/wiki/compact/{jobID}
+func (d *Deps) GetWikiCompactionJob(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	repo := d.mustGetRepo(w, r)
+	if repo == nil {
+		return
+	}
+	if !d.requireRepoPermission(w, r, repo.ID, service.RepoPermissionAdmin) {
+		return
+	}
+	job, err := d.Svc.GetWikiCompactionJob(r.Context(), full, wikiCompactionJobIDParam(r))
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, wikiCompactionJobResponse(job, "/api/v3/repos/"+full+"/wiki/compact/"+job.ID))
+}
+
+func wikiCompactionJobResponse(job db.WikiCompactionJob, statusURL string) map[string]any {
+	resp := map[string]any{
+		"job_id":      job.ID,
+		"status":      job.Status,
+		"status_url":  statusURL,
+		"location":    statusURL,
+		"started_at":  nil,
+		"finished_at": nil,
+	}
+	if startedAt := job.StartedAt; startedAt != nil {
+		resp["started_at"] = startedAt.Format(time.RFC3339)
+	}
+	if finishedAt := job.FinishedAt; finishedAt != nil {
+		resp["finished_at"] = finishedAt.Format(time.RFC3339)
+	}
+	if previousHead := job.PreviousHead; previousHead != "" {
+		resp["previous_head"] = previousHead
+	}
+	if newHead := job.NewHead; newHead != "" {
+		resp["new_head"] = newHead
+	}
+	if compactedBefore := job.CompactedBefore; compactedBefore != nil {
+		resp["compacted_before"] = compactedBefore.Format(time.RFC3339)
+	}
+	if job.Pages > 0 || job.Status == service.WikiCompactionJobSucceeded {
+		resp["pages"] = job.Pages
+	}
+	if job.CommitsRemoved > 0 || job.Status == service.WikiCompactionJobSucceeded {
+		resp["commits_removed"] = job.CommitsRemoved
+	}
+	if errorMessage := job.ErrorMessage; errorMessage != "" {
+		resp["error"] = errorMessage
+	}
+	return resp
 }
 
 // ListWikiBacklinks handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks
