@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gh-server/internal/db"
@@ -31,6 +33,7 @@ const (
 	// queries do not get flooded by weak vector nearest-neighbor noise.
 	wikiSemanticOnlyMinScoreWithLexical = 0.5
 	wikiSemanticMaxExact                = 1000
+	wikiReindexWorkers                  = 4
 )
 
 type WikiSearchResult struct {
@@ -904,6 +907,7 @@ func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName str
 	}
 	targetDB := s.DBForCtx(ctx)
 	title := titleFromSlug(page.Slug)
+	labelDigest := wikiPageLabelsText(page.Labels)
 	now := time.Now()
 	values := map[string]any{
 		"repository_id": repo.ID,
@@ -911,12 +915,13 @@ func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName str
 		"title":         title,
 		"body":          db.LargeText(page.Body),
 		"revision_sha":  page.SHA,
+		"label_digest":  labelDigest,
 		"created_at":    now,
 		"updated_at":    now,
 	}
-	updateColumns := []string{"title", "body", "revision_sha", "updated_at"}
+	updateColumns := []string{"title", "body", "revision_sha", "label_digest", "updated_at"}
 	if s.Embedder != nil && !embedding.IsNop(s.Embedder) {
-		text := title + "\n" + wikiPageLabelsText(page.Labels) + "\n" + page.Body
+		text := title + "\n" + labelDigest + "\n" + page.Body
 		hasEmbeddingColumn := targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
 		vec, err := s.embedWithRetry(ctx, text)
 		if err != nil {
@@ -949,29 +954,147 @@ func (s *Service) deleteWikiSearchDocument(ctx context.Context, repoFullName, sl
 }
 
 func (s *Service) ReindexWikiSearch(ctx context.Context, repoFullName string) (int, error) {
-	pages, err := s.ListWikiPages(ctx, repoFullName, ListWikiPagesOptions{Recursive: true})
-	if err != nil {
+	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
 		return 0, err
 	}
 	repo, err := s.GetRepo(ctx, repoFullName)
 	if err != nil {
 		return 0, err
 	}
-	if err := s.DBForCtx(ctx).Where("repository_id = ?", repo.ID).Delete(&db.WikiSearchDocument{}).Error; err != nil {
+
+	var pages []db.WikiPage
+	if err := s.DBForCtx(ctx).
+		Where("repository_id = ? AND deleted_at IS NULL", repo.ID).
+		Order("page_id ASC").
+		Find(&pages).Error; err != nil {
 		return 0, err
 	}
-	count := 0
-	for _, summary := range pages {
-		page, err := s.GetWikiPage(ctx, repoFullName, summary.Slug)
-		if err != nil {
-			return count, err
-		}
-		if err := s.upsertWikiSearchDocument(ctx, repoFullName, page); err != nil {
-			return count, err
-		}
-		count++
+
+	var existing []db.WikiSearchDocument
+	if err := s.DBForCtx(ctx).
+		Where("repository_id = ?", repo.ID).
+		Find(&existing).Error; err != nil {
+		return 0, err
 	}
-	return count, nil
+
+	liveBySlug := make(map[string]db.WikiPage, len(pages))
+	slugs := make([]string, 0, len(pages))
+	for _, page := range pages {
+		liveBySlug[page.Slug] = page
+		slugs = append(slugs, page.Slug)
+	}
+
+	staleSlugs := make([]string, 0)
+	existingBySlug := make(map[string]db.WikiSearchDocument, len(existing))
+	for _, doc := range existing {
+		existingBySlug[doc.Slug] = doc
+		if _, ok := liveBySlug[doc.Slug]; !ok {
+			staleSlugs = append(staleSlugs, doc.Slug)
+		}
+	}
+	if len(staleSlugs) > 0 {
+		if err := s.DBForCtx(ctx).
+			Where("repository_id = ? AND slug IN ?", repo.ID, staleSlugs).
+			Delete(&db.WikiSearchDocument{}).Error; err != nil {
+			return 0, err
+		}
+	}
+
+	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, repo.ID, slugs)
+	if err != nil {
+		return 0, err
+	}
+
+	toRefresh := make([]WikiPage, 0, len(pages))
+	for _, page := range pages {
+		labelDigest := wikiPageLabelsText(labelsBySlug[page.Slug])
+		if doc, ok := existingBySlug[page.Slug]; ok && doc.RevisionSHA == page.HeadBlobSHA && doc.LabelDigest == labelDigest {
+			continue
+		}
+		body, err := s.wikiPageBody(ctx, page)
+		if err != nil {
+			return 0, err
+		}
+		toRefresh = append(toRefresh, WikiPage{
+			Slug:       page.Slug,
+			Title:      titleFromSlug(page.Slug),
+			Body:       string(body),
+			UpdatedAt:  page.UpdatedAt,
+			SHA:        page.HeadBlobSHA,
+			LastAuthor: page.LastAuthor,
+			Labels:     labelsBySlug[page.Slug],
+		})
+	}
+
+	if err := s.reindexWikiSearchDocuments(ctx, repoFullName, toRefresh); err != nil {
+		return 0, err
+	}
+	return len(pages), nil
+}
+
+func (s *Service) reindexWikiSearchDocuments(ctx context.Context, repoFullName string, pages []WikiPage) error {
+	if len(pages) == 0 {
+		return nil
+	}
+
+	workers := wikiReindexWorkers
+	if workers > len(pages) {
+		workers = len(pages)
+	}
+	if maxProcs := runtime.GOMAXPROCS(0); maxProcs > 0 && workers > maxProcs {
+		workers = maxProcs
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	workCh := make(chan WikiPage)
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+
+	worker := func() {
+		defer wg.Done()
+		for page := range workCh {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := s.upsertWikiSearchDocument(ctx, repoFullName, page); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+		}
+	}
+
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go worker()
+	}
+
+	for _, page := range pages {
+		select {
+		case err := <-errCh:
+			close(workCh)
+			wg.Wait()
+			return err
+		case <-ctx.Done():
+			close(workCh)
+			wg.Wait()
+			return ctx.Err()
+		case workCh <- page:
+		}
+	}
+	close(workCh)
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return err
+	default:
+	}
+	return nil
 }
 
 func (s *Service) ReindexAllWikiSearch(ctx context.Context) (int, error) {
