@@ -343,6 +343,9 @@ func Migrate(database *gorm.DB) error {
 	if err := MigrateIssueSearch(database); err != nil {
 		return err
 	}
+	if err := MigrateWikiSearch(database); err != nil {
+		return err
+	}
 	// Add unique index on (project_id, content_id, type) to prevent duplicate items
 	return MigrateProjectItemUniqueIndex(database)
 }
@@ -397,5 +400,6 @@ func InitVector(database *gorm.DB, dims int) {
 		}
 	}
 
+	ensureWikiSearchVector(database, dims)
 	ensureVectorIndexes(database)
 }

@@ -95,6 +95,28 @@ func TestResolveToken_KnownToken(t *testing.T) {
 	}
 }
 
+func TestTenantDBs_ActiveUsersOnly(t *testing.T) {
+	cpDB := newTestCPDB(t)
+	var calls atomic.Int64
+	router := NewDBRouter(cpDB, testOpenDB(t, &calls), true, RouterConfig{MaxAgents: 10})
+	defer router.Close()
+
+	seedAgentWithState(t, cpDB, "active-1", "tok-1", "dsn-1", AgentStateActive)
+	seedAgentWithState(t, cpDB, "pending-1", "tok-2", "dsn-2", AgentStatePending)
+	seedAgentWithState(t, cpDB, "active-2", "tok-3", "dsn-3", AgentStateActive)
+
+	dbs, err := router.TenantDBs(context.Background())
+	if err != nil {
+		t.Fatalf("TenantDBs: %v", err)
+	}
+	if len(dbs) != 2 {
+		t.Fatalf("len(TenantDBs) = %d, want 2", len(dbs))
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("openDB calls = %d, want 2", got)
+	}
+}
+
 func TestResolveToken_NilRouterReturnsError(t *testing.T) {
 	var router *DBRouter
 
