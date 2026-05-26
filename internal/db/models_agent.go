@@ -20,6 +20,8 @@ type AgentInvite struct {
 	Token                 string `gorm:"uniqueIndex;size:64;not null"`
 	HumanUserID           uint   `gorm:"index;not null"`
 	HumanUser             User   `gorm:"foreignKey:HumanUserID"`
+	RepoGrantsJSON        string `gorm:"type:text"`
+	TeamGrantsJSON        string `gorm:"type:text"`
 	CreatedAt             time.Time
 	ExpiresAt             *time.Time `gorm:"index"`
 	ConsumedAt            *time.Time `gorm:"index"`

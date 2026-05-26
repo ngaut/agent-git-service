@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -29,10 +30,37 @@ type AgentRegistrationResult struct {
 	RepoFullName string
 }
 
+type AgentInviteRepoGrant struct {
+	RepoFullName string `json:"repo_full_name"`
+	Permission   string `json:"permission"`
+}
+
+type AgentInviteTeamGrant struct {
+	Org      string `json:"org"`
+	TeamSlug string `json:"team_slug"`
+	Role     string `json:"role"`
+}
+
+type CreateAgentInviteInput struct {
+	RepoGrants []AgentInviteRepoGrant
+	TeamGrants []AgentInviteTeamGrant
+}
+
+type BoundAgentTokenStatus struct {
+	State     string
+	CreatedAt *time.Time
+}
+
+type BoundAgentAccessSummary struct {
+	Repos []AgentInviteRepoGrant
+	Teams []AgentInviteTeamGrant
+}
+
 type BoundAgent struct {
-	Agent   db.User
-	Token   db.Token
-	BoundAt time.Time
+	Agent         db.User
+	BoundAt       time.Time
+	TokenStatus   BoundAgentTokenStatus
+	AccessSummary BoundAgentAccessSummary
 }
 
 // RegisterAgent creates a new agent account, issues a token, and creates a default repo.
@@ -120,8 +148,264 @@ func (s *Service) RegisterAgent(ctx context.Context, prefixLogin, defaultRepoNam
 	}, nil
 }
 
+func normalizeAgentInviteInput(ctx context.Context, s *Service, human db.User, input CreateAgentInviteInput) ([]AgentInviteRepoGrant, []AgentInviteTeamGrant, error) {
+	humanCtx := ContextWithUser(ctx, human)
+	normalizedRepos := make([]AgentInviteRepoGrant, 0, len(input.RepoGrants))
+	seenRepos := map[string]struct{}{}
+	for _, grant := range input.RepoGrants {
+		fullName := strings.TrimSpace(grant.RepoFullName)
+		if fullName == "" {
+			return nil, nil, fmt.Errorf("%w: repo_full_name is required", ErrValidation)
+		}
+		permission, ok := NormalizeGrantPermission(grant.Permission)
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: %s", ErrValidation, GrantPermissionValidationMessage)
+		}
+		repo, err := repoByFullNameTx(s.DBForCtx(ctx), fullName)
+		if err != nil {
+			return nil, nil, err
+		}
+		viewerPerm, err := s.HasRepoAccess(humanCtx, repo.ID, human.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		allowed := viewerPerm.AtLeast(RepoPermissionAdmin)
+		if !allowed && repo.Owner.Type == db.TypeOrganization {
+			isOrgAdmin, err := s.IsOrgAdmin(humanCtx, repo.OwnerID, human.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			allowed = isOrgAdmin
+		}
+		if !allowed {
+			return nil, nil, fmt.Errorf("%w: admin repo access required for %s", ErrForbidden, fullName)
+		}
+		if _, ok := seenRepos[repo.FullName]; ok {
+			continue
+		}
+		seenRepos[repo.FullName] = struct{}{}
+		normalizedRepos = append(normalizedRepos, AgentInviteRepoGrant{RepoFullName: repo.FullName, Permission: permission})
+	}
+
+	normalizedTeams := make([]AgentInviteTeamGrant, 0, len(input.TeamGrants))
+	seenTeams := map[string]struct{}{}
+	for _, grant := range input.TeamGrants {
+		orgLogin := strings.TrimSpace(grant.Org)
+		teamSlug := strings.TrimSpace(grant.TeamSlug)
+		if orgLogin == "" || teamSlug == "" {
+			return nil, nil, fmt.Errorf("%w: org and team_slug are required", ErrValidation)
+		}
+		role, ok := normalizeTeamMemberRoleValue(grant.Role)
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: team role must be member or maintainer", ErrValidation)
+		}
+		org, err := s.GetUser(humanCtx, orgLogin)
+		if err != nil {
+			return nil, nil, err
+		}
+		if org.Type != db.TypeOrganization {
+			return nil, nil, fmt.Errorf("%w: %s is not an organization", ErrValidation, orgLogin)
+		}
+		team, err := s.GetTeam(humanCtx, org.ID, teamSlug)
+		if err != nil {
+			return nil, nil, err
+		}
+		canManage, _, err := s.CanManageTeamMembership(humanCtx, org.ID, team.ID, human.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !canManage {
+			return nil, nil, fmt.Errorf("%w: team membership admin permission required for %s/%s", ErrForbidden, orgLogin, teamSlug)
+		}
+		key := org.Login + "/" + team.Slug
+		if _, ok := seenTeams[key]; ok {
+			continue
+		}
+		seenTeams[key] = struct{}{}
+		normalizedTeams = append(normalizedTeams, AgentInviteTeamGrant{Org: org.Login, TeamSlug: team.Slug, Role: role})
+	}
+
+	return normalizedRepos, normalizedTeams, nil
+}
+
+func marshalAgentInviteGrants(repoGrants []AgentInviteRepoGrant, teamGrants []AgentInviteTeamGrant) (string, string, error) {
+	repoJSON, err := json.Marshal(repoGrants)
+	if err != nil {
+		return "", "", err
+	}
+	teamJSON, err := json.Marshal(teamGrants)
+	if err != nil {
+		return "", "", err
+	}
+	return string(repoJSON), string(teamJSON), nil
+}
+
+func splitRepoFullName(fullName string) (string, string, bool) {
+	owner, repo, ok := strings.Cut(strings.TrimSpace(fullName), "/")
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	if !ok || owner == "" || repo == "" {
+		return "", "", false
+	}
+	return owner, repo, true
+}
+
+func repoByFullNameTx(tx *gorm.DB, fullName string) (db.Repository, error) {
+	owner, repoName, ok := splitRepoFullName(fullName)
+	if !ok {
+		return db.Repository{}, fmt.Errorf("%w: invalid repo_full_name", ErrValidation)
+	}
+	var repo db.Repository
+	err := preloadRepoFull(tx).
+		Joins("JOIN users owner ON owner.id = repositories.owner_id").
+		Where("owner.login = ? AND repositories.name = ?", owner, repoName).
+		First(&repo).Error
+	return repo, wrapErr(err)
+}
+
+func getUserTx(tx *gorm.DB, login string) (db.User, error) {
+	var user db.User
+	err := tx.First(&user, "login = ?", login).Error
+	return user, wrapErr(err)
+}
+
+func getTeamTx(tx *gorm.DB, orgID uint, slug string) (db.Team, error) {
+	var team db.Team
+	err := tx.First(&team, "organization_id = ? AND slug = ?", orgID, slug).Error
+	return team, wrapErr(err)
+}
+
+func applyAgentInviteGrantsTx(tx *gorm.DB, s *Service, invite db.AgentInvite, human db.User, agent db.User) error {
+	var repoGrants []AgentInviteRepoGrant
+	if strings.TrimSpace(invite.RepoGrantsJSON) != "" {
+		if err := json.Unmarshal([]byte(invite.RepoGrantsJSON), &repoGrants); err != nil {
+			return fmt.Errorf("%w: invalid repo grant payload", ErrValidation)
+		}
+	}
+	for _, grant := range repoGrants {
+		permission, ok := NormalizeGrantPermission(grant.Permission)
+		if !ok {
+			return fmt.Errorf("%w: %s", ErrValidation, GrantPermissionValidationMessage)
+		}
+		repo, err := repoByFullNameTx(tx, grant.RepoFullName)
+		if err != nil {
+			return err
+		}
+		collab := db.Collaborator{RepositoryID: repo.ID, UserID: agent.ID, Permission: permission}
+		if err := upsertCollaboratorTx(tx, &collab); err != nil {
+			return err
+		}
+		orgID, err := repoOrganizationIDTx(tx, repo.ID)
+		if err != nil {
+			return err
+		}
+		if orgID != 0 {
+			if err := syncOutsideCollaboratorForOrgTx(tx, orgID, agent.ID); err != nil {
+				return err
+			}
+		}
+	}
+
+	var teamGrants []AgentInviteTeamGrant
+	if strings.TrimSpace(invite.TeamGrantsJSON) != "" {
+		if err := json.Unmarshal([]byte(invite.TeamGrantsJSON), &teamGrants); err != nil {
+			return fmt.Errorf("%w: invalid team grant payload", ErrValidation)
+		}
+	}
+	for _, grant := range teamGrants {
+		role, ok := normalizeTeamMemberRoleValue(grant.Role)
+		if !ok {
+			return fmt.Errorf("%w: team role must be member or maintainer", ErrValidation)
+		}
+		org, err := getUserTx(tx, strings.TrimSpace(grant.Org))
+		if err != nil {
+			return err
+		}
+		if org.Type != db.TypeOrganization {
+			return fmt.Errorf("%w: %s is not an organization", ErrValidation, grant.Org)
+		}
+		team, err := getTeamTx(tx, org.ID, strings.TrimSpace(grant.TeamSlug))
+		if err != nil {
+			return err
+		}
+		var membershipCount int64
+		if err := tx.Model(&db.OrganizationMember{}).
+			Where("organization_id = ? AND user_id = ?", org.ID, agent.ID).
+			Count(&membershipCount).Error; err != nil {
+			return wrapErr(err)
+		}
+		if membershipCount == 0 {
+			humanCtx := ContextWithDB(ContextWithUser(context.Background(), human), tx)
+			canManage, canInviteUnaffiliated, err := s.CanManageTeamMembership(humanCtx, org.ID, team.ID, human.ID)
+			if err != nil {
+				return err
+			}
+			if !canManage {
+				return fmt.Errorf("%w: team membership admin permission required for %s/%s", ErrForbidden, org.Login, team.Slug)
+			}
+			if !canInviteUnaffiliated {
+				return fmt.Errorf("%w: org admin access required for unaffiliated invite to %s/%s", ErrForbidden, org.Login, team.Slug)
+			}
+			if _, err := ensureOrgMembershipTx(tx, org.ID, agent.ID, db.OrganizationRoleMember); err != nil {
+				return err
+			}
+		}
+		if err := ensureTeamMemberTx(tx, team.ID, agent.ID, role); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func latestTokenForUserTx(tx *gorm.DB, userID uint) (db.Token, error) {
+	var tok db.Token
+	err := tx.Where("user_id = ?", userID).Order("created_at DESC, id DESC").First(&tok).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return db.Token{}, nil
+	}
+	return tok, err
+}
+
+func boundAgentAccessSummaryTx(tx *gorm.DB, agentID uint) (BoundAgentAccessSummary, error) {
+	summary := BoundAgentAccessSummary{Repos: []AgentInviteRepoGrant{}, Teams: []AgentInviteTeamGrant{}}
+	var repoRows []struct {
+		FullName   string
+		Permission string
+	}
+	if err := tx.Table("collaborators").
+		Select("repositories.full_name, collaborators.permission").
+		Joins("JOIN repositories ON repositories.id = collaborators.repository_id").
+		Where("collaborators.user_id = ?", agentID).
+		Order("repositories.full_name ASC").
+		Scan(&repoRows).Error; err != nil {
+		return summary, err
+	}
+	for _, row := range repoRows {
+		summary.Repos = append(summary.Repos, AgentInviteRepoGrant{RepoFullName: row.FullName, Permission: row.Permission})
+	}
+
+	var teamRows []struct {
+		OrgLogin string
+		TeamSlug string
+		Role     string
+	}
+	if err := tx.Table("team_members").
+		Select("orgs.login as org_login, teams.slug as team_slug, team_members.role").
+		Joins("JOIN teams ON teams.id = team_members.team_id").
+		Joins("JOIN users orgs ON orgs.id = teams.organization_id").
+		Where("team_members.user_id = ?", agentID).
+		Order("orgs.login ASC, teams.slug ASC").
+		Scan(&teamRows).Error; err != nil {
+		return summary, err
+	}
+	for _, row := range teamRows {
+		summary.Teams = append(summary.Teams, AgentInviteTeamGrant{Org: row.OrgLogin, TeamSlug: row.TeamSlug, Role: row.Role})
+	}
+	return summary, nil
+}
+
 // CreateAgentInvite creates a binding invite for the current human user.
-func (s *Service) CreateAgentInvite(ctx context.Context) (db.AgentInvite, error) {
+func (s *Service) CreateAgentInvite(ctx context.Context, input CreateAgentInviteInput) (db.AgentInvite, error) {
 	human, err := s.GetCurrentUser(ctx)
 	if err != nil {
 		return db.AgentInvite{}, err
@@ -129,13 +413,23 @@ func (s *Service) CreateAgentInvite(ctx context.Context) (db.AgentInvite, error)
 	if human.UserKind != db.UserKindHuman {
 		return db.AgentInvite{}, fmt.Errorf("%w: only human accounts can create invites", ErrForbidden)
 	}
+	repoGrants, teamGrants, err := normalizeAgentInviteInput(ctx, s, human, input)
+	if err != nil {
+		return db.AgentInvite{}, err
+	}
+	repoJSON, teamJSON, err := marshalAgentInviteGrants(repoGrants, teamGrants)
+	if err != nil {
+		return db.AgentInvite{}, err
+	}
 
 	var invite db.AgentInvite
 	for attempt := 0; attempt < maxAgentAttempts; attempt++ {
 		token := randutil.Hex(32)
 		invite = db.AgentInvite{
-			Token:       token,
-			HumanUserID: human.ID,
+			Token:          token,
+			HumanUserID:    human.ID,
+			RepoGrantsJSON: repoJSON,
+			TeamGrantsJSON: teamJSON,
 		}
 		if err := s.DBForCtx(ctx).Create(&invite).Error; err != nil {
 			if isDuplicateErr(err) {
@@ -241,6 +535,9 @@ func (s *Service) ConfirmAgentBinding(ctx context.Context, inviteToken string) (
 				return err
 			}
 		}
+		if err := applyAgentInviteGrantsTx(tx, s, invite, human, agent); err != nil {
+			return err
+		}
 		consumedAt := time.Now().UTC()
 		updates := map[string]any{
 			"consumed_at":               consumedAt,
@@ -269,18 +566,54 @@ func (s *Service) ListBoundAgents(ctx context.Context, humanID uint) ([]BoundAge
 	}
 	out := make([]BoundAgent, 0, len(bindings))
 	for _, b := range bindings {
-		var tok db.Token
-		_ = s.DBForCtx(ctx).
-			Where("user_id = ?", b.AgentUserID).
-			Order("created_at DESC, id DESC").
-			First(&tok).Error
+		tok, err := latestTokenForUserTx(s.DBForCtx(ctx), b.AgentUserID)
+		if err != nil {
+			return nil, err
+		}
+		summary, err := boundAgentAccessSummaryTx(s.DBForCtx(ctx), b.AgentUserID)
+		if err != nil {
+			return nil, err
+		}
+		var createdAt *time.Time
+		if tok.ID != 0 {
+			createdAt = &tok.CreatedAt
+		}
 		out = append(out, BoundAgent{
-			Agent:   b.AgentUser,
-			Token:   tok,
-			BoundAt: b.CreatedAt,
+			Agent:         b.AgentUser,
+			BoundAt:       b.CreatedAt,
+			TokenStatus:   BoundAgentTokenStatus{State: "active", CreatedAt: createdAt},
+			AccessSummary: summary,
 		})
 	}
 	return out, nil
+}
+
+// RenameBoundAgent updates the display name for a bound agent.
+func (s *Service) RenameBoundAgent(ctx context.Context, humanID uint, agentLogin, name string) (db.User, error) {
+	agentLogin = strings.TrimSpace(agentLogin)
+	name = strings.TrimSpace(name)
+	if agentLogin == "" || name == "" {
+		return db.User{}, fmt.Errorf("%w: agent_login and name are required", ErrValidation)
+	}
+	var agent db.User
+	err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&agent, "login = ?", agentLogin).Error; err != nil {
+			return wrapErr(err)
+		}
+		var binding db.AgentBinding
+		if err := tx.First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
+			return wrapErr(err)
+		}
+		if err := tx.Model(&db.User{}).Where("id = ?", agent.ID).Update("name", name).Error; err != nil {
+			return err
+		}
+		agent.Name = name
+		return nil
+	})
+	if err != nil {
+		return db.User{}, err
+	}
+	return agent, nil
 }
 
 // ResetAgentToken revokes all tokens for the bound agent and issues a new one.

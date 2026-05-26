@@ -82,12 +82,20 @@ func buildRESTOpenAPIPaths() map[string]any {
 			}, nil), nil, response(201, "Agent created")),
 		},
 		"/api/v3/agent-invites": map[string]any{
-			"post": operation("createAgentInvite", "Create an invite token used to bind an agent to a user.", auth(), nil, nil, response(201, "Agent invite created")),
+			"post": operation("createAgentInvite", "Create an invite token used to bind an agent to a user.", auth(), jsonBody(false, map[string]any{
+				"repo_grants": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"repo_full_name": stringSchema("Repository full name to grant during bind."), "permission": stringSchema("Requested permission (read/write/admin).")}}},
+				"team_grants": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"org": stringSchema("Organization login for a team grant."), "team_slug": stringSchema("Team slug to grant during bind."), "role": stringSchema("Team role (member/maintainer).")}}},
+			}, nil), nil, response(201, "Agent invite created")),
 		},
 		"/api/v3/agent-bindings/confirm": map[string]any{
 			"post": operation("confirmAgentBinding", "Confirm an agent binding using an invite token.", auth(), jsonBody(true, map[string]any{
 				"invite_token": stringSchema("Invite token issued by POST /api/v3/agent-invites."),
 			}, []string{"invite_token"}), nil, response(200, "Binding confirmed")),
+		},
+		"/api/v3/agent-bindings/{agent_login}": map[string]any{
+			"patch": operation("renameBoundAgent", "Rename a bound agent's display name.", auth(), jsonBody(true, map[string]any{
+				"name": stringSchema("New display name for the bound agent."),
+			}, []string{"name"}), pathParams(param("agent_login", "string")), response(200, "Agent renamed")),
 		},
 		"/api/v3/agent-bindings/{agent_login}/reset-token": map[string]any{
 			"post": operation("resetAgentToken", "Rotate the token for a bound agent login.", auth(), nil, pathParams(param("agent_login", "string")), response(200, "Token rotated")),
