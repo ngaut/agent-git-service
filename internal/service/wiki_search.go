@@ -42,6 +42,8 @@ type WikiSearchResult struct {
 	Score   float64
 	Snippet string
 	Labels  []db.Label
+
+	liveGitHydrated bool
 }
 
 type WikiSearchResponse struct {
@@ -105,10 +107,20 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 	}
 
 	method := "substring"
-	lexical, err := s.searchWikiLexical(ctx, repo.ID, query, labelFilters)
-	if err != nil {
-		slog.WarnContext(ctx, "wiki search indexed path failed; falling back to git scan", "repo", repo.FullName, "error", err)
+	var lexical []WikiSearchResult
+	if wikiRepoLive {
 		lexical, err = s.searchWikiLexicalFromGit(ctx, repoFullName, query, labelFilters)
+		if err != nil {
+			slog.WarnContext(ctx, "wiki search git lexical path failed; falling back to indexed cache", "repo", repo.FullName, "error", err)
+			lexical, err = s.searchWikiLexical(ctx, repo.ID, query, labelFilters)
+			if err != nil {
+				return WikiSearchResponse{}, err
+			}
+		} else if err := s.refreshWikiSearchTitlesForResults(ctx, repo.ID, lexical); err != nil {
+			return WikiSearchResponse{}, err
+		}
+	} else {
+		lexical, err = s.searchWikiLexical(ctx, repo.ID, query, labelFilters)
 		if err != nil {
 			return WikiSearchResponse{}, err
 		}
@@ -159,9 +171,23 @@ func (s *Service) hydrateWikiSearchResults(ctx context.Context, repoFullName str
 		page, err := s.GetWikiPage(ctx, repoFullName, result.Slug)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
+				// Live git lexical search can surface a page before the
+				// background catalog catch-up has materialized it. Preserve
+				// the already-hydrated git result only when the slug still
+				// exists at the live wiki HEAD; stale semantic/index rows
+				// must continue to drop out here.
+				if _, liveErr := s.Git.ReadFileAtRef(ctx, wikiRepoFullName(repoFullName), wikiSlugToPath(result.Slug), wikiDefaultBranch); liveErr == nil &&
+					(result.Title != "" || result.Snippet != "" || len(result.Labels) > 0) {
+					hydrated = append(hydrated, result)
+				}
 				continue
 			}
 			return nil, err
+		}
+		if result.liveGitHydrated {
+			result.Labels = page.Labels
+			hydrated = append(hydrated, result)
+			continue
 		}
 		result.Title = page.Title
 		result.Snippet = buildWikiSnippet(page.Body, query)
@@ -222,45 +248,116 @@ func (s *Service) rankWikiLexicalDocuments(ctx context.Context, repoID uint, doc
 }
 
 func (s *Service) searchWikiLexicalFromGit(ctx context.Context, repoFullName, query string, filters WikiLabelFilters) ([]WikiSearchResult, error) {
-	pages, err := s.ListWikiPages(ctx, repoFullName, ListWikiPagesOptions{
-		Recursive:     true,
-		Labels:        filters.Labels,
-		ExcludeLabels: filters.ExcludeLabels,
-	})
+	repo, err := s.GetRepo(ctx, repoFullName)
+	if err != nil {
+		return nil, err
+	}
+	full := wikiRepoFullName(repoFullName)
+	headSHA, err := s.Git.HeadSHA(ctx, full, wikiDefaultBranch)
+	if err != nil {
+		return nil, err
+	}
+	paths, err := s.Git.ListTreeFilesAtRef(ctx, full, headSHA)
 	if err != nil {
 		return nil, err
 	}
 
-	scored := make([]wikiScoredDocument, 0, len(pages))
-	for _, summary := range pages {
-		page, err := s.GetWikiPage(ctx, repoFullName, summary.Slug)
+	slugs := make([]string, 0, len(paths))
+	pathBySlug := make(map[string]string, len(paths))
+	for _, path := range paths {
+		slug := wikiPathToSlug(path)
+		if slug == "" {
+			continue
+		}
+		slugs = append(slugs, slug)
+		pathBySlug[slug] = path
+	}
+	if len(slugs) == 0 {
+		return []WikiSearchResult{}, nil
+	}
+
+	var pageRows []db.WikiPage
+	if err := s.DBForCtx(ctx).
+		Where("repository_id = ? AND deleted_at IS NULL AND slug IN ?", repo.ID, slugs).
+		Find(&pageRows).Error; err != nil {
+		return nil, err
+	}
+	pageBySlug := make(map[string]db.WikiPage, len(pageRows))
+	for _, page := range pageRows {
+		pageBySlug[page.Slug] = page
+	}
+
+	allowedSlugs := map[string]struct{}{}
+	if hasWikiLabelFilters(filters) {
+		var noResults bool
+		allowedSlugs, noResults, err = s.wikiSlugsMatchingLabelFilters(ctx, repo.ID, slugs, filters)
 		if err != nil {
-			if errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		if noResults {
+			return []WikiSearchResult{}, nil
+		}
+	}
+	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, repo.ID, slugs)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenMatches := map[string]struct{}{}
+	if tokens := wikiSearchTokens(query); len(tokens) > 0 {
+		matches, err := s.Git.GrepFilesAtRef(ctx, full, headSHA, tokens)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range matches {
+			if slug := wikiPathToSlug(path); slug != "" {
+				tokenMatches[slug] = struct{}{}
+			}
+		}
+	}
+
+	scored := make([]wikiScoredDocument, 0, len(slugs))
+	for _, slug := range slugs {
+		if len(allowedSlugs) > 0 {
+			if _, ok := allowedSlugs[slug]; !ok {
 				continue
 			}
+		}
+		title := titleFromSlug(slug)
+		labels := labelsBySlug[slug]
+		labelScore := wikiLabelLexicalScore(labels, query)
+		if _, matchedContent := tokenMatches[slug]; !matchedContent && !wikiTextContainsAllTokens(title, slug, "", query) && labelScore <= 0 {
+			continue
+		}
+		body, err := s.Git.ReadFileAtRef(ctx, full, pathBySlug[slug], headSHA)
+		if err != nil {
 			return nil, err
 		}
 		score := 0.0
-		if wikiTextContainsAllTokens(page.Title, page.Slug, page.Body, query) {
-			score += lexicalScore(page.Title, page.Slug, page.Body, query)
+		if wikiTextContainsAllTokens(title, slug, string(body), query) {
+			score += lexicalScore(title, slug, string(body), query)
 		}
-		score += wikiLabelLexicalScore(page.Labels, query)
+		score += labelScore
 		if score <= 0 {
 			continue
 		}
+		updatedAt := time.Time{}
+		if page, ok := pageBySlug[slug]; ok {
+			updatedAt = page.UpdatedAt
+		}
 		scored = append(scored, wikiScoredDocument{
 			doc: db.WikiSearchDocument{
-				Slug:      page.Slug,
-				Title:     page.Title,
-				Body:      db.LargeText(page.Body),
-				UpdatedAt: page.UpdatedAt,
+				Slug:      slug,
+				Title:     title,
+				Body:      db.LargeText(body),
+				UpdatedAt: updatedAt,
 			},
 			score:  score,
-			labels: page.Labels,
+			labels: labels,
 		})
 	}
 	sortWikiScoredDocuments(scored)
-	return buildWikiSearchResults(scored, query), nil
+	return markWikiSearchResultsLiveGitHydrated(buildWikiSearchResults(scored, query)), nil
 }
 
 func escapeWikiSearchLike(s string) string {
@@ -612,14 +709,22 @@ func buildWikiSearchResults(scored []wikiScoredDocument, query string) []WikiSea
 	out := make([]WikiSearchResult, 0, len(scored))
 	for _, row := range scored {
 		out = append(out, WikiSearchResult{
-			Slug:    row.doc.Slug,
-			Title:   titleFromSlug(row.doc.Slug),
-			Score:   roundWikiScore(row.score),
-			Snippet: buildWikiSnippet(string(row.doc.Body), query),
-			Labels:  row.labels,
+			Slug:            row.doc.Slug,
+			Title:           titleFromSlug(row.doc.Slug),
+			Score:           roundWikiScore(row.score),
+			Snippet:         buildWikiSnippet(string(row.doc.Body), query),
+			Labels:          row.labels,
+			liveGitHydrated: false,
 		})
 	}
 	return out
+}
+
+func markWikiSearchResultsLiveGitHydrated(results []WikiSearchResult) []WikiSearchResult {
+	for i := range results {
+		results[i].liveGitHydrated = true
+	}
+	return results
 }
 
 func paginateWikiSearchResultList(results []WikiSearchResult, limit, offset int) []WikiSearchResult {
@@ -774,6 +879,35 @@ func (s *Service) refreshStaleWikiSearchTitles(ctx context.Context, docs []db.Wi
 		docs[i].Title = title
 	}
 	return nil
+}
+
+func (s *Service) refreshWikiSearchTitlesForResults(ctx context.Context, repoID uint, results []WikiSearchResult) error {
+	for _, result := range results {
+		title := titleFromSlug(result.Slug)
+		if title == "" {
+			continue
+		}
+		if err := s.DBForCtx(ctx).
+			Model(&db.WikiSearchDocument{}).
+			Where("repository_id = ? AND slug = ? AND title <> ?", repoID, result.Slug, title).
+			Update("title", title).
+			Error; err != nil {
+			if wikiSearchDocumentTableMissing(err) {
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func wikiSearchDocumentTableMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such table: wiki_search_documents") ||
+		strings.Contains(msg, "table `wiki_search_documents` doesn't exist")
 }
 
 func wikiSearchLikeEscapeClause(database *gorm.DB) string {

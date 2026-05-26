@@ -370,6 +370,155 @@ func TestWikiSearchHydratesReturnedSnippetFromLivePage(t *testing.T) {
 	}
 }
 
+func TestWikiSearchPrefersGitLexicalResultsOverStaleIndexedRows(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-git-first",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-git-first"
+
+	page, err := svc.PutWikiPage(ctx, full, "guides/auth", "# Auth\n\nLegacy token expiry wording.", "create auth", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage(create): %v", err)
+	}
+	svc.Wg.Wait()
+
+	page, err = svc.PutWikiPage(ctx, full, "guides/auth", "# Auth\n\nRefresh token rotation only.", "update auth", page.SHA)
+	if err != nil {
+		t.Fatalf("PutWikiPage(update): %v", err)
+	}
+	svc.Wg.Wait()
+
+	if err := svc.DB.Model(&db.WikiSearchDocument{}).
+		Where("repository_id > 0 AND slug = ?", "guides/auth").
+		Updates(map[string]any{
+			"title": "Auth",
+			"body":  "Legacy token expiry wording.",
+		}).Error; err != nil {
+		t.Fatalf("mutate search doc stale: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "legacy token expiry", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages(stale query): %v", err)
+	}
+	if len(resp.Results) != 0 {
+		t.Fatalf("results for stale query = %#v, want empty because git no longer matches", resp.Results)
+	}
+
+	resp, err = svc.SearchWikiPages(ctx, full, "refresh token rotation", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages(live query): %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Slug != "guides/auth" {
+		t.Fatalf("results for live query = %#v, want guides/auth", resp.Results)
+	}
+}
+
+func TestWikiSearchReadsLiveGitPageBeforeCatalogCatchesUp(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-live-git",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-live-git"
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nCatalog body only.", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage(home): %v", err)
+	}
+	svc.Wg.Wait()
+
+	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guides/live.md", "add live page", []byte("# Live\n\nFresh git-only search text.")); err != nil {
+		t.Fatalf("git write live page: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "fresh git-only search text", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "guides/live" {
+		t.Fatalf("results[0].Slug = %q, want guides/live", resp.Results[0].Slug)
+	}
+	if !strings.Contains(resp.Results[0].Snippet, "<mark>Fresh</mark> <mark>git-only</mark> <mark>search</mark> <mark>text</mark>") {
+		t.Fatalf("snippet = %q, want live git body", resp.Results[0].Snippet)
+	}
+	svc.Wg.Wait()
+}
+
+func TestWikiSearchPreservesLiveGitSnippetForStaleCatalogPage(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-live-snippet",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-live-snippet"
+	if _, err := svc.PutWikiPage(ctx, full, "guides/auth", "# Auth\n\nCatalog body only.", "create auth", ""); err != nil {
+		t.Fatalf("PutWikiPage(create): %v", err)
+	}
+	svc.Wg.Wait()
+
+	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guides/auth.md", "update auth in git", []byte("# Auth\n\nFresh git-only snippet text.")); err != nil {
+		t.Fatalf("git write auth page: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "fresh git-only snippet text", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Slug != "guides/auth" {
+		t.Fatalf("results = %#v, want guides/auth", resp.Results)
+	}
+	if !strings.Contains(resp.Results[0].Snippet, "<mark>Fresh</mark> <mark>git-only</mark> <mark>snippet</mark> <mark>text</mark>") {
+		t.Fatalf("snippet = %q, want live git snippet", resp.Results[0].Snippet)
+	}
+	if strings.Contains(resp.Results[0].Snippet, "Catalog body only.") {
+		t.Fatalf("snippet = %q, should not use stale catalog body", resp.Results[0].Snippet)
+	}
+	svc.Wg.Wait()
+}
+
 func TestWikiSearchDropsStaleIndexedRowsForDeletedPages(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
