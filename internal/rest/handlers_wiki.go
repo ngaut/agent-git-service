@@ -24,6 +24,15 @@ func wikiCompactionJobIDParam(r *http.Request) string {
 	return pathParam(r, "jobID")
 }
 
+type wikiV2StateResponse struct {
+	RepositoryID         uint       `json:"repository_id"`
+	IndexedCommitSHA     string     `json:"indexed_commit_sha"`
+	IndexedAt            *time.Time `json:"indexed_at,omitempty"`
+	ReconcileRequestedAt *time.Time `json:"reconcile_requested_at,omitempty"`
+	ReconcilerLeaseUntil *time.Time `json:"reconciler_lease_until,omitempty"`
+	PageCount            int        `json:"page_count"`
+}
+
 func wikiLabelFiltersFromQuery(q url.Values) (labels, excludeLabels []string) {
 	labels = append(labels, splitCommaQueryValues(q["label"])...)
 	labels = append(labels, splitCommaQueryValues(q["labels"])...)
@@ -132,6 +141,72 @@ func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 		out = append(out, transform.WikiPageSummary(full, p))
 	}
 	respond.JSON(w, 200, out)
+}
+
+// GetWikiV2State handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/state
+func (d *Deps) GetWikiV2State(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	if d.mustGetRepo(w, r) == nil {
+		return
+	}
+	state, err := d.Svc.GetWikiV2State(r.Context(), full)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, wikiV2StateResponse{
+		RepositoryID:         state.RepositoryID,
+		IndexedCommitSHA:     state.IndexedCommitSHA,
+		IndexedAt:            state.IndexedAt,
+		ReconcileRequestedAt: state.ReconcileRequestedAt,
+		ReconcilerLeaseUntil: state.ReconcilerLeaseUntil,
+		PageCount:            state.PageCount,
+	})
+}
+
+// RequestWikiV2Reconcile handles POST /api/v3/repos/{owner}/{repo}/wiki-v2/reconcile/request
+func (d *Deps) RequestWikiV2Reconcile(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	repo := d.mustGetRepo(w, r)
+	if repo == nil {
+		return
+	}
+	if !d.requireRepoPermission(w, r, repo.ID, service.RepoPermissionWrite) {
+		return
+	}
+	result, err := d.Svc.KickWikiV2Reconcile(r.Context(), full)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusAccepted, map[string]any{
+		"repository_id":      result.RepositoryID,
+		"indexed_commit_sha": result.IndexedCommitSHA,
+		"requested_at":       result.RequestedAt,
+	})
+}
+
+// ReconcileWikiV2 handles POST /api/v3/repos/{owner}/{repo}/wiki-v2/reconcile
+func (d *Deps) ReconcileWikiV2(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	repo := d.mustGetRepo(w, r)
+	if repo == nil {
+		return
+	}
+	if !d.requireRepoPermission(w, r, repo.ID, service.RepoPermissionWrite) {
+		return
+	}
+	result, err := d.Svc.ReconcileWikiV2(r.Context(), full)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"repository_id":      result.RepositoryID,
+		"indexed_commit_sha": result.IndexedCommitSHA,
+		"page_count":         result.PageCount,
+		"reconciled":         result.Reconciled,
+	})
 }
 
 // ListWikiPageLabels handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels

@@ -213,6 +213,24 @@ func buildRESTOpenAPIPaths() map[string]any {
 				param("exclude_labels", "string"),
 			)...), response(200, "Wiki search results returned")),
 		},
+		"/api/v3/repos/{owner}/{repo}/wiki-v2/state": map[string]any{
+			"get": operation("getWikiV2State", "Get the provisional Wiki V2 derived-index state for a repository.", auth(), nil, pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+			), response(200, "Current Wiki V2 state")),
+		},
+		"/api/v3/repos/{owner}/{repo}/wiki-v2/reconcile/request": map[string]any{
+			"post": operation("requestWikiV2Reconcile", "Request a provisional Wiki V2 reconcile without running it synchronously.", auth(), nil, pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+			), response(202, "Reconcile request recorded")),
+		},
+		"/api/v3/repos/{owner}/{repo}/wiki-v2/reconcile": map[string]any{
+			"post": operation("reconcileWikiV2", "Run the provisional Wiki V2 reconcile synchronously and return the persisted result.", auth(), nil, pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+			), response(200, "Reconcile completed")),
+		},
 		"/api/v3/repos/{owner}/{repo}/wiki/move": map[string]any{
 			"post": operation("moveWikiPagePrefix", "Atomically move all wiki pages under one slug prefix to another prefix.", auth(), jsonBody(true, map[string]any{
 				"from":     stringSchema("Source wiki slug prefix to move."),
