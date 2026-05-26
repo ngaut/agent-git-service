@@ -118,6 +118,11 @@ func NewService(tb testing.TB, cfg ServiceConfig) (*service.Service, func()) {
 		Embedder:       embedder,
 	}
 	wikiCat.DBFor = svc.DBForCtx
+	// Mirror the production hook so writes through ApplyChangeSet
+	// materialize onto the wiki git repo and feed the search index;
+	// otherwise tests that PUT via REST and then read via the legacy
+	// git path see 404s.
+	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
 
 	cleanup := func() {
 		_ = sqlDB.Close()

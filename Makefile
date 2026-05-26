@@ -14,6 +14,17 @@ E2E_BASE_URL ?= http://$(TEST_HOST)
 TIDB_TAG    = gh-server
 DB_NAME     = gh-server
 TEST_DB_DSN ?= root:@tcp(127.0.0.1:4000)/$(DB_NAME)?parseTime=true&timeout=10s
+TIDB_TMP_DIR ?= /mnt/gh-server-tidb-tmp
+TIDB_CONFIG_FILE ?= /tmp/gh-server-tidb.toml
+EPIC130_CP_DB ?= e2e_mt_cp
+EPIC130_A_DB ?= e2e_mt_a
+EPIC130_B_DB ?= e2e_mt_b
+EPIC130_TOKEN_ENV ?= /tmp/epic130_tokens.env
+EPIC130_SCRIPT ?= multi-tenant-control-plane-integration
+EPIC130_MAIN_DSN ?= $(TEST_DB_DSN)
+EPIC130_CP_DSN ?= root:@tcp(127.0.0.1:4000)/$(EPIC130_CP_DB)?parseTime=true&timeout=10s
+EPIC130_A_DSN ?= root:@tcp(127.0.0.1:4000)/$(EPIC130_A_DB)?parseTime=true&timeout=10s
+EPIC130_B_DSN ?= root:@tcp(127.0.0.1:4000)/$(EPIC130_B_DB)?parseTime=true&timeout=10s
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 
@@ -117,8 +128,21 @@ test-db-start: ## Start test-only TiDB via tiup playground
 		echo "✓ TiDB already running"; \
 	else \
 		echo "Starting TiDB playground..."; \
+		tmp_dir="$(TIDB_TMP_DIR)"; \
+		parent_dir="$$(dirname "$$tmp_dir")"; \
+		if [ ! -d "$$tmp_dir" ] || [ ! -w "$$tmp_dir" ]; then \
+			if command -v sudo >/dev/null 2>&1; then \
+				sudo mkdir -p "$$tmp_dir"; \
+				sudo chown "$$(id -u):$$(id -g)" "$$tmp_dir"; \
+			fi; \
+		fi; \
+		if [ ! -d "$$tmp_dir" ] || [ ! -w "$$tmp_dir" ]; then \
+			tmp_dir="/tmp/gh-server-tidb-tmp"; \
+		fi; \
+		mkdir -p "$$tmp_dir"; \
+		printf 'temp-dir = "%s"\n' "$$tmp_dir" > "$(TIDB_CONFIG_FILE)"; \
 		tiup clean $(TIDB_TAG) 2>/dev/null || true; \
-		setsid tiup playground --tag $(TIDB_TAG) --db 1 --pd 1 --kv 1 --tiflash 0 --without-monitor > /tmp/tiup-playground.log 2>&1 < /dev/null & \
+		setsid tiup playground --tag $(TIDB_TAG) --db 1 --pd 1 --kv 1 --tiflash 0 --without-monitor --db.config "$(TIDB_CONFIG_FILE)" > /tmp/tiup-playground.log 2>&1 < /dev/null & \
 		echo "Waiting for TiDB to be ready..."; \
 		for i in $$(seq 1 30); do \
 			if mysql -h 127.0.0.1 -P 4000 -u root -e "SELECT 1" >/dev/null 2>&1; then \
@@ -132,6 +156,7 @@ test-db-start: ## Start test-only TiDB via tiup playground
 			sleep 2; \
 		done; \
 	fi
+	@mysql -h 127.0.0.1 -P 4000 -u root -e "SET GLOBAL tidb_enable_dist_task=OFF; SET GLOBAL tidb_ddl_enable_fast_reorg=OFF;" 2>/dev/null
 	@mysql -h 127.0.0.1 -P 4000 -u root -e "CREATE DATABASE IF NOT EXISTS \`$(DB_NAME)\`" 2>/dev/null
 	@echo "✓ Database '$(DB_NAME)' ready"
 

@@ -52,6 +52,14 @@ type Change struct {
 	// mutate the underlying slice between submitting the request
 	// and the call returning. The catalog itself never mutates
 	// Body.
+	//
+	// OpRename optionally accepts Body too: when non-empty, the
+	// rename atomically updates the page's body alongside the slug
+	// move, preserving page_id continuity. This is used by the
+	// prefix-move path so a renamed page whose body references
+	// another renamed slug lands with the rewritten content under
+	// the new slug. When Body is empty on OpRename the existing
+	// body is carried forward unchanged.
 	Body    []byte
 	IfMatch string // optional per-page CAS, hex git blob SHA-1
 }
@@ -97,6 +105,7 @@ type ChangeSetRequest struct {
 type ChangeResult struct {
 	Op         Op
 	Slug       string // post-change canonical slug (NewSlug for rename, Slug otherwise)
+	PrevSlug   string // pre-change canonical slug; only set for OpRename and OpDelete
 	PageID     uint64
 	RevisionID uint64
 	BlobSHA    string // empty for OpDelete

@@ -263,7 +263,29 @@ func (h *Handler) ReceivePack(w http.ResponseWriter, r *http.Request) {
 		if err := h.Svc.SyncWorkflowsFromRepo(ctx, repoCtx.repoFullName); err != nil {
 			slog.ErrorContext(ctx, "post-push workflow sync failed", "error", err)
 		}
+		// Wiki repo pushes bypass the REST write path, so the new
+		// commits are unknown to the catalog until we replay them.
+		// MigrateWiki is idempotent and keyed by git commit SHA, so
+		// this is a no-op for any commit already in wiki_changesets
+		// (for example, ones the materialize hook just laid down).
+		if parent, ok := wikiRepoParentName(repoCtx.repoFullName); ok {
+			if _, err := h.Svc.MigrateWiki(ctx, parent, service.WikiMigrationOptions{}); err != nil {
+				slog.ErrorContext(ctx, "post-push wiki catalog sync failed", "parent", parent, "error", err)
+			}
+		}
 	}()
+}
+
+// wikiRepoParentName reports whether full names a wiki repo
+// (suffix ".wiki") and returns the parent repository's full name when
+// it does. Used by the post-receive hook to drive MigrateWiki for
+// wiki pushes.
+func wikiRepoParentName(full string) (string, bool) {
+	const suffix = ".wiki"
+	if !strings.HasSuffix(full, suffix) {
+		return "", false
+	}
+	return strings.TrimSuffix(full, suffix), true
 }
 
 func rejectOversizedReceivePack(w http.ResponseWriter, r *http.Request) bool {

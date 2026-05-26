@@ -30,6 +30,11 @@ Authority is split by concern:
 - The relational database is authoritative for higher-level metadata such as users, auth, issues, pull requests, reviews, labels, workflow records, and related product state.
 - `service` coordinates flows that need both Git-backed and DB-backed state.
 
+Current wiki exception:
+
+- Wiki page content and history are authoritative in `wikicatalog` tables after the catalog cutover.
+- The sibling bare `*.wiki.git` repository remains a materialized projection maintained by the post-commit hook plus the git receive-pack migration hook so clone, fetch, pull, and ref-pinned reads still preserve real Git semantics for clients.
+
 This does not prohibit repository- or pull-request-related metadata in the database.
 The rule is about authority: Git-native behavior stays Git-backed, while relational metadata stays DB-backed.
 

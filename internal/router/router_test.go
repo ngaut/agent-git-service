@@ -30,6 +30,7 @@ import (
 	"gh-server/internal/rest"
 	"gh-server/internal/router"
 	"gh-server/internal/service"
+	"gh-server/internal/wikicatalog"
 )
 
 var testDBCounter atomic.Int64
@@ -54,7 +55,9 @@ func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps,
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}, &db.DeviceCodeAuditLog{}, &db.AuthorizationCode{}, &db.Repository{}, &db.RepoRedirect{}, &db.Label{}, &db.WikiPageLabel{}, &db.WikiSearchDocument{}); err != nil {
+	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}, &db.DeviceCodeAuditLog{}, &db.AuthorizationCode{}, &db.Repository{}, &db.RepoRedirect{}, &db.Label{}, &db.WikiPageLabel{}, &db.WikiSearchDocument{},
+		&db.WikiPage{}, &db.WikiPageRevision{}, &db.WikiChangeset{}, &db.WikiRepoHead{}, &db.WikiDirIndex{}, &db.WikiPageLink{}, &db.WikiBlobRef{}, &db.WikiPendingBlob{},
+	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -75,11 +78,17 @@ func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps,
 		t.Fatalf("gitstore: %v", err)
 	}
 
+	wikiBlob := wikicatalog.NewBlobStore(tmpDir)
+	wikiCat := wikicatalog.New(gdb, wikiBlob)
 	svc := &service.Service{
-		DB:      gdb,
-		Git:     gs,
-		BaseURL: "http://localhost:8080",
+		DB:          gdb,
+		Git:         gs,
+		WikiCatalog: wikiCat,
+		WikiBlob:    wikiBlob,
+		BaseURL:     "http://localhost:8080",
 	}
+	wikiCat.DBFor = svc.DBForCtx
+	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
 
 	gqlSrv := graphql.NewServer(svc)
 	restDeps := &rest.Deps{Svc: svc}

@@ -75,9 +75,14 @@ type Catalog struct {
 // tenant DB instead of the static fallback held in c.DB.
 func New(db *gorm.DB, blob *BlobStore) *Catalog {
 	return &Catalog{
-		DB:            db,
-		Blob:          blob,
-		Now:           func() time.Time { return time.Now().UTC() },
+		DB:   db,
+		Blob: blob,
+		// Truncate to whole seconds so wiki_pages.updated_at and the
+		// post-commit-materialized git commit timestamp compare equal
+		// when callers read both back. Git stores second precision;
+		// time.Now() carries nanos that would otherwise drift the
+		// catalog ahead of git on every write.
+		Now:           func() time.Time { return time.Now().UTC().Truncate(time.Second) },
 		MaxCASRetries: 5,
 	}
 }
@@ -236,9 +241,10 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 			}
 
 		case OpRename:
-			if ch.Body != nil {
-				return changesetPlan{}, fmt.Errorf("change[%d]: OpRename must not set Body", i)
-			}
+			// Body is allowed on OpRename: when non-empty, the rename
+			// atomically updates the page body alongside the slug
+			// move (documented on Change.Body). When empty, the
+			// existing body is carried forward.
 			if err := validateInputSlug(ch.NewSlug); err != nil {
 				return changesetPlan{}, fmt.Errorf("change[%d].NewSlug: %w", i, err)
 			}
@@ -256,6 +262,9 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 			touched[dstCI] = struct{}{}
 			planned.dstSlug = ch.NewSlug
 			planned.dstSlugCI = dstCI
+			// Forward the optional body bytes so applyRename can pick
+			// them up. Empty body means "carry the existing blob".
+			planned.body = ch.Body
 
 		default:
 			return changesetPlan{}, fmt.Errorf("change[%d]: unknown op %v", i, ch.Op)

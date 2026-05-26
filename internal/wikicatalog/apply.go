@@ -50,13 +50,23 @@ func (c *Catalog) ApplyChangeSet(ctx context.Context, req ChangeSetRequest) (Cha
 		return ChangeSetResult{}, err
 	}
 
-	// Compute per-upsert blob SHAs up front so the SQL phase always
+	// Compute per-change blob SHAs up front so the SQL phase always
 	// knows the new head SHA without re-hashing. blobByCI is also used
-	// for the synthetic commit SHA.
+	// for the synthetic commit SHA. OpRename normally carries the
+	// existing blob forward; when the caller provides ch.body on a
+	// rename, we treat it as a body update applied atomically with
+	// the slug move (the prefix-move planner uses this so a moved
+	// page whose body references another moved slug lands the
+	// rewritten content under the new slug).
 	blobByCI := make(map[string]string, len(plan.changes))
 	for _, ch := range plan.changes {
-		if ch.op == OpUpsert {
+		switch ch.op {
+		case OpUpsert:
 			blobByCI[ch.srcSlugCI] = HashContent(ch.body)
+		case OpRename:
+			if len(ch.body) > 0 {
+				blobByCI[ch.srcSlugCI] = HashContent(ch.body)
+			}
 		}
 	}
 
@@ -171,6 +181,10 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobByCI ma
 			PageCount:      len(plan.changes),
 			Source:         string(plan.source),
 			SynthCommitSHA: synthSHA,
+			SynthFormatVer: 0,
+		}
+		if plan.overrideCommitSHA != "" || plan.source == SourcePush {
+			cs.SynthFormatVer = 1
 		}
 		if err := tx.Create(&cs).Error; err != nil {
 			return err
@@ -252,7 +266,10 @@ func (c *Catalog) uploadBlobs(ctx context.Context, plan changesetPlan, blobByCI 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(uploadBlobConcurrency)
 	for _, ch := range plan.changes {
-		if ch.op != OpUpsert {
+		// OpUpsert always carries a new body. OpRename carries one
+		// only when the caller is doing rename-with-body-update.
+		// Other ops have nothing to upload.
+		if ch.op != OpUpsert && !(ch.op == OpRename && len(ch.body) > 0) {
 			continue
 		}
 		size := len(ch.body)

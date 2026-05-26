@@ -19,7 +19,7 @@ func (c *Catalog) applyChange(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	case OpDelete:
 		return c.applyDelete(tx, plan, cs, ch, preRead)
 	case OpRename:
-		return c.applyRename(tx, plan, cs, ch, preRead)
+		return c.applyRename(tx, plan, cs, ch, preRead, blobByCI)
 	}
 	return ChangeResult{}, fmt.Errorf("wiki catalog: unknown op %v", ch.op)
 }
@@ -228,24 +228,42 @@ func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	return ChangeResult{
 		Op:         OpDelete,
 		Slug:       existing.Slug,
+		PrevSlug:   existing.Slug,
 		PageID:     pageID,
 		RevisionID: revisionID,
 	}, nil
 }
 
-func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages) (ChangeResult, error) {
+func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobByCI map[string]string) (ChangeResult, error) {
 	existing := preRead.live[ch.srcSlugCI] // existence verified in checkConflicts
 	pageID := existing.PageID
 	revisionID := existing.HeadRevisionID + 1
 	oldSlugCI := existing.SlugCIV1
 
+	// Decide whether this rename also updates the body. When the
+	// caller supplies ch.body, blobByCI carries the precomputed SHA
+	// for it; otherwise carry the existing blob forward unchanged.
+	newSHA := existing.HeadBlobSHA
+	newSize := existing.BodySize
+	newInline := existing.BodyInline
+	bodyChanged := len(ch.body) > 0
+	if bodyChanged {
+		newSHA = blobByCI[ch.srcSlugCI]
+		newSize = len(ch.body)
+		if newSize <= MaxBodyInlineBytes {
+			newInline = ch.body
+		} else {
+			newInline = nil
+		}
+	}
+
 	rev := db.WikiPageRevision{
 		PageID:      pageID,
 		RevisionID:  revisionID,
 		ChangesetID: cs.ChangesetID,
-		BlobSHA:     existing.HeadBlobSHA,
-		BodySize:    existing.BodySize,
-		BodyInline:  existing.BodyInline,
+		BlobSHA:     newSHA,
+		BodySize:    newSize,
+		BodyInline:  newInline,
 		SlugAtRev:   ch.dstSlug,
 		CommitSHA:   cs.SynthCommitSHA,
 		Op:          revOpRename,
@@ -256,17 +274,40 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		return ChangeResult{}, fmt.Errorf("rename revision for %q: %w", existing.Slug, err)
 	}
 
+	updates := map[string]any{
+		"slug":              ch.dstSlug,
+		"slug_ci_v1":        ch.dstSlugCI,
+		"title":             TitleFromSlug(ch.dstSlug),
+		"head_revision_id":  revisionID,
+		"head_changeset_id": cs.ChangesetID,
+		"updated_at":        plan.committedAt,
+	}
+	if bodyChanged {
+		updates["head_blob_sha"] = newSHA
+		updates["body_size"] = newSize
+		updates["body_inline"] = newInline
+	}
 	if err := tx.Model(&db.WikiPage{}).
 		Where("page_id = ?", pageID).
-		Updates(map[string]any{
-			"slug":              ch.dstSlug,
-			"slug_ci_v1":        ch.dstSlugCI,
-			"title":             TitleFromSlug(ch.dstSlug),
-			"head_revision_id":  revisionID,
-			"head_changeset_id": cs.ChangesetID,
-			"updated_at":        plan.committedAt,
-		}).Error; err != nil {
+		Updates(updates).Error; err != nil {
 		return ChangeResult{}, fmt.Errorf("rename page %q -> %q: %w", existing.Slug, ch.dstSlug, err)
+	}
+
+	if bodyChanged {
+		if err := incrementBlobRef(tx, newSHA, newSize, plan.committedAt); err != nil {
+			return ChangeResult{}, err
+		}
+		if !equalNonEmptySHA(existing.HeadBlobSHA, newSHA) {
+			if err := decrementBlobRef(tx, existing.HeadBlobSHA); err != nil {
+				return ChangeResult{}, err
+			}
+		}
+		if err := refreshOutlinks(tx, plan.repoID, pageID, string(ch.body)); err != nil {
+			return ChangeResult{}, err
+		}
+		if err := tx.Where("blob_sha = ?", newSHA).Delete(&db.WikiPendingBlob{}).Error; err != nil {
+			return ChangeResult{}, err
+		}
 	}
 
 	if err := removeDirLeaf(tx, plan.repoID, oldSlugCI); err != nil {
@@ -300,10 +341,11 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	return ChangeResult{
 		Op:         OpRename,
 		Slug:       ch.dstSlug,
+		PrevSlug:   existing.Slug,
 		PageID:     pageID,
 		RevisionID: revisionID,
-		BlobSHA:    existing.HeadBlobSHA,
-		BodySize:   existing.BodySize,
+		BlobSHA:    newSHA,
+		BodySize:   newSize,
 	}, nil
 }
 
