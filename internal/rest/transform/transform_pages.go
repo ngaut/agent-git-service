@@ -12,7 +12,7 @@ import (
 // "queued" instead of overstating that hosted content is already built.
 func PagesConfig(repoFullName string, c db.PagesConfig) map[string]any {
 	return map[string]any{
-		"url":            fmt.Sprintf("%s/api/v3/repos/%s/pages", base(), repoFullName),
+		"url":            fmt.Sprintf("%s/repos/%s/pages", apiBase(), repoFullName),
 		"status":         "queued",
 		"cname":          stringOrNil(c.CNAME),
 		"custom_404":     false,

@@ -18,7 +18,7 @@ func Workflow(wf db.Workflow, repoFullName string) map[string]any {
 		"state":      wf.State,
 		"created_at": wf.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at": wf.UpdatedAt.UTC().Format(time.RFC3339),
-		"url":        fmt.Sprintf("%s/api/v3/repos/%s/actions/workflows/%d", base(), repoFullName, wf.ID),
+		"url":        fmt.Sprintf("%s/repos/%s/actions/workflows/%d", apiBase(), repoFullName, wf.ID),
 	}
 }
 
@@ -112,7 +112,7 @@ func Artifact(art db.Artifact, repoFullName string) map[string]any {
 		"expired":              art.Expired,
 		"created_at":           art.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":           art.UpdatedAt.UTC().Format(time.RFC3339),
-		"archive_download_url": fmt.Sprintf("%s/api/v3/repos/%s/actions/artifacts/%d/zip", base(), repoFullName, art.ID),
+		"archive_download_url": fmt.Sprintf("%s/repos/%s/actions/artifacts/%d/zip", apiBase(), repoFullName, art.ID),
 	}
 }
 

@@ -254,7 +254,7 @@ func organizationMembershipJSON(baseURL string, org db.User, membership service.
 	orgLogin := strings.TrimSpace(org.Login)
 	userLogin := strings.TrimSpace(membership.User.Login)
 	return map[string]any{
-		"url":          fmt.Sprintf("%s/api/v3/orgs/%s/memberships/%s", baseURL, url.PathEscape(orgLogin), url.PathEscape(userLogin)),
+		"url":          fmt.Sprintf("%s/orgs/%s/memberships/%s", transform.APIBase(), url.PathEscape(orgLogin), url.PathEscape(userLogin)),
 		"state":        membership.State,
 		"role":         membership.Role,
 		"organization": transform.User(org),
@@ -710,7 +710,7 @@ func teamMembershipResponse(baseURL, orgLogin, teamSlug, username, role, state s
 	return map[string]any{
 		"state": state,
 		"role":  role,
-		"url":   fmt.Sprintf("%s/api/v3/orgs/%s/teams/%s/memberships/%s", baseURL, orgLogin, teamSlug, username),
+		"url":   fmt.Sprintf("%s/orgs/%s/teams/%s/memberships/%s", transform.APIBase(), orgLogin, teamSlug, username),
 	}
 }
 
@@ -731,7 +731,7 @@ func teamPendingInvitationResponse(baseURL, orgLogin string, inv db.Organization
 		"created_at":           inv.CreatedAt.Format(time.RFC3339),
 		"inviter":              inviter,
 		"team_count":           len(teamIDs),
-		"invitation_teams_url": fmt.Sprintf("%s/api/v3/orgs/%s/invitations/%d/teams", baseURL, url.PathEscape(strings.TrimSpace(orgLogin)), inv.ID),
+		"invitation_teams_url": fmt.Sprintf("%s/orgs/%s/invitations/%d/teams", transform.APIBase(), url.PathEscape(strings.TrimSpace(orgLogin)), inv.ID),
 	}
 }
 

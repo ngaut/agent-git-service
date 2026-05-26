@@ -307,7 +307,7 @@ func (d *Deps) UpdatePRBranch(w http.ResponseWriter, r *http.Request) {
 
 	respond.JSON(w, http.StatusAccepted, map[string]any{
 		"message": "Updating pull request branch.",
-		"url":     transform.Base() + "/api/v3/repos/" + full + "/pulls/" + strconv.Itoa(num),
+		"url":     transform.APIBase() + "/repos/" + full + "/pulls/" + strconv.Itoa(num),
 	})
 }
 

@@ -55,7 +55,7 @@ materially affect the contracts.
 The public import surface is intentionally small:
 
 - `config` exposes environment-backed startup configuration.
-- `server` exposes the embeddable composition-root APIs (`Run`, `RunWikiReindex`).
+- `server` exposes the embeddable composition-root APIs (`New`, `Run`, `RunWikiReindex`, `Start`, `Shutdown`, and mountable handlers).
 - Everything else in the root module remains internal-only unless documented otherwise.
 
 ## Top-Level Internal Package Inventory

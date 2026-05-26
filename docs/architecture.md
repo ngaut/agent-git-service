@@ -53,7 +53,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 | Path | Responsibility |
 |---|---|
 | `cmd/gh-server` | CLI entrypoint, signal handling, `.env` loading, and logging init |
-| `server` | Public startup/shutdown API, dependency wiring, TLS setup, and listeners |
+| `server` | Public startup/shutdown API, embeddable constructor/handlers, dependency wiring, TLS setup, and listeners |
 | `config` | Environment-backed configuration exposed for external consumers |
 | `internal/db` | GORM models, migrations, seed data, shared state constants |
 | `internal/service` | Business logic over DB and Git storage (includes `Embedder` and `AllowAnyToken` fields) |
@@ -84,7 +84,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 
 ## Startup and Runtime
 
-`cmd/gh-server` is the binary entrypoint and `server` is the composition root. The startup sequence is:
+`cmd/gh-server` is the binary entrypoint and `server` is the composition root. External embedders can either keep using `server.Run` or construct a reusable instance with `server.New(config.Config)`, mount `Handler()` or the protocol-specific handler accessors, and manage listeners through `Start()` / `Shutdown(ctx)`. The startup sequence is:
 
 1. Load `.env` for local development via `godotenv`.
 2. Initialize structured logging via `internal/logging`.
@@ -117,6 +117,7 @@ Shutdown is graceful with a 10-second timeout.
 Route wiring lives in `internal/router/router.go`.
 That file is the executable truth for concrete endpoints.
 This document records the stable structure around those routes.
+The default REST prefix is `/api/v3`, and embedders can additionally expose the same REST surface under a custom prefix through `config.Config.RESTPrefix`.
 
 ### Request Families
 

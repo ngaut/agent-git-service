@@ -42,9 +42,9 @@ func Milestone(m *db.Milestone, repoFullName string, counts ...MilestoneCounts) 
 		closedIssues = counts[0].ClosedIssues
 	}
 	return map[string]any{
-		"url":           fmt.Sprintf("%s/api/v3/repos/%s/milestones/%d", base(), repoFullName, m.Number),
+		"url":           fmt.Sprintf("%s/repos/%s/milestones/%d", apiBase(), repoFullName, m.Number),
 		"html_url":      fmt.Sprintf("%s/%s/milestone/%d", htmlBase(), repoFullName, m.Number),
-		"labels_url":    fmt.Sprintf("%s/api/v3/repos/%s/milestones/%d/labels", base(), repoFullName, m.Number),
+		"labels_url":    fmt.Sprintf("%s/repos/%s/milestones/%d/labels", apiBase(), repoFullName, m.Number),
 		"id":            m.ID,
 		"node_id":       nodeID("Milestone", m.ID),
 		"number":        m.Number,
@@ -70,7 +70,7 @@ func Label(l db.Label) map[string]any {
 		"color":       l.Color,
 		"description": l.Description,
 		"default":     l.Default,
-		"url":         fmt.Sprintf("%s/api/v3/repos/%s/labels/%s", base(), l.Repository.FullName, l.Name),
+		"url":         fmt.Sprintf("%s/repos/%s/labels/%s", apiBase(), l.Repository.FullName, l.Name),
 	}
 }
 
@@ -107,13 +107,13 @@ func Release(r db.Release) map[string]any {
 		"prerelease":       r.PreRelease,
 		"make_latest":      "true",
 		"author":           User(r.Author),
-		"url":              fmt.Sprintf("%s/api/v3/repos/%s/releases/%d", base(), r.Repository.FullName, r.ID),
+		"url":              fmt.Sprintf("%s/repos/%s/releases/%d", apiBase(), r.Repository.FullName, r.ID),
 		"html_url":         fmt.Sprintf("%s/%s/releases/tag/%s", htmlBase(), r.Repository.FullName, r.TagName),
 		"assets":           assets,
-		"assets_url":       fmt.Sprintf("%s/api/v3/repos/%s/releases/%d/assets", base(), r.Repository.FullName, r.ID),
-		"upload_url":       fmt.Sprintf("%s/api/v3/repos/%s/releases/%d/assets{?name,label}", base(), r.Repository.FullName, r.ID),
-		"tarball_url":      fmt.Sprintf("%s/api/v3/repos/%s/archive/refs/tags/%s.tar.gz", base(), r.Repository.FullName, r.TagName),
-		"zipball_url":      fmt.Sprintf("%s/api/v3/repos/%s/archive/refs/tags/%s.zip", base(), r.Repository.FullName, r.TagName),
+		"assets_url":       fmt.Sprintf("%s/repos/%s/releases/%d/assets", apiBase(), r.Repository.FullName, r.ID),
+		"upload_url":       fmt.Sprintf("%s/repos/%s/releases/%d/assets{?name,label}", apiBase(), r.Repository.FullName, r.ID),
+		"tarball_url":      fmt.Sprintf("%s/repos/%s/archive/refs/tags/%s.tar.gz", apiBase(), r.Repository.FullName, r.TagName),
+		"zipball_url":      fmt.Sprintf("%s/repos/%s/archive/refs/tags/%s.zip", apiBase(), r.Repository.FullName, r.TagName),
 		"created_at":       r.CreatedAt.Format(time.RFC3339),
 		"published_at":     pub,
 	}
@@ -122,7 +122,7 @@ func Release(r db.Release) map[string]any {
 // ReleaseAsset converts a db.ReleaseAsset to a GitHub REST API asset object.
 // repoFullName is needed to build the asset URL (e.g. "owner/repo").
 func ReleaseAsset(a db.ReleaseAsset, repoFullName string) map[string]any {
-	assetURL := fmt.Sprintf("%s/api/v3/repos/%s/releases/assets/%d", base(), repoFullName, a.ID)
+	assetURL := fmt.Sprintf("%s/repos/%s/releases/assets/%d", apiBase(), repoFullName, a.ID)
 	return map[string]any{
 		"id":                   a.ID,
 		"node_id":              nodeID("ReleaseAsset", a.ID),
@@ -146,7 +146,7 @@ func DeployKey(k db.DeployKey, repoFullName string) map[string]any {
 		"key":        k.Key,
 		"read_only":  k.ReadOnly,
 		"created_at": k.CreatedAt.Format(time.RFC3339),
-		"url":        fmt.Sprintf("%s/api/v3/repos/%s/keys/%d", base(), repoFullName, k.ID),
+		"url":        fmt.Sprintf("%s/repos/%s/keys/%d", apiBase(), repoFullName, k.ID),
 	}
 }
 
@@ -157,7 +157,7 @@ func SSHKey(k db.SSHKey) map[string]any {
 		"title":      k.Title,
 		"key":        k.Key,
 		"created_at": k.CreatedAt.Format(time.RFC3339),
-		"url":        fmt.Sprintf("%s/api/v3/user/keys/%d", base(), k.ID),
+		"url":        fmt.Sprintf("%s/user/keys/%d", apiBase(), k.ID),
 	}
 }
 
@@ -229,7 +229,7 @@ func Ruleset(rs db.Ruleset, repoFullName string) map[string]any {
 		"created_at":              rs.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":              rs.UpdatedAt.UTC().Format(time.RFC3339),
 		"_links": map[string]any{
-			"self": map[string]any{"href": fmt.Sprintf("%s/api/v3/repos/%s/rulesets/%d", base(), repoFullName, rs.ID)},
+			"self": map[string]any{"href": fmt.Sprintf("%s/repos/%s/rulesets/%d", apiBase(), repoFullName, rs.ID)},
 			"html": map[string]any{"href": fmt.Sprintf("%s/%s/rules/%d", htmlBase(), repoFullName, rs.ID)},
 		},
 	}
@@ -259,7 +259,7 @@ func OrgSecret(s db.Secret, orgLogin string) map[string]any {
 	return map[string]any{
 		"name":                      s.Name,
 		"visibility":                s.Visibility,
-		"selected_repositories_url": fmt.Sprintf("%s/api/v3/orgs/%s/actions/secrets/%s/repositories", base(), orgLogin, s.Name),
+		"selected_repositories_url": fmt.Sprintf("%s/orgs/%s/actions/secrets/%s/repositories", apiBase(), orgLogin, s.Name),
 		"created_at":                s.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":                s.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -275,7 +275,7 @@ func UserCodespacesSecret(s db.Secret) map[string]any {
 	return map[string]any{
 		"name":                      s.Name,
 		"visibility":                visibility,
-		"selected_repositories_url": fmt.Sprintf("%s/api/v3/user/codespaces/secrets/%s/repositories", base(), s.Name),
+		"selected_repositories_url": fmt.Sprintf("%s/user/codespaces/secrets/%s/repositories", apiBase(), s.Name),
 		"created_at":                s.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":                s.UpdatedAt.UTC().Format(time.RFC3339),
 	}

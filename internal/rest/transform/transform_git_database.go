@@ -23,7 +23,7 @@ func GitCommit(repoFullName string, commit gitstore.GitCommitObject) map[string]
 	for _, parentSHA := range commit.ParentSHAs {
 		parents = append(parents, map[string]any{
 			"sha":      parentSHA,
-			"url":      fmt.Sprintf("%s/api/v3/repos/%s/git/commits/%s", base(), repoFullName, parentSHA),
+			"url":      fmt.Sprintf("%s/repos/%s/git/commits/%s", apiBase(), repoFullName, parentSHA),
 			"html_url": fmt.Sprintf("%s/%s/commit/%s", htmlBase(), repoFullName, parentSHA),
 		})
 	}
@@ -31,7 +31,7 @@ func GitCommit(repoFullName string, commit gitstore.GitCommitObject) map[string]
 	return map[string]any{
 		"sha":      commit.SHA,
 		"node_id":  NodeID("Commit", commit.SHA),
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/git/commits/%s", base(), repoFullName, commit.SHA),
+		"url":      fmt.Sprintf("%s/repos/%s/git/commits/%s", apiBase(), repoFullName, commit.SHA),
 		"html_url": fmt.Sprintf("%s/%s/commit/%s", htmlBase(), repoFullName, commit.SHA),
 		"author": map[string]any{
 			"name":  commit.Author.Name,
@@ -45,7 +45,7 @@ func GitCommit(repoFullName string, commit gitstore.GitCommitObject) map[string]
 		},
 		"tree": map[string]any{
 			"sha": commit.TreeSHA,
-			"url": fmt.Sprintf("%s/api/v3/repos/%s/git/trees/%s", base(), repoFullName, commit.TreeSHA),
+			"url": fmt.Sprintf("%s/repos/%s/git/trees/%s", apiBase(), repoFullName, commit.TreeSHA),
 		},
 		"message":      commit.Message,
 		"parents":      parents,
@@ -60,7 +60,7 @@ func GitBlob(repoFullName string, blob gitstore.GitBlobObject) map[string]any {
 		"sha":      blob.SHA,
 		"node_id":  NodeID("Blob", blob.SHA),
 		"size":     blob.Size,
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/git/blobs/%s", base(), repoFullName, blob.SHA),
+		"url":      fmt.Sprintf("%s/repos/%s/git/blobs/%s", apiBase(), repoFullName, blob.SHA),
 		"content":  base64.StdEncoding.EncodeToString(blob.Content),
 		"encoding": "base64",
 	}
@@ -71,7 +71,7 @@ func GitTag(repoFullName string, tag gitstore.GitTagObject) map[string]any {
 	return map[string]any{
 		"node_id": NodeID("Tag", tag.SHA),
 		"sha":     tag.SHA,
-		"url":     fmt.Sprintf("%s/api/v3/repos/%s/git/tags/%s", base(), repoFullName, tag.SHA),
+		"url":     fmt.Sprintf("%s/repos/%s/git/tags/%s", apiBase(), repoFullName, tag.SHA),
 		"tagger": map[string]any{
 			"name":  tag.Tagger.Name,
 			"email": tag.Tagger.Email,
@@ -91,13 +91,13 @@ func GitTag(repoFullName string, tag gitstore.GitTagObject) map[string]any {
 func gitObjectURL(repoFullName, objectType, sha string) any {
 	switch objectType {
 	case "blob":
-		return fmt.Sprintf("%s/api/v3/repos/%s/git/blobs/%s", base(), repoFullName, sha)
+		return fmt.Sprintf("%s/repos/%s/git/blobs/%s", apiBase(), repoFullName, sha)
 	case "tree":
-		return fmt.Sprintf("%s/api/v3/repos/%s/git/trees/%s", base(), repoFullName, sha)
+		return fmt.Sprintf("%s/repos/%s/git/trees/%s", apiBase(), repoFullName, sha)
 	case "commit":
-		return fmt.Sprintf("%s/api/v3/repos/%s/git/commits/%s", base(), repoFullName, sha)
+		return fmt.Sprintf("%s/repos/%s/git/commits/%s", apiBase(), repoFullName, sha)
 	case "tag":
-		return fmt.Sprintf("%s/api/v3/repos/%s/git/tags/%s", base(), repoFullName, sha)
+		return fmt.Sprintf("%s/repos/%s/git/tags/%s", apiBase(), repoFullName, sha)
 	default:
 		return nil
 	}
@@ -115,14 +115,14 @@ func GitTree(repoFullName string, tree gitstore.GitTreeObject) map[string]any {
 		}
 		switch entry.Type {
 		case "blob":
-			item["url"] = fmt.Sprintf("%s/api/v3/repos/%s/git/blobs/%s", base(), repoFullName, entry.SHA)
+			item["url"] = fmt.Sprintf("%s/repos/%s/git/blobs/%s", apiBase(), repoFullName, entry.SHA)
 			if entry.Size != nil {
 				item["size"] = *entry.Size
 			}
 		case "tree":
-			item["url"] = fmt.Sprintf("%s/api/v3/repos/%s/git/trees/%s", base(), repoFullName, entry.SHA)
+			item["url"] = fmt.Sprintf("%s/repos/%s/git/trees/%s", apiBase(), repoFullName, entry.SHA)
 		case "commit":
-			item["url"] = fmt.Sprintf("%s/api/v3/repos/%s/git/commits/%s", base(), repoFullName, entry.SHA)
+			item["url"] = fmt.Sprintf("%s/repos/%s/git/commits/%s", apiBase(), repoFullName, entry.SHA)
 		default:
 			item["url"] = nil
 		}
@@ -131,7 +131,7 @@ func GitTree(repoFullName string, tree gitstore.GitTreeObject) map[string]any {
 
 	return map[string]any{
 		"sha":       tree.SHA,
-		"url":       fmt.Sprintf("%s/api/v3/repos/%s/git/trees/%s", base(), repoFullName, tree.SHA),
+		"url":       fmt.Sprintf("%s/repos/%s/git/trees/%s", apiBase(), repoFullName, tree.SHA),
 		"tree":      items,
 		"truncated": tree.Truncated,
 	}

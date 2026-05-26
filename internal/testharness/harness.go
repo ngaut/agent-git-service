@@ -28,14 +28,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
-// transformMu serializes access to the global transform.Init state during
-// HTTP request handling. Each request acquires the lock, sets transform.Init
-// to the owning harness's base URL, serves the request, restores the
-// previous value, and releases the lock. This per-request scope prevents
-// deadlocks that the previous test-lifetime scope caused when New() was
-// called more than once within one test lifecycle.
-var transformMu sync.Mutex
-
 // Harness holds the fully-wired test infrastructure.
 type Harness struct {
 	Svc     *service.Service // for direct service-layer calls in test setup
@@ -78,7 +70,7 @@ func New(tb testing.TB) *Harness {
 	gitHandler := githttp.New(svc.Git, svc)
 	oauthHandler := oauth.New(svc)
 
-	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, nil, "/api/v3", "http://console.localhost")
 
 	h := &Harness{
 		Svc:     svc,
@@ -101,14 +93,9 @@ func New(tb testing.TB) *Harness {
 // lifetime — so multiple New() calls within one test cannot deadlock.
 func (h *Harness) wrapTransform(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		transformMu.Lock()
-		prev := transform.Base()
-		transform.Init(h.transformBase.Load().(string))
-		defer func() {
-			transform.Init(prev)
-			transformMu.Unlock()
-		}()
-		next.ServeHTTP(w, r)
+		transform.Wrap(h.transformBase.Load().(string), "/api/v3", func() {
+			next.ServeHTTP(w, r)
+		})
 	})
 }
 

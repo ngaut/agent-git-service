@@ -42,7 +42,7 @@ func dependabotAlertJSON(a db.DependabotAlert, dismissedByUser ...map[string]any
 		"dependency":             dependency,
 		"security_advisory":      advisory,
 		"security_vulnerability": vuln,
-		"url":                    fmt.Sprintf("%s/api/v3/repos/%s/dependabot/alerts/%d", transform.Base(), a.Repository.FullName, a.Number),
+		"url":                    fmt.Sprintf("%s/repos/%s/dependabot/alerts/%d", transform.APIBase(), a.Repository.FullName, a.Number),
 		"html_url":               fmt.Sprintf("%s/%s/security/dependabot/%d", transform.HTMLBase(), a.Repository.FullName, a.Number),
 		"created_at":             a.CreatedAt.Format(time.RFC3339),
 		"updated_at":             a.UpdatedAt.Format(time.RFC3339),

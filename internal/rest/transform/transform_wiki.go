@@ -20,7 +20,7 @@ func WikiPage(repoFullName string, p service.WikiPage) map[string]any {
 		"title":    p.Title,
 		"body":     p.Body,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
 		"sha":      p.SHA,
 		"labels":   WikiLabels(p.Labels),
 	}
@@ -42,7 +42,7 @@ func WikiPageSummary(repoFullName string, p service.WikiPageSummary) map[string]
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
 		"labels":   WikiLabels(p.Labels),
 	}
 	if p.SHA != "" {
@@ -67,7 +67,7 @@ func WikiBacklink(repoFullName string, p service.WikiBacklink) map[string]any {
 		"title":    p.Title,
 		"snippet":  p.Snippet,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
 	}
 }
 
@@ -82,7 +82,7 @@ func WikiSearchResponse(repoFullName string, resp service.WikiSearchResponse) ma
 			"score":    row.Score,
 			"snippet":  row.Snippet,
 			"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, row.Slug),
-			"url":      fmt.Sprintf("%s/api/v3/repos/%s/wiki/pages/%s", base(), repoFullName, apiSlug),
+			"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
 			"labels":   WikiLabels(row.Labels),
 		})
 	}

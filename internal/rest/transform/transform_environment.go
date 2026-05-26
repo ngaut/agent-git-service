@@ -26,7 +26,7 @@ func Environment(env db.Environment, repoFullName string) map[string]any {
 		"id":                       env.ID,
 		"node_id":                  NodeID("Environment", env.ID),
 		"name":                     env.Name,
-		"url":                      fmt.Sprintf("%s/api/v3/repos/%s/environments/%s", base(), repoFullName, env.Name),
+		"url":                      fmt.Sprintf("%s/repos/%s/environments/%s", apiBase(), repoFullName, env.Name),
 		"html_url":                 fmt.Sprintf("%s/%s/deployments/activity_log?environments_filter=%s", htmlBase(), repoFullName, env.Name),
 		"created_at":               env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		"updated_at":               env.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),

@@ -24,6 +24,9 @@ func TestNewDefaults(t *testing.T) {
 	if cfg.BaseURL != "http://localhost:8080" {
 		t.Errorf("expected default BaseURL, got %q", cfg.BaseURL)
 	}
+	if cfg.RESTPrefix != "/api/v3" {
+		t.Errorf("expected default RESTPrefix=/api/v3, got %q", cfg.RESTPrefix)
+	}
 	if cfg.ConsoleBaseURL != "http://localhost:5173" {
 		t.Errorf("expected default ConsoleBaseURL, got %q", cfg.ConsoleBaseURL)
 	}
@@ -66,6 +69,7 @@ func TestNewOverrides(t *testing.T) {
 	t.Setenv("DB_DSN", "custom-dsn")
 	t.Setenv("PORT", "9090")
 	t.Setenv("BASE_URL", "https://example.com")
+	t.Setenv("REST_PREFIX", "/api/v1")
 	t.Setenv("CONSOLE_BASE_URL", "https://console.example.com")
 	t.Setenv("GIT_REPO_DIR", "/tmp/repos")
 	t.Setenv("OAUTH_PREAPPROVE_DEVICE_CODES", "true")
@@ -88,6 +92,9 @@ func TestNewOverrides(t *testing.T) {
 	}
 	if cfg.BaseURL != "https://example.com" {
 		t.Errorf("expected BaseURL=https://example.com, got %q", cfg.BaseURL)
+	}
+	if cfg.RESTPrefix != "/api/v1" {
+		t.Errorf("expected RESTPrefix=/api/v1, got %q", cfg.RESTPrefix)
 	}
 	if cfg.ConsoleBaseURL != "https://console.example.com" {
 		t.Errorf("expected ConsoleBaseURL=https://console.example.com, got %q", cfg.ConsoleBaseURL)

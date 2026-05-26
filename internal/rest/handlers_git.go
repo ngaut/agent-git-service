@@ -491,7 +491,7 @@ func contentsMetadataJSON(repoFullName, ref, path, sha, entryType string, size i
 }
 
 func contentsSelfURL(repoFullName, path, ref string) string {
-	base := strings.TrimRight(transform.Base(), "/") + "/api/v3/repos/" + repoFullName + "/contents"
+	base := transform.APIBase() + "/repos/" + repoFullName + "/contents"
 	if path != "" {
 		base += "/" + escapeURLPath(path)
 	}
@@ -509,7 +509,7 @@ func contentsGitURL(repoFullName, sha, entryType string) string {
 	if entryType == "dir" {
 		kind = "trees"
 	}
-	return strings.TrimRight(transform.Base(), "/") + "/api/v3/repos/" + repoFullName + "/git/" + kind + "/" + sha
+	return transform.APIBase() + "/repos/" + repoFullName + "/git/" + kind + "/" + sha
 }
 
 func contentsHTMLURL(repoFullName, ref, path, entryType string) string {
@@ -553,8 +553,8 @@ func (d *Deps) ListTags(w http.ResponseWriter, r *http.Request) {
 		out[i] = map[string]any{
 			"name":        t.Name,
 			"commit":      map[string]any{"sha": t.SHA},
-			"zipball_url": fmt.Sprintf("%s/api/v3/repos/%s/archive/%s%s.zip", transform.Base(), full, gitstore.RefsTagsPrefix, t.Name),
-			"tarball_url": fmt.Sprintf("%s/api/v3/repos/%s/archive/%s%s.tar.gz", transform.Base(), full, gitstore.RefsTagsPrefix, t.Name),
+			"zipball_url": fmt.Sprintf("%s/repos/%s/archive/%s%s.zip", transform.APIBase(), full, gitstore.RefsTagsPrefix, t.Name),
+			"tarball_url": fmt.Sprintf("%s/repos/%s/archive/%s%s.tar.gz", transform.APIBase(), full, gitstore.RefsTagsPrefix, t.Name),
 		}
 	}
 	respond.JSON(w, 200, paginate(w, r, d.Svc.BaseURL, out, page, perPage))
@@ -770,10 +770,9 @@ func (d *Deps) CompareCommitsReal(w http.ResponseWriter, r *http.Request) {
 
 func buildFileURLs(repoFullName, ref, path string) (string, string, string) {
 	htmlBase := transform.HTMLBase()
-	apiBase := transform.Base()
 	blobURL := fmt.Sprintf("%s/%s/blob/%s/%s", htmlBase, repoFullName, ref, path)
 	rawURL := fmt.Sprintf("%s/%s/raw/%s/%s", htmlBase, repoFullName, ref, path)
-	contentsURL := fmt.Sprintf("%s/api/v3/repos/%s/contents/%s?ref=%s", apiBase, repoFullName, path, ref)
+	contentsURL := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", transform.APIBase(), repoFullName, path, ref)
 	return blobURL, rawURL, contentsURL
 }
 
@@ -1374,7 +1373,7 @@ func (d *Deps) CreateGitBlob(w http.ResponseWriter, r *http.Request) {
 	d.logGitAudit(r.Context(), repo, service.AuditActionGitBlobCreate, full, "sha="+blob.SHA)
 	respond.JSON(w, http.StatusCreated, map[string]any{
 		"sha": blob.SHA,
-		"url": fmt.Sprintf("%s/api/v3/repos/%s/git/blobs/%s", transform.Base(), full, blob.SHA),
+		"url": fmt.Sprintf("%s/repos/%s/git/blobs/%s", transform.APIBase(), full, blob.SHA),
 	})
 }
 

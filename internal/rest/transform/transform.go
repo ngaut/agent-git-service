@@ -8,27 +8,115 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 )
 
-var baseURL string
+type state struct {
+	baseURL   string
+	apiPrefix string
+}
+
+var defaultState atomic.Value
+var overrideStates sync.Map
+
+func init() {
+	defaultState.Store(state{
+		baseURL:   "",
+		apiPrefix: "/api/v3",
+	})
+}
 
 // Init sets the base URL used by all transform functions.
 // Must be called once at startup before any handler serves requests.
-func Init(base string) { baseURL = base }
+func Init(base string, prefix ...string) {
+	next := state{
+		baseURL:   base,
+		apiPrefix: "/api/v3",
+	}
+	if len(prefix) > 0 {
+		next.apiPrefix = normalizePrefix(prefix[0])
+	}
+	defaultState.Store(next)
+}
 
-func base() string { return baseURL }
+// Wrap scopes transform URL state to a single handler invocation.
+func Wrap(base, prefix string, next func()) {
+	gid, ok := currentGoroutineID()
+	if !ok {
+		prev := currentState()
+		Init(base, prefix)
+		defer Init(prev.baseURL, prev.apiPrefix)
+		next()
+		return
+	}
+
+	prev, hadPrev := overrideStates.Load(gid)
+	overrideStates.Store(gid, state{
+		baseURL:   base,
+		apiPrefix: normalizePrefix(prefix),
+	})
+	defer func() {
+		if hadPrev {
+			overrideStates.Store(gid, prev)
+			return
+		}
+		overrideStates.Delete(gid)
+	}()
+	next()
+}
+
+func currentState() state {
+	if gid, ok := currentGoroutineID(); ok {
+		if v, exists := overrideStates.Load(gid); exists {
+			return v.(state)
+		}
+	}
+	if v := defaultState.Load(); v != nil {
+		return v.(state)
+	}
+	return state{apiPrefix: "/api/v3"}
+}
+
+func currentGoroutineID() (uint64, bool) {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	line := strings.TrimPrefix(string(buf[:n]), "goroutine ")
+	field := line
+	if idx := strings.IndexByte(field, ' '); idx >= 0 {
+		field = field[:idx]
+	}
+	id, err := strconv.ParseUint(field, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+func base() string { return currentState().baseURL }
 
 // Base returns the base URL for constructing API URLs.
 // Exported for use by handler files that build URLs outside the transform package.
-func Base() string { return baseURL }
+func Base() string { return currentState().baseURL }
+
+func apiBase() string {
+	st := currentState()
+	return strings.TrimRight(st.baseURL, "/") + st.apiPrefix
+}
+
+// APIBase returns the absolute API base URL, including the configured REST
+// prefix, for handlers that build URLs outside the transform package.
+func APIBase() string { return apiBase() }
 
 // host extracts the hostname from baseURL for ssh/git URL generation.
 func host() string {
-	if u, err := url.Parse(baseURL); err == nil && u.Hostname() != "" {
+	if u, err := url.Parse(base()); err == nil && u.Hostname() != "" {
 		return u.Hostname()
 	}
 	return "localhost"
@@ -37,18 +125,20 @@ func host() string {
 // htmlBase returns the base URL with https:// scheme, used for html_url fields.
 // GitHub always uses https:// for user-facing URLs; the CLI tests assert this.
 func htmlBase() string {
-	return strings.Replace(baseURL, "http://", "https://", 1)
+	return strings.Replace(base(), "http://", "https://", 1)
 }
 
 // HTMLBase returns the HTTPS base URL for constructing html_url fields.
 // Exported for use by handler files that build URLs outside the transform package.
 func HTMLBase() string {
-	return strings.Replace(baseURL, "http://", "https://", 1)
+	return strings.Replace(base(), "http://", "https://", 1)
 }
 
-func repoAPIURL(fullName string) string  { return base() + "/api/v3/repos/" + fullName }
+func APIPrefix() string { return currentState().apiPrefix }
+
+func repoAPIURL(fullName string) string  { return base() + APIPrefix() + "/repos/" + fullName }
 func repoHTMLURL(fullName string) string { return htmlBase() + "/" + fullName }
-func userAPIURL(login string) string     { return base() + "/api/v3/users/" + login }
+func userAPIURL(login string) string     { return base() + APIPrefix() + "/users/" + login }
 func userHTMLURL(login string) string    { return htmlBase() + "/" + login }
 
 func canonicalRepositoryPermission(value string) string {
@@ -76,7 +166,22 @@ func nodeID(typ string, id any) string {
 }
 
 func actionRunURL(fullName string, runID uint) string {
-	return fmt.Sprintf("%s/api/v3/repos/%s/actions/runs/%d", base(), fullName, runID)
+	return fmt.Sprintf("%s%s/repos/%s/actions/runs/%d", base(), APIPrefix(), fullName, runID)
+}
+
+func normalizePrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return "/api/v3"
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	prefix = strings.TrimRight(prefix, "/")
+	if prefix == "" {
+		return "/"
+	}
+	return prefix
 }
 
 // User converts a db.User to a GitHub REST API user object.
@@ -216,9 +321,9 @@ func Repo(r db.Repository, stats ...RepoStats) map[string]any {
 		"clone_url":                      fmt.Sprintf("%s/%s.git", base(), r.FullName),
 		"ssh_url":                        fmt.Sprintf("git@%s:%s.git", host(), r.FullName),
 		"git_url":                        fmt.Sprintf("git://%s/%s.git", host(), r.FullName),
-		"issues_url":                     fmt.Sprintf("%s/api/v3/repos/%s/issues{/number}", base(), r.FullName),
-		"pulls_url":                      fmt.Sprintf("%s/api/v3/repos/%s/pulls{/number}", base(), r.FullName),
-		"branches_url":                   fmt.Sprintf("%s/api/v3/repos/%s/branches{/branch}", base(), r.FullName),
+		"issues_url":                     fmt.Sprintf("%s/repos/%s/issues{/number}", apiBase(), r.FullName),
+		"pulls_url":                      fmt.Sprintf("%s/repos/%s/pulls{/number}", apiBase(), r.FullName),
+		"branches_url":                   fmt.Sprintf("%s/repos/%s/branches{/branch}", apiBase(), r.FullName),
 		"pushed_at":                      pushedAt,
 		"created_at":                     r.CreatedAt.Format(time.RFC3339),
 		"updated_at":                     r.UpdatedAt.Format(time.RFC3339),
@@ -301,7 +406,7 @@ func RepoLicense(raw string) any {
 		"key":     key,
 		"name":    name,
 		"spdx_id": spdxID,
-		"url":     fmt.Sprintf("%s/api/v3/licenses/%s", base(), key),
+		"url":     fmt.Sprintf("%s/licenses/%s", apiBase(), key),
 		"node_id": NodeID("License", key),
 	}
 }
@@ -328,7 +433,7 @@ func Branch(repoFullName, name, sha string) map[string]any {
 func BranchCommit(repoFullName, sha string) map[string]any {
 	return map[string]any{
 		"sha": sha,
-		"url": fmt.Sprintf("%s/api/v3/repos/%s/commits/%s", base(), repoFullName, sha),
+		"url": fmt.Sprintf("%s/repos/%s/commits/%s", apiBase(), repoFullName, sha),
 	}
 }
 
@@ -344,7 +449,7 @@ type CommitMeta struct {
 // Commit converts a sha into a GitHub commit object.
 // When meta is provided, the commit message and author are filled with real data.
 func Commit(repoFullName, sha string, meta ...CommitMeta) map[string]any {
-	commitURL := fmt.Sprintf("%s/api/v3/repos/%s/commits/%s", base(), repoFullName, sha)
+	commitURL := fmt.Sprintf("%s/repos/%s/commits/%s", apiBase(), repoFullName, sha)
 
 	message := "commit"
 	authorName := "gh-server"
@@ -378,7 +483,7 @@ func Commit(repoFullName, sha string, meta ...CommitMeta) map[string]any {
 			}
 			parents = append(parents, map[string]any{
 				"sha":      parentSHA,
-				"url":      fmt.Sprintf("%s/api/v3/repos/%s/git/commits/%s", base(), repoFullName, parentSHA),
+				"url":      fmt.Sprintf("%s/repos/%s/git/commits/%s", apiBase(), repoFullName, parentSHA),
 				"html_url": fmt.Sprintf("%s/%s/commit/%s", htmlBase(), repoFullName, parentSHA),
 			})
 		}
@@ -392,7 +497,7 @@ func Commit(repoFullName, sha string, meta ...CommitMeta) map[string]any {
 			"author":    ghAuthor,
 			"committer": ghAuthor,
 			"tree":      map[string]any{"sha": sha},
-			"url":       fmt.Sprintf("%s/api/v3/repos/%s/git/commits/%s", base(), repoFullName, sha),
+			"url":       fmt.Sprintf("%s/repos/%s/git/commits/%s", apiBase(), repoFullName, sha),
 		},
 		"author": map[string]any{
 			"login": authorName,

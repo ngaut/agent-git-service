@@ -42,7 +42,7 @@ func branchProtectionJSON(bp db.BranchProtection) map[string]any {
 }
 
 func branchProtectionBaseURL(bp db.BranchProtection) string {
-	return fmt.Sprintf("%s/api/v3/repos/%s/branches/%s/protection", transform.Base(), bp.Repository.FullName, bp.BranchName)
+	return fmt.Sprintf("%s/repos/%s/branches/%s/protection", transform.APIBase(), bp.Repository.FullName, bp.BranchName)
 }
 
 func branchProtectionRequiredStatusChecksJSON(bp db.BranchProtection) map[string]any {

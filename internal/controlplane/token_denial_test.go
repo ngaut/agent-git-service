@@ -105,7 +105,7 @@ func setupControlPlaneTest(t *testing.T) (*controlplane.DBRouter, *service.Servi
 	gitHandler := githttp.New(gitStore, svc)
 	oauthHandler := oauth.New(svc)
 
-	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, cpRouter, "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, cpRouter, "/api/v3", "http://console.localhost")
 
 	cleanup := func() {
 		cpRouter.Close()

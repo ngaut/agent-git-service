@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -12,6 +14,10 @@ import (
 const adminsTeamSlug = "admins"
 
 func ensureAdminsTeamTx(tx *gorm.DB, orgID uint) (db.Team, error) {
+	if tx.Dialector.Name() == "mysql" {
+		return ensureAdminsTeamMySQLTx(tx, orgID)
+	}
+
 	var team db.Team
 	if err := tx.First(&team, "organization_id = ? AND slug = ?", orgID, adminsTeamSlug).Error; err == nil {
 		return team, nil
@@ -39,6 +45,44 @@ func ensureAdminsTeamTx(tx *gorm.DB, orgID uint) (db.Team, error) {
 			return db.Team{}, err
 		}
 	}
+	return team, nil
+}
+
+func ensureAdminsTeamMySQLTx(tx *gorm.DB, orgID uint) (db.Team, error) {
+	team := db.Team{
+		OrganizationID: orgID,
+		Name:           adminsTeamSlug,
+		Slug:           adminsTeamSlug,
+		Privacy:        db.TeamPrivacyClosed,
+	}
+
+	execer, ok := tx.Statement.ConnPool.(interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	})
+	if !ok {
+		return db.Team{}, errors.New("mysql conn pool does not support ExecContext")
+	}
+
+	ctx := tx.Statement.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := execer.ExecContext(ctx, `
+INSERT INTO teams (organization_id, name, slug, privacy)
+VALUES (?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+	id = LAST_INSERT_ID(id),
+	privacy = VALUES(privacy)
+`, team.OrganizationID, team.Name, team.Slug, team.Privacy)
+	if err != nil {
+		return db.Team{}, err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return db.Team{}, err
+	}
+	team.ID = uint(id)
 	return team, nil
 }
 

@@ -1,15 +1,108 @@
 package service
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"gorm.io/driver/mysql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 )
+
+var fakeTeamAdminsMySQLDriverSeq uint64
+
+type fakeTeamAdminsMySQLDriver struct {
+	lastInsertID int64
+
+	mu      sync.Mutex
+	queries []string
+}
+
+func (d *fakeTeamAdminsMySQLDriver) Open(_ string) (driver.Conn, error) {
+	return &fakeTeamAdminsMySQLConn{driver: d}, nil
+}
+
+func (d *fakeTeamAdminsMySQLDriver) record(query string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.queries = append(d.queries, query)
+}
+
+func (d *fakeTeamAdminsMySQLDriver) Queries() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, len(d.queries))
+	copy(out, d.queries)
+	return out
+}
+
+type fakeTeamAdminsMySQLConn struct {
+	driver *fakeTeamAdminsMySQLDriver
+}
+
+func (c *fakeTeamAdminsMySQLConn) Prepare(_ string) (driver.Stmt, error) {
+	return nil, fmt.Errorf("prepare is not implemented")
+}
+
+func (c *fakeTeamAdminsMySQLConn) Close() error { return nil }
+
+func (c *fakeTeamAdminsMySQLConn) Begin() (driver.Tx, error) {
+	return nil, fmt.Errorf("transactions are not implemented")
+}
+
+func (c *fakeTeamAdminsMySQLConn) Ping(_ context.Context) error { return nil }
+
+func (c *fakeTeamAdminsMySQLConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.driver.record(query)
+	return nil, fmt.Errorf("unexpected query: %s", query)
+}
+
+func (c *fakeTeamAdminsMySQLConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	c.driver.record(query)
+	return fakeTeamAdminsMySQLResult(c.driver.lastInsertID), nil
+}
+
+type fakeTeamAdminsMySQLResult int64
+
+func (r fakeTeamAdminsMySQLResult) LastInsertId() (int64, error) { return int64(r), nil }
+func (r fakeTeamAdminsMySQLResult) RowsAffected() (int64, error) { return 1, nil }
+
+func openFakeTeamAdminsMySQLDB(t *testing.T, lastInsertID int64) (*gorm.DB, *fakeTeamAdminsMySQLDriver) {
+	t.Helper()
+
+	driverName := fmt.Sprintf("fake_team_admins_mysql_%d", atomic.AddUint64(&fakeTeamAdminsMySQLDriverSeq, 1))
+	fakeDriver := &fakeTeamAdminsMySQLDriver{lastInsertID: lastInsertID}
+	sql.Register(driverName, fakeDriver)
+
+	sqlDB, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatalf("open fake sql db: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	gdb, err := gorm.Open(mysql.New(mysql.Config{
+		Conn:                      sqlDB,
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{
+		DisableAutomaticPing: true,
+		Logger:               gormlogger.Discard,
+	})
+	if err != nil {
+		t.Fatalf("open fake gorm db: %v", err)
+	}
+	return gdb, fakeDriver
+}
 
 // TestEnsureAdminsTeamTx_SurvivesLostRace guards the fix for the TOCTOU race
 // in ensureAdminsTeamTx that let a second concurrent ForkRepo/CreateRepo
@@ -153,5 +246,35 @@ func TestEnsureAdminsTeamTx_NoTeamPathStillCreates(t *testing.T) {
 	}
 	if got.Slug != adminsTeamSlug {
 		t.Errorf("slug = %q, want %q", got.Slug, adminsTeamSlug)
+	}
+}
+
+func TestEnsureAdminsTeamTx_MySQLUsesSingleStatementUpsert(t *testing.T) {
+	gdb, fakeDriver := openFakeTeamAdminsMySQLDB(t, 42)
+
+	team, err := ensureAdminsTeamTx(gdb.WithContext(context.Background()), 7)
+	if err != nil {
+		t.Fatalf("ensureAdminsTeamTx(mysql): %v", err)
+	}
+	if team.ID != 42 {
+		t.Fatalf("team.ID = %d, want 42", team.ID)
+	}
+	if team.OrganizationID != 7 {
+		t.Fatalf("team.OrganizationID = %d, want 7", team.OrganizationID)
+	}
+
+	queries := fakeDriver.Queries()
+	if len(queries) != 1 {
+		t.Fatalf("expected exactly one mysql statement, got %d (%v)", len(queries), queries)
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(queries[0]), " "))
+	if !strings.Contains(normalized, "insert into teams") {
+		t.Fatalf("query %q did not insert into teams", queries[0])
+	}
+	if !strings.Contains(normalized, "last_insert_id(id)") {
+		t.Fatalf("query %q did not preserve the canonical id via LAST_INSERT_ID(id)", queries[0])
+	}
+	if strings.Contains(normalized, "select") {
+		t.Fatalf("query %q unexpectedly performed a follow-up SELECT", queries[0])
 	}
 }

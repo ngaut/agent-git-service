@@ -2,6 +2,7 @@ package transform_test
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,6 +107,50 @@ func TestRepo(t *testing.T) {
 	}
 	if owner["login"] != "alice" {
 		t.Errorf("expected owner login=alice, got %v", owner["login"])
+	}
+}
+
+func TestWrap_IsolatesConcurrentState(t *testing.T) {
+	t.Cleanup(func() { transform.Init(testBase) })
+
+	type result struct {
+		base   string
+		api    string
+		prefix string
+	}
+
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	ready.Add(2)
+
+	run := func(base, prefix string) {
+		transform.Wrap(base, prefix, func() {
+			ready.Done()
+			<-start
+			results <- result{
+				base:   transform.Base(),
+				api:    transform.APIBase(),
+				prefix: transform.APIPrefix(),
+			}
+		})
+	}
+
+	go run("http://one.local", "/api/v1")
+	go run("http://two.local", "/api/v9")
+
+	ready.Wait()
+	close(start)
+
+	got := []result{<-results, <-results}
+	want := map[string]string{
+		"http://one.local": "http://one.local/api/v1",
+		"http://two.local": "http://two.local/api/v9",
+	}
+	for _, item := range got {
+		if item.api != want[item.base] {
+			t.Fatalf("state leaked across concurrent Wrap calls: base=%q api=%q want=%q", item.base, item.api, want[item.base])
+		}
 	}
 }
 
