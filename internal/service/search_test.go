@@ -1261,21 +1261,27 @@ func TestEmbedQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("truncation for text > 32KB", func(t *testing.T) {
+	t.Run("token truncation for long text", func(t *testing.T) {
 		fakeEmbedder := &FakeEmbedder{Vec: []float32{0.1, 0.2, 0.3}}
 		svc := &Service{
 			Embedder: fakeEmbedder,
 		}
 
-		// Create a string longer than 32KB
-		longText := strings.Repeat("x", 35000)
+		longText := strings.Repeat(" token", embedding.MaxInputTokens+512)
 		result := svc.embedQuery(context.Background(), longText)
 		expected := "[0.1,0.2,0.3]"
 		if result != expected {
 			t.Errorf("Expected %q, got %q", expected, result)
 		}
-		if fakeEmbedder.LastText != longText[:32000] {
-			t.Errorf("Expected truncated text (32000 chars), got %d chars", len(fakeEmbedder.LastText))
+		gotTokens, err := embedding.CountInputTokens(fakeEmbedder.LastText)
+		if err != nil {
+			t.Fatalf("count truncated tokens: %v", err)
+		}
+		if gotTokens > embedding.MaxInputTokens {
+			t.Errorf("expected <= %d tokens, got %d", embedding.MaxInputTokens, gotTokens)
+		}
+		if len(fakeEmbedder.LastText) >= len(longText) {
+			t.Errorf("expected text to be truncated, got %d chars", len(fakeEmbedder.LastText))
 		}
 	})
 }

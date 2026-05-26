@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"gh-server/internal/db"
+	"gh-server/internal/embedding"
 	"gh-server/internal/service"
 	"gh-server/internal/testharness"
 
@@ -73,6 +75,92 @@ func (hybridFusionFallbackEmbedder) Embed(_ context.Context, text string) ([]flo
 }
 
 func (hybridFusionFallbackEmbedder) Dimensions() int { return 3 }
+
+type recordingWikiEmbedder struct {
+	mu       sync.Mutex
+	vec      []float32
+	called   int
+	lastText string
+}
+
+func (r *recordingWikiEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.called++
+	r.lastText = text
+	return r.vec, nil
+}
+
+func (r *recordingWikiEmbedder) Dimensions() int { return len(r.vec) }
+
+func (r *recordingWikiEmbedder) LastCall() (string, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastText, r.called
+}
+
+func TestWikiSearchTruncatesLongPageEmbeddingInput(t *testing.T) {
+	recorder := &recordingWikiEmbedder{vec: []float32{0.1, 0.2, 0.3}}
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
+		Embedder: recorder,
+	})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-token-truncate",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+
+	body := "# Long Page\n\n" + strings.Repeat(" token", embedding.MaxInputTokens+512)
+	fullInput := "Long Page\n\n" + body
+	if tokens, err := embedding.CountInputTokens(fullInput); err != nil {
+		t.Fatalf("count original tokens: %v", err)
+	} else if tokens <= embedding.MaxInputTokens {
+		t.Fatalf("test fixture has %d tokens, want > %d", tokens, embedding.MaxInputTokens)
+	}
+
+	full := "testuser/wiki-token-truncate"
+	if _, err := svc.PutWikiPage(ctx, full, "long-page", body, "create long page", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	lastText, called := recorder.LastCall()
+	if called == 0 {
+		t.Fatal("expected wiki search indexer to call embedder")
+	}
+	tokens, err := embedding.CountInputTokens(lastText)
+	if err != nil {
+		t.Fatalf("count truncated tokens: %v", err)
+	}
+	if tokens > embedding.MaxInputTokens {
+		t.Fatalf("wiki embedding text has %d tokens, want <= %d", tokens, embedding.MaxInputTokens)
+	}
+	if len(lastText) >= len(fullInput) {
+		t.Fatalf("expected wiki embedding input to be truncated")
+	}
+	if !strings.HasPrefix(lastText, "Long Page\n") {
+		t.Fatalf("wiki embedding input prefix = %q", lastText[:min(len(lastText), 32)])
+	}
+
+	var stored db.WikiSearchDocument
+	if err := svc.DB.Where("slug = ?", "long-page").First(&stored).Error; err != nil {
+		t.Fatalf("load search doc: %v", err)
+	}
+	if stored.Embedding == "" {
+		t.Fatal("expected embedding to be stored for token-truncated long page")
+	}
+}
 
 func TestWikiSearchLifecycleAndFallback_Issue1362(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
