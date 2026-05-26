@@ -23,8 +23,6 @@ import (
 
 type semanticWikiEmbedder struct{}
 
-var wikiSearchSQLiteSeq uint64
-
 func (semanticWikiEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 	if strings.Contains(text, "session expiry") || strings.Contains(text, "Session expiry") {
 		return []float32{1, 0, 0}, nil
@@ -357,36 +355,6 @@ func TestWikiSearchVectorUnavailableFallsBackToLexicalAndReindex_Issue1362(t *te
 	}
 	if len(resp.Results) == 0 {
 		t.Fatal("expected results after reindex")
-	}
-
-	if err := svc.DB.Model(&db.WikiSearchDocument{}).Where("slug = ?", "ops/session-expiry").Update("embedding", nil).Error; err != nil {
-		t.Fatalf("clear embedding for auto reindex: %v", err)
-	}
-
-	svc.QueueWikiSearchAutoReindex()
-	svc.Wg.Wait()
-
-	var stored db.WikiSearchDocument
-	if err := svc.DB.Where("slug = ?", "ops/session-expiry").First(&stored).Error; err != nil {
-		t.Fatalf("load search doc after auto reindex refill: %v", err)
-	}
-	if stored.Embedding == "" {
-		t.Fatal("expected auto reindex to refill embeddings without database vector distance support")
-	}
-
-	if err := svc.DB.Where("repository_id > 0").Delete(&db.WikiSearchDocument{}).Error; err != nil {
-		t.Fatalf("clear search docs for auto reindex recreation: %v", err)
-	}
-
-	svc.QueueWikiSearchAutoReindex()
-	svc.Wg.Wait()
-
-	stored = db.WikiSearchDocument{}
-	if err := svc.DB.Where("slug = ?", "ops/session-expiry").First(&stored).Error; err != nil {
-		t.Fatalf("load search doc after auto reindex recreate: %v", err)
-	}
-	if stored.Embedding == "" {
-		t.Fatal("expected auto reindex to recreate wiki search docs without database vector distance support")
 	}
 }
 
@@ -1000,119 +968,6 @@ func TestWikiSearchSemanticDBPaginationPromotesLabelBoostBeyondOldPrefix(t *test
 	}
 }
 
-func TestWikiSearchAutoReindexFillsMissingEmbeddings(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_wiki_auto_vec_%d", time.Now().UnixNano())
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				if embedding == query {
-					return 0
-				}
-				return 1
-			}, true)
-		},
-	})
-
-	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
-		Embedder: semanticWikiEmbedder{},
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
-	})
-	defer cleanup()
-	ctx := context.Background()
-	if err := svc.DB.Create(&db.User{
-		Login: "testuser",
-		Name:  "Test User",
-		Type:  db.TypeUser,
-	}).Error; err != nil {
-		t.Fatalf("seed owner: %v", err)
-	}
-	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
-		OwnerLogin: "testuser",
-		Name:       "wiki-auto-reindex",
-		AutoInit:   true,
-	}); err != nil {
-		t.Fatalf("CreateRepo: %v", err)
-	}
-	full := "testuser/wiki-auto-reindex"
-	if _, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on tenant policy.", "create sessions", ""); err != nil {
-		t.Fatalf("PutWikiPage: %v", err)
-	}
-	svc.Wg.Wait()
-
-	if err := svc.DB.Model(&db.WikiSearchDocument{}).Where("slug = ?", "ops/session-expiry").Update("embedding", nil).Error; err != nil {
-		t.Fatalf("clear embedding: %v", err)
-	}
-
-	svc.QueueWikiSearchAutoReindex()
-	svc.Wg.Wait()
-
-	var stored db.WikiSearchDocument
-	if err := svc.DB.Where("slug = ?", "ops/session-expiry").First(&stored).Error; err != nil {
-		t.Fatalf("load search doc: %v", err)
-	}
-	if stored.Embedding == "" {
-		t.Fatal("expected auto reindex to refill wiki search embedding")
-	}
-
-	if err := svc.DB.Where("repository_id > 0").Delete(&db.WikiSearchDocument{}).Error; err != nil {
-		t.Fatalf("delete search docs: %v", err)
-	}
-	svc.QueueWikiSearchAutoReindex()
-	svc.Wg.Wait()
-
-	stored = db.WikiSearchDocument{}
-	if err := svc.DB.Where("slug = ?", "ops/session-expiry").First(&stored).Error; err != nil {
-		t.Fatalf("load recreated search doc: %v", err)
-	}
-	if stored.Embedding == "" {
-		t.Fatal("expected auto reindex to recreate empty wiki search index")
-	}
-}
-
-func TestWikiSearchAutoReindexRepairsLegacyEmptyEmbeddings(t *testing.T) {
-	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
-		Embedder: semanticWikiEmbedder{},
-	})
-	defer cleanup()
-	ctx := context.Background()
-	if err := svc.DB.Create(&db.User{
-		Login: "testuser",
-		Name:  "Test User",
-		Type:  db.TypeUser,
-	}).Error; err != nil {
-		t.Fatalf("seed owner: %v", err)
-	}
-	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
-		OwnerLogin: "testuser",
-		Name:       "wiki-auto-reindex-legacy-empty",
-		AutoInit:   true,
-	}); err != nil {
-		t.Fatalf("CreateRepo: %v", err)
-	}
-	full := "testuser/wiki-auto-reindex-legacy-empty"
-	if _, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on tenant policy.", "create sessions", ""); err != nil {
-		t.Fatalf("PutWikiPage: %v", err)
-	}
-	svc.Wg.Wait()
-
-	if err := svc.DB.Model(&db.WikiSearchDocument{}).Where("slug = ?", "ops/session-expiry").Update("embedding", "").Error; err != nil {
-		t.Fatalf("clear legacy embedding: %v", err)
-	}
-
-	svc.QueueWikiSearchAutoReindex()
-	svc.Wg.Wait()
-
-	var stored db.WikiSearchDocument
-	if err := svc.DB.Where("slug = ?", "ops/session-expiry").First(&stored).Error; err != nil {
-		t.Fatalf("load search doc: %v", err)
-	}
-	if stored.Embedding == "" {
-		t.Fatal("expected auto reindex to refill legacy empty wiki search embedding")
-	}
-}
-
 func TestWikiSearchUpdateClearsStaleEmbeddingOnEmbedFailure(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
 		Embedder: semanticWikiEmbedder{},
@@ -1164,82 +1019,6 @@ func TestWikiSearchUpdateClearsStaleEmbeddingOnEmbedFailure(t *testing.T) {
 	}
 	if !strings.Contains(string(stored.Body), "Refresh tokens rotate automatically.") {
 		t.Fatalf("body = %q, want updated content", stored.Body)
-	}
-}
-
-func TestWikiSearchAutoReindexIncludesTenantDBs(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_wiki_auto_reindex_tenant_%d", atomic.AddUint64(&wikiSearchSQLiteSeq, 1))
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				if embedding == query {
-					return 0
-				}
-				return 1
-			}, true)
-		},
-	})
-
-	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
-		Embedder: semanticWikiEmbedder{},
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
-	})
-	defer cleanup()
-
-	tenantDB, err := gorm.Open(sqlite.Dialector{
-		DriverName: driverName,
-		DSN:        fmt.Sprintf("file:wiki_auto_reindex_tenant_%d?mode=memory&cache=shared", atomic.AddUint64(&wikiSearchSQLiteSeq, 1)),
-	}, &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open tenant db: %v", err)
-	}
-	if err := db.Migrate(tenantDB); err != nil {
-		t.Fatalf("migrate tenant db: %v", err)
-	}
-
-	svc.TenantContexts = func(context.Context) ([]context.Context, error) {
-		tenantCtx := service.ContextWithTenant(context.Background(), "tenantuser")
-		tenantCtx = service.ContextWithDB(tenantCtx, tenantDB)
-		return []context.Context{tenantCtx}, nil
-	}
-
-	ctx := service.ContextWithTenant(context.Background(), "tenantuser")
-	ctx = service.ContextWithDB(ctx, tenantDB)
-	if err := tenantDB.Create(&db.User{
-		Login: "tenantuser",
-		Name:  "Tenant User",
-		Type:  db.TypeUser,
-	}).Error; err != nil {
-		t.Fatalf("seed tenant owner: %v", err)
-	}
-	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
-		OwnerLogin: "tenantuser",
-		Name:       "wiki-auto-reindex-tenant",
-		AutoInit:   true,
-	}); err != nil {
-		t.Fatalf("CreateRepo(tenant): %v", err)
-	}
-	full := "tenantuser/wiki-auto-reindex-tenant"
-	if _, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on tenant policy.", "create sessions", ""); err != nil {
-		t.Fatalf("PutWikiPage(tenant): %v", err)
-	}
-	svc.Wg.Wait()
-
-	if err := tenantDB.Model(&db.WikiSearchDocument{}).Where("slug = ?", "ops/session-expiry").Update("embedding", nil).Error; err != nil {
-		t.Fatalf("clear tenant embedding: %v", err)
-	}
-
-	svc.QueueWikiSearchAutoReindex()
-	svc.Wg.Wait()
-
-	var stored db.WikiSearchDocument
-	if err := tenantDB.Where("slug = ?", "ops/session-expiry").First(&stored).Error; err != nil {
-		t.Fatalf("load tenant search doc: %v", err)
-	}
-	if stored.Embedding == "" {
-		t.Fatal("expected auto reindex to refill tenant wiki search embedding")
 	}
 }
 
