@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func TestLookupRef_CustomNamespace(t *testing.T) {

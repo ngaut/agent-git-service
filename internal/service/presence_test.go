@@ -10,8 +10,8 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func setupTestPresenceHub(t *testing.T) (*PresenceHub, func()) {

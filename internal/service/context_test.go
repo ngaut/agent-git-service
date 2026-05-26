@@ -7,8 +7,8 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"gh-server/internal/service"
-	"gh-server/internal/tenant"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 func TestDBForCtx_WithContextDB(t *testing.T) {

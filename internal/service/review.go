@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // normalizeReviewEvent maps GitHub REST API review event values to database state values.

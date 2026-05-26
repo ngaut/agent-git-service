@@ -9,7 +9,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // Sentinel errors for token resolution failures.

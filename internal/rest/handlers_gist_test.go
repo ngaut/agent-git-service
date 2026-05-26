@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestCreateGist_IDIsHex(t *testing.T) {

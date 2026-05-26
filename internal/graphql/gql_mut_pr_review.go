@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/gitstore"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // doRequestReviews handles requestReviews and requestReviewsByLogin mutations.

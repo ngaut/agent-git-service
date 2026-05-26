@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // latestByAuthor returns the latest review per author from a list of reviews.

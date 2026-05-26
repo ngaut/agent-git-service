@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"gh-server/internal/db"
-	searchsvc "gh-server/internal/service/search"
+	"github.com/ngaut/agent-git-service/internal/db"
+	searchsvc "github.com/ngaut/agent-git-service/internal/service/search"
 
 	"gorm.io/gorm"
 )

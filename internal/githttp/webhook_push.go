@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/rest/transform"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 const zeroGitSHA = "0000000000000000000000000000000000000000"

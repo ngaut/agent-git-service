@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/ratelimit"
+	"github.com/ngaut/agent-git-service/internal/ratelimit"
 )
 
 func TestAPIRateLimitHeaders_EnforcesPerTokenBudget(t *testing.T) {

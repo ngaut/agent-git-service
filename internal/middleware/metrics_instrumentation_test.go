@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"gh-server/internal/metrics"
+	"github.com/ngaut/agent-git-service/internal/metrics"
 )
 
 func TestMetricsInstrumentation_RecordsRequest(t *testing.T) {

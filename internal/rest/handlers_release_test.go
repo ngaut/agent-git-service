@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func createRelease(t *testing.T, h *testharness.Harness, repo, tag string) map[string]any {

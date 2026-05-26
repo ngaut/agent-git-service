@@ -55,7 +55,7 @@ The `.env` file supplies local listener and seed-user defaults. The exported
 `DB_DSN` points the server at TiDB Zero.
 
 ```bash
-go run .
+go run ./cmd/gh-server
 ```
 
 Keep this terminal open.
@@ -193,7 +193,7 @@ You should see a commit hash followed by `refs/heads/main`.
 
 ### `required environment variable not set: DB_DSN`
 
-Make sure `DB_DSN` is exported in the terminal running `go run .`, or set it in
+Make sure `DB_DSN` is exported in the terminal running `go run ./cmd/gh-server`, or set it in
 `.env`.
 
 ### `Access denied` or connection timeout

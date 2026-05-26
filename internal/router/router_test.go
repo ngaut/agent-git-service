@@ -21,16 +21,16 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"gh-server/internal/controlplane"
-	"gh-server/internal/db"
-	"gh-server/internal/githttp"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/graphql"
-	"gh-server/internal/oauth"
-	"gh-server/internal/rest"
-	"gh-server/internal/router"
-	"gh-server/internal/service"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/controlplane"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/githttp"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/oauth"
+	"github.com/ngaut/agent-git-service/internal/rest"
+	"github.com/ngaut/agent-git-service/internal/router"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 var testDBCounter atomic.Int64

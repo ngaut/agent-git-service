@@ -15,7 +15,7 @@ import (
 	gitcfg "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 
-	"gh-server/internal/tenant"
+	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 const (

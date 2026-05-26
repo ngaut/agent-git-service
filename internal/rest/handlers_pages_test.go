@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // Regression for issue #1296 Phase D: Pages REST surface — config

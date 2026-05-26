@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"gh-server/internal/randutil"
+	"github.com/ngaut/agent-git-service/internal/randutil"
 )
 
 // MaxBodyInlineBytes is the size at or below which a page body is

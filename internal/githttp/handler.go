@@ -24,10 +24,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"gh-server/internal/gitstore"
-	applog "gh-server/internal/logging"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // defaultMaxPushBytes caps a single chunked git push when no explicit override

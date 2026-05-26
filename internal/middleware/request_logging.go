@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
-	applog "gh-server/internal/logging"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
 )
 
 const (

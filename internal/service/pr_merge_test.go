@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // TestMergePR_UnauthBeforeDBLookup verifies that MergePR checks auth

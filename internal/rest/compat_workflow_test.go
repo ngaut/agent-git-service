@@ -3,8 +3,8 @@ package rest_test
 import (
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // ─── Workflow Run GET Response Fields ───────────────────────────────────────

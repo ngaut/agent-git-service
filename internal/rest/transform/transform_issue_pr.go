@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // AuthorAssociationChecks provides optional callbacks for association resolution.

@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/embedding"
-	applog "gh-server/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"

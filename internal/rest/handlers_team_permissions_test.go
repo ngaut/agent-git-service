@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestTeamCRUD_RequiresOrgAdmin(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // prGQL converts db.PullRequest to GraphQL shape. REST counterpart: rest/transform.PR()

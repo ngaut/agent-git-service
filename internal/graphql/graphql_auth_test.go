@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // TestGraphQLAuth_MissingToken_ApiGraphql tests that GraphQL requests to /api/graphql

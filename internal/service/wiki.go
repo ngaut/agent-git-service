@@ -14,8 +14,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // wikiDefaultBranch matches GitHub's wiki convention so a wiki repo cloned

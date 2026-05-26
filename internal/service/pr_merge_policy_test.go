@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func setupProtectedPR(t testing.TB, svc *service.Service, login, repoName string, allowAutoMerge bool) (db.PullRequest, context.Context, db.User) {

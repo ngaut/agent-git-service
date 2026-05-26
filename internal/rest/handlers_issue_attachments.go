@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strings"
 
-	"gh-server/internal/db"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/rest/transform"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 const attachmentMultipartRequestLimit = service.IssueAttachmentMaxSizeBytes + (1 << 20)

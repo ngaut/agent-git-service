@@ -10,11 +10,11 @@ import (
 	"reflect"
 	"strings"
 
-	applog "gh-server/internal/logging"
-	"gh-server/internal/ratelimit"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/service"
-	"gh-server/internal/tenant"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/ratelimit"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 // TokenAuth returns middleware that validates GitHub-compatible auth headers.

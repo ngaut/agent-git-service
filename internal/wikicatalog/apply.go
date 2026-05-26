@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 
 	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"

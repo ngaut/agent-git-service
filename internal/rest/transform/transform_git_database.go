@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func gitVerification() map[string]any {

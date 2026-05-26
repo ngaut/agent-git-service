@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 func TestGCRun_ReclaimsOrphanPendingBlobs(t *testing.T) {

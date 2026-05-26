@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestWiki_CompactHistory_StartsAsyncJob_Issue1472(t *testing.T) {

@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"gh-server/internal/db"
-	"gh-server/internal/randutil"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/randutil"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
 )
 
 // CreateGist handles POST /gists

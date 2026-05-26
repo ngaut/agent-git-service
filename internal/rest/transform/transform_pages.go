@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // PagesConfig shapes a db.PagesConfig as a GitHub-compatible Pages JSON

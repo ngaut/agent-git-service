@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // CoreFilters groups primary qualifiers used to filter results.

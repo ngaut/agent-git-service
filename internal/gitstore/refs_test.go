@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func TestListBranches_HappyPath(t *testing.T) {

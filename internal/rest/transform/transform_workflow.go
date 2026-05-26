@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // Workflow converts a db.Workflow to GitHub REST API JSON.

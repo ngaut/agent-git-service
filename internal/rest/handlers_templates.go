@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"gh-server/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
 )
 
 //go:embed templates/licenses/*.txt

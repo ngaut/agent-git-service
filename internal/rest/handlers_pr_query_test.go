@@ -16,16 +16,16 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
-	"gh-server/internal/db"
-	"gh-server/internal/embedding"
-	"gh-server/internal/githttp"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/graphql"
-	"gh-server/internal/oauth"
-	rest "gh-server/internal/rest"
-	"gh-server/internal/rest/transform"
-	"gh-server/internal/router"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/githttp"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/oauth"
+	rest "github.com/ngaut/agent-git-service/internal/rest"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/router"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 type queryCounterLogger struct {

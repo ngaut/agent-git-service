@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gh-server/internal/graphql"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // TestGraphQLHandler_MalformedJSON tests that malformed JSON requests

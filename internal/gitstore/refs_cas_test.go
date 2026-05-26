@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 // TestCreateRef_AtomicOnDuplicate exercises the compare-and-swap contract

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // logErr logs a non-nil error from a service call that would otherwise be swallowed.

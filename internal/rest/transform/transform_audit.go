@@ -3,7 +3,7 @@ package transform
 import (
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // AuditLogEntry shapes a db.AuditLogEntry as a GitHub-compatible audit log JSON object.

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"net/http"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"gh-server/internal/metrics"
+	"github.com/ngaut/agent-git-service/internal/metrics"
 )
 
 func newMetricsRouter() http.Handler {

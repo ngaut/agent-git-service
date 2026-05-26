@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gh-server/internal/embedding"
+	"github.com/ngaut/agent-git-service/internal/embedding"
 )
 
 func TestNopEmbedder(t *testing.T) {

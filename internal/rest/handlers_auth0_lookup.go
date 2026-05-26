@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // Auth0Lookup handles POST /api/v3/auth0/lookup (no auth).

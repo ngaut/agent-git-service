@@ -15,10 +15,10 @@ import (
 	"net/http"
 	"strings"
 
-	"gh-server/internal/db"
-	applog "gh-server/internal/logging"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/db"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // Server encapsulates all mutable state for the GraphQL handler layer.

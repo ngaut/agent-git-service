@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // MilestoneCounts holds open/closed counts for milestone issues and PRs.

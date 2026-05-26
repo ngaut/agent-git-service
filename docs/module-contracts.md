@@ -52,6 +52,12 @@ Supporting packages such as `config`, `oauth`, `auth0`, `authn`, `githttp`,
 `apperrors`, `crypto`, `embedding`, and `randutil` are included where they
 materially affect the contracts.
 
+The public import surface is intentionally small:
+
+- `config` exposes environment-backed startup configuration.
+- `server` exposes the embeddable composition-root APIs (`Run`, `RunWikiReindex`).
+- Everything else in the root module remains internal-only unless documented otherwise.
+
 ## Top-Level Internal Package Inventory
 
 This is the top-level contract inventory for `internal/*`.
@@ -63,7 +69,6 @@ document the relevant contract below in the same change.
 | `apperrors` | shared sentinel error catalog and helpers |
 | `auth0` | outbound Auth0 device-flow and JWKS client |
 | `authn` | low-layer token-resolver interface and auth sentinel errors |
-| `config` | environment-backed startup configuration |
 | `controlplane` | control-plane schema plus token-to-tenant DB routing |
 | `crypto` | NaCl-based secret encryption helpers |
 | `db` | relational schema, migrations, seed data, and model types |

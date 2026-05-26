@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // StarCountBatch returns the number of stars keyed by repository ID. One SQL

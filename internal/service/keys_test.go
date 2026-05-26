@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 const validArmoredGPGKey = `-----BEGIN PGP PUBLIC KEY BLOCK-----

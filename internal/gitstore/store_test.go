@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/gitstore"
-	"gh-server/internal/tenant"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 func TestStore_InitForkDelete(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 func TestCompactWikiHistory_SupersedesOldHistory_Issue1472(t *testing.T) {

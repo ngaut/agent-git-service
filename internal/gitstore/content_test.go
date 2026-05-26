@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func TestReadFile_DanglingHeadFallback(t *testing.T) {

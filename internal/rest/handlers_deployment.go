@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
 )
 
 // deploymentJSON transforms db.Deployment into the GitHub API response shape.

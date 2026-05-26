@@ -3,7 +3,7 @@ package rest_test
 import (
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // ─── User GET Response Fields ───────────────────────────────────────────────

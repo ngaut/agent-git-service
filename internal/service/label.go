@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"

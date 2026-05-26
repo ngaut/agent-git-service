@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"gh-server/internal/ratelimit"
-	"gh-server/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/ratelimit"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
 )
 
 // APIRateLimitHeaders emits GitHub-compatible rate-limit headers for REST v3

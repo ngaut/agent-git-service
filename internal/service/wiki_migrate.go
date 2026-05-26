@@ -18,10 +18,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	applog "gh-server/internal/logging"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // WikiMigrationOptions tunes a migration run.

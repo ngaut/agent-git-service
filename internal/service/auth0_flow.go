@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"gh-server/internal/auth0"
+	"github.com/ngaut/agent-git-service/internal/auth0"
 )
 
 // Auth0DeviceFlow is the subset of Auth0 functionality gh-server needs.

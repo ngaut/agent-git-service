@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 func (s *Server) projectGQL(ctx context.Context, proj db.Project) map[string]any {

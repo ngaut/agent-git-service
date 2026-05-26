@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"gh-server/internal/apperrors"
+	"github.com/ngaut/agent-git-service/internal/apperrors"
 
 	"gorm.io/gorm"
 )

@@ -3,7 +3,7 @@ package service
 import (
 	"strings"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // RepoPermission represents a user's effective permission on a repository.

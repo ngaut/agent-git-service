@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"gh-server/internal/apperrors"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/apperrors"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func TestJSON(t *testing.T) {

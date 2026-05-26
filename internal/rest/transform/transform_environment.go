@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // Environment converts a persisted environment into the GitHub REST shape.

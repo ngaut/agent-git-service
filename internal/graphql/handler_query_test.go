@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gh-server/internal/graphql"
+	"github.com/ngaut/agent-git-service/internal/graphql"
 )
 
 // =============================================================================

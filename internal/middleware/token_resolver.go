@@ -5,7 +5,7 @@ package middleware
 // without importing authn directly in every file.
 
 import (
-	"gh-server/internal/authn"
+	"github.com/ngaut/agent-git-service/internal/authn"
 )
 
 // TokenResolver resolves an auth token to a tenant user and database handle.

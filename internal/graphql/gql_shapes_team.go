@@ -2,7 +2,7 @@ package graphql
 
 import (
 	"fmt"
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // teamGQL converts a db.Team to a GraphQL Team node.

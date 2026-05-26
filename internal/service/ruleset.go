@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"gh-server/internal/db"
+	"github.com/ngaut/agent-git-service/internal/db"
 )
 
 // ListRulesets retrieves all rulesets for a given repository.

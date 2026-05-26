@@ -4,9 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"gh-server/internal/db"
-	"gh-server/internal/embedding"
-	searchsvc "gh-server/internal/service/search"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
+	searchsvc "github.com/ngaut/agent-git-service/internal/service/search"
 
 	"gorm.io/gorm"
 )

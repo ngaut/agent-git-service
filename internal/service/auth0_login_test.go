@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/auth0"
-	"gh-server/internal/db"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/auth0"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // fakeAuth0DeviceFlow implements service.Auth0DeviceFlow for testing.

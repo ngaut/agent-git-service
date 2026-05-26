@@ -13,8 +13,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // wikiPageBody reads a page's body. Returns the inline copy when the

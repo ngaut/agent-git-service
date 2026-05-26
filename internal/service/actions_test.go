@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 func TestVariableRepoAndEnvLifecycle(t *testing.T) {

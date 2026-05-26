@@ -4,7 +4,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 // assertFieldPresent checks that a JSON response map contains the given field

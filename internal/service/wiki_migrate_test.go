@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/db"
-	"gh-server/internal/service"
-	"gh-server/internal/testharness"
-	"gh-server/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 func setupWikiMigrationTestService(t testing.TB) (*service.Service, func()) {

@@ -98,7 +98,7 @@ Control-plane mode:
 GIT_REPO_DIR/{tenant}/{owner}/{repo}.git
 ```
 
-`main.go` enables this mode by constructing the store with `gitstore.WithTenantIsolation()` and `gitstore.WithDefaultTenant("default")` when `CONTROL_PLANE_DSN` is set.
+`server` enables this mode by constructing the store with `gitstore.WithTenantIsolation()` and `gitstore.WithDefaultTenant("default")` when `CONTROL_PLANE_DSN` is set.
 
 If tenant isolation is enabled and no tenant is present in the context:
 
@@ -143,7 +143,7 @@ This keeps DB routing and Git path routing separate: the DB handle is authoritat
 - `internal/tenant/tenant.go` exists and owns the shared context key today
 - `internal/service/context.go` already delegates tenant helpers to `internal/tenant`
 - `internal/middleware/auth.go` already injects tenant context for control-plane requests using `user.Login`
-- `main.go` already enables tenant-isolated git storage when `CONTROL_PLANE_DSN` is configured
+- `server` already enables tenant-isolated git storage when `CONTROL_PLANE_DSN` is configured
 - `internal/gitstore/store.go` already enforces tenant-aware repo roots, path validation, and per-tenant lock isolation
 - single-DB mode still uses the flat `GIT_REPO_DIR/{owner}/{repo}.git` layout and does not require tenant context
 

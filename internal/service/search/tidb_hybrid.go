@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	modeldb "gh-server/internal/db"
+	modeldb "github.com/ngaut/agent-git-service/internal/db"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"

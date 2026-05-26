@@ -28,13 +28,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"gh-server/internal/authn"
-	"gh-server/internal/db"
-	applog "gh-server/internal/logging"
-	"gh-server/internal/ratelimit"
-	"gh-server/internal/rest/respond"
-	"gh-server/internal/rest/transform"
-	"gh-server/internal/service"
+	"github.com/ngaut/agent-git-service/internal/authn"
+	"github.com/ngaut/agent-git-service/internal/db"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/ratelimit"
+	"github.com/ngaut/agent-git-service/internal/rest/respond"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 // mustIntParam extracts a numeric URL parameter and writes a 422 response

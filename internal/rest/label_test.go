@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"testing"
 
-	"gh-server/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestCreateLabel_InvalidColor_Returns422(t *testing.T) {

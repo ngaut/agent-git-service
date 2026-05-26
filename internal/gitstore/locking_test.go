@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gh-server/internal/tenant"
+	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 func TestStoreRepoLock_SerializesSameRepo(t *testing.T) {

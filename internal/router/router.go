@@ -14,12 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"gh-server/internal/controlplane"
-	"gh-server/internal/githttp"
-	"gh-server/internal/graphql"
-	srvmiddleware "gh-server/internal/middleware"
-	"gh-server/internal/oauth"
-	"gh-server/internal/rest"
+	"github.com/ngaut/agent-git-service/internal/controlplane"
+	"github.com/ngaut/agent-git-service/internal/githttp"
+	"github.com/ngaut/agent-git-service/internal/graphql"
+	srvmiddleware "github.com/ngaut/agent-git-service/internal/middleware"
+	"github.com/ngaut/agent-git-service/internal/oauth"
+	"github.com/ngaut/agent-git-service/internal/rest"
 )
 
 const defaultNonGitBodyLimitBytes int64 = 50 << 20

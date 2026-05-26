@@ -15,9 +15,9 @@ import (
 	"golang.org/x/crypto/openpgp/packet"
 	"gorm.io/gorm"
 
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/rest/transform"
 )
 
 func (d *Deps) gitCommitResponse(ctx context.Context, repoFullName string, commit gitstore.GitCommitObject) map[string]any {

@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"gh-server/internal/gitstore"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 // TestNewTestStore_Helper validates that the test helper creates a usable store.
