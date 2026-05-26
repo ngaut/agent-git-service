@@ -104,6 +104,7 @@ func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}
+	page, perPage := parsePagination(r)
 	recursive := true
 	if raw := r.URL.Query().Get("recursive"); raw != "" {
 		parsed, err := strconv.ParseBool(raw)
@@ -125,6 +126,7 @@ func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	pages = paginate(w, r, d.Svc.BaseURL, pages, page, perPage)
 	out := make([]any, 0, len(pages))
 	for _, p := range pages {
 		out = append(out, transform.WikiPageSummary(full, p))

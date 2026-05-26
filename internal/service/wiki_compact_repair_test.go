@@ -21,14 +21,6 @@ func TestCompactWikiHistory_RemainsDisabledBeforeRefUpdate_Issue1470(t *testing.
 	if err := svc.DB.Create(&owner).Error; err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	if err := svc.DB.Create(&db.User{
-		Login: "wiki-bot",
-		Name:  "Wiki Bot",
-		Email: "gh-server@localhost",
-		Type:  db.TypeUser,
-	}).Error; err != nil {
-		t.Fatalf("seed author user: %v", err)
-	}
 	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: owner.Login,
 		Name:       "wiki-compact-repair",
@@ -56,7 +48,6 @@ func TestCompactWikiHistory_RemainsDisabledBeforeRefUpdate_Issue1470(t *testing.
 		Count(&beforeChangesets).Error; err != nil {
 		t.Fatalf("count changesets before compact: %v", err)
 	}
-
 	if _, err := svc.CompactWikiHistory(ctx, full); !errors.Is(err, service.ErrConflict) {
 		t.Fatalf("CompactWikiHistory err = %v, want ErrConflict", err)
 	}
@@ -77,7 +68,6 @@ func TestCompactWikiHistory_RemainsDisabledBeforeRefUpdate_Issue1470(t *testing.
 	if afterChangesets != beforeChangesets {
 		t.Fatalf("changeset count after failure = %d, want %d", afterChangesets, beforeChangesets)
 	}
-
 	history, err := svc.ListWikiPageHistory(ctx, full, "home")
 	if err != nil {
 		t.Fatalf("ListWikiPageHistory(after failure): %v", err)
@@ -95,14 +85,6 @@ func TestCompactWikiHistory_DoesNotTouchStaleRefLockWhileDisabled_Issue1470(t *t
 	owner := db.User{Login: "wiki-compact-stale-lock-owner", Name: "wiki-compact-stale-lock-owner", Type: db.TypeUser}
 	if err := svc.DB.Create(&owner).Error; err != nil {
 		t.Fatalf("create owner: %v", err)
-	}
-	if err := svc.DB.Create(&db.User{
-		Login: "wiki-bot",
-		Name:  "Wiki Bot",
-		Email: "gh-server@localhost",
-		Type:  db.TypeUser,
-	}).Error; err != nil {
-		t.Fatalf("seed author user: %v", err)
 	}
 	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: owner.Login,
@@ -153,14 +135,6 @@ func TestCompactWikiHistory_RejectsFreshRefLockWithoutAdvancingCatalog(t *testin
 	owner := db.User{Login: "wiki-compact-fresh-lock-owner", Name: "wiki-compact-fresh-lock-owner", Type: db.TypeUser}
 	if err := svc.DB.Create(&owner).Error; err != nil {
 		t.Fatalf("create owner: %v", err)
-	}
-	if err := svc.DB.Create(&db.User{
-		Login: "wiki-bot",
-		Name:  "Wiki Bot",
-		Email: "gh-server@localhost",
-		Type:  db.TypeUser,
-	}).Error; err != nil {
-		t.Fatalf("seed author user: %v", err)
 	}
 	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: owner.Login,

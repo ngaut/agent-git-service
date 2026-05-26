@@ -18,14 +18,6 @@ func TestCompactWikiHistory_IsTemporarilyDisabled_Issue1470(t *testing.T) {
 	if err := svc.DB.Create(&owner).Error; err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	if err := svc.DB.Create(&db.User{
-		Login: "wiki-bot",
-		Name:  "Wiki Bot",
-		Email: "gh-server@localhost",
-		Type:  db.TypeUser,
-	}).Error; err != nil {
-		t.Fatalf("seed author user: %v", err)
-	}
 	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: owner.Login,
 		Name:       "wiki-compact",
@@ -35,6 +27,14 @@ func TestCompactWikiHistory_IsTemporarilyDisabled_Issue1470(t *testing.T) {
 	}
 	full := owner.Login + "/wiki-compact"
 
+	if err := svc.DB.Create(&db.User{
+		Login: "wiki-bot",
+		Name:  "Wiki Bot",
+		Email: "gh-server@localhost",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed author user: %v", err)
+	}
 	first, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nFirst version.\n", "create home", "")
 	if err != nil {
 		t.Fatalf("PutWikiPage(create): %v", err)

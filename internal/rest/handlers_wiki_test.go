@@ -94,16 +94,29 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 		t.Fatalf("nested page history sha must be populated")
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages", nil)
+	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?per_page=2", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
-	if len(rows) != 4 {
-		t.Fatalf("full list rows = %d, want 4", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("paginated list rows = %d, want 2", len(rows))
 	}
 	for _, row := range rows {
 		if sha, _ := row["sha"].(string); sha == "" {
 			t.Fatalf("list sha must be populated for %v", row["slug"])
 		}
+	}
+	if link := w.Header().Get("Link"); link == "" {
+		t.Fatal("expected Link header for paginated wiki list, got none")
+	}
+
+	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?page=2&per_page=2", nil)
+	assertStatusCode(t, w, http.StatusOK)
+	rows = testharness.DecodeJSONArray(t, w)
+	if len(rows) != 2 {
+		t.Fatalf("page 2 rows = %d, want 2", len(rows))
+	}
+	if rows[0]["slug"] != "guides/setup" || rows[1]["slug"] != "home" {
+		t.Fatalf("page 2 slugs = [%v %v], want [guides/setup home]", rows[0]["slug"], rows[1]["slug"])
 	}
 
 	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?path=guides", nil)
@@ -129,6 +142,84 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 			t.Fatalf("non-recursive row = %q, want direct child under guides", row["slug"])
 		}
 	}
+}
+
+func TestWiki_ListPagesPaginatesAcrossMixedSlugPrefixes_Issue1472(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+
+	if _, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: h.User.Login,
+		Name:       "wiki-1472-pagination",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	full := "testuser/wiki-1472-pagination"
+
+	slugs := []string{
+		"accounts/alpha",
+		"accounts/bravo",
+		"accounts/charlie",
+		"finance/q1",
+		"finance/q2",
+		"guides/install",
+		"guides/setup",
+		"home",
+	}
+	for _, slug := range slugs {
+		w := h.DoRESTJSON(t, "PUT", wikiPagePath(full, slug), map[string]any{
+			"body": fmt.Sprintf("# %s\n\nBody for %s.\n", titleFromSlugForTest(slug), slug),
+		})
+		assertStatusCode(t, w, http.StatusOK)
+	}
+
+	var seen []string
+	for page := 1; page <= 4; page++ {
+		w := h.DoREST(t, "GET", fmt.Sprintf("/api/v3/repos/%s/wiki/pages?page=%d&per_page=2", full, page), nil)
+		assertStatusCode(t, w, http.StatusOK)
+		rows := testharness.DecodeJSONArray(t, w)
+		if page < 4 && len(rows) != 2 {
+			t.Fatalf("page %d len = %d, want 2", page, len(rows))
+		}
+		if page == 4 && len(rows) != 2 {
+			t.Fatalf("page 4 len = %d, want 2", len(rows))
+		}
+		for _, row := range rows {
+			seen = append(seen, row["slug"].(string))
+		}
+	}
+
+	w := h.DoREST(t, "GET", fmt.Sprintf("/api/v3/repos/%s/wiki/pages?page=5&per_page=2", full), nil)
+	assertStatusCode(t, w, http.StatusOK)
+	rows := testharness.DecodeJSONArray(t, w)
+	if len(rows) != 0 {
+		t.Fatalf("page 5 len = %d, want 0", len(rows))
+	}
+
+	expected := []string{
+		"accounts/alpha",
+		"accounts/bravo",
+		"accounts/charlie",
+		"finance/q1",
+		"finance/q2",
+		"guides/install",
+		"guides/setup",
+		"home",
+	}
+	if strings.Join(seen, ",") != strings.Join(expected, ",") {
+		t.Fatalf("paginated slugs = %v, want %v", seen, expected)
+	}
+	if link := w.Header().Get("Link"); !strings.Contains(link, "page=4") || !strings.Contains(link, "rel=\"last\"") {
+		t.Fatalf("page 5 Link header = %q, want last page=4", link)
+	}
+}
+
+func titleFromSlugForTest(slug string) string {
+	parts := strings.Split(slug, "/")
+	last := parts[len(parts)-1]
+	last = strings.ReplaceAll(last, "-", " ")
+	return strings.Title(last)
 }
 
 func TestWiki_PutNestedPageWithEncodedRepoName(t *testing.T) {
