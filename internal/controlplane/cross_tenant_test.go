@@ -120,7 +120,7 @@ func setupMultiTenantTest(t *testing.T) (*controlplane.DBRouter, *service.Servic
 	gitHandler := githttp.New(gitStore, svcA)
 	oauthHandler := oauth.New(svcA)
 
-	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, cpRouter, "/api/v3", "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, cpRouter, "http://console.localhost")
 
 	cleanup := func() {
 		cpRouter.Close()

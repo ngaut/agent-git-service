@@ -29,8 +29,7 @@ const defaultRESTPrefix = "/api/v3"
 // mux that handles api.github.localhost path rewriting.
 // dbRouter is optional: when non-nil, tokens are resolved through the control
 // plane for multi-agent DB routing. When nil, current single-DB behavior is used.
-func RegisterRoutes(r chi.Router, handlers *rest.Deps, gitHandler *githttp.Handler, gqlSrv *graphql.Server, oauthHandler *oauth.Handler, dbRouter *controlplane.DBRouter, restPrefix string, consoleBaseURL string) http.Handler {
-	restPrefix = normalizeRESTPrefix(restPrefix)
+func RegisterRoutes(r chi.Router, handlers *rest.Deps, gitHandler *githttp.Handler, gqlSrv *graphql.Server, oauthHandler *oauth.Handler, dbRouter *controlplane.DBRouter, consoleBaseURL string) http.Handler {
 	// Keep the default 50 MB cap for API traffic, but let git-receive-pack
 	// enforce its own GitHub-style push limit in internal/githttp.
 	r.Use(srvmiddleware.MaxBodySizeUnless(defaultNonGitBodyLimitBytes, func(r *http.Request) bool {
@@ -54,48 +53,8 @@ func RegisterRoutes(r chi.Router, handlers *rest.Deps, gitHandler *githttp.Handl
 	registerPublicRepoRoutes(r, handlers, dbRouter, rateLimitMw)
 	registerAuthenticatedRoutes(r, handlers, gqlSrv, dbRouter, rateLimitMw)
 	registerNotFoundHandler(r)
-	if restPrefix != defaultRESTPrefix {
-		registerRESTPrefixAlias(r, restPrefix)
-	}
 
-	return registerHostMux(r, restPrefix)
-}
-
-func normalizeRESTPrefix(prefix string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		return defaultRESTPrefix
-	}
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
-	}
-	prefix = strings.TrimRight(prefix, "/")
-	if prefix == "" {
-		return "/"
-	}
-	return prefix
-}
-
-func registerRESTPrefixAlias(r chi.Router, restPrefix string) {
-	aliasHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		clone := req.Clone(req.Context())
-		suffix := strings.TrimPrefix(req.URL.Path, restPrefix)
-		if suffix == "" {
-			suffix = "/"
-		}
-		clone.URL.Path = defaultRESTPrefix + suffix
-		if req.URL.RawPath != "" {
-			rawSuffix := strings.TrimPrefix(req.URL.RawPath, restPrefix)
-			if rawSuffix == "" {
-				rawSuffix = "/"
-			}
-			clone.URL.RawPath = defaultRESTPrefix + rawSuffix
-		}
-		r.ServeHTTP(w, clone)
-	})
-	r.Handle(restPrefix, aliasHandler)
-	r.Handle(restPrefix+"/", aliasHandler)
-	r.Handle(restPrefix+"/*", aliasHandler)
+	return registerHostMux(r)
 }
 
 func corsMiddleware(consoleBaseURL string) func(http.Handler) http.Handler {
@@ -988,7 +947,7 @@ func registerNotFoundHandler(r chi.Router) {
 //
 //	REST:    http://api.github.localhost/users/X   (no /api/v3/ prefix)
 //	GraphQL: http://api.github.localhost/graphql
-func registerHostMux(r chi.Router, restPrefix string) http.Handler {
+func registerHostMux(r chi.Router) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		host := req.Host
 		// Strip port if present
@@ -1000,9 +959,9 @@ func registerHostMux(r chi.Router, restPrefix string) http.Handler {
 			if p == "/graphql" {
 				req.URL.Path = "/api/graphql"
 			} else if !strings.HasPrefix(p, "/api/") {
-				req.URL.Path = restPrefix + p
+				req.URL.Path = defaultRESTPrefix + p
 				if req.URL.RawPath != "" {
-					req.URL.RawPath = restPrefix + req.URL.RawPath
+					req.URL.RawPath = defaultRESTPrefix + req.URL.RawPath
 				}
 			}
 		}

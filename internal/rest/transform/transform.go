@@ -19,8 +19,7 @@ import (
 )
 
 type state struct {
-	baseURL   string
-	apiPrefix string
+	baseURL string
 }
 
 var defaultState atomic.Value
@@ -28,39 +27,33 @@ var overrideStates sync.Map
 
 func init() {
 	defaultState.Store(state{
-		baseURL:   "",
-		apiPrefix: "/api/v3",
+		baseURL: "",
 	})
 }
 
 // Init sets the base URL used by all transform functions.
 // Must be called once at startup before any handler serves requests.
-func Init(base string, prefix ...string) {
+func Init(base string) {
 	next := state{
-		baseURL:   base,
-		apiPrefix: "/api/v3",
-	}
-	if len(prefix) > 0 {
-		next.apiPrefix = normalizePrefix(prefix[0])
+		baseURL: base,
 	}
 	defaultState.Store(next)
 }
 
 // Wrap scopes transform URL state to a single handler invocation.
-func Wrap(base, prefix string, next func()) {
+func Wrap(base string, next func()) {
 	gid, ok := currentGoroutineID()
 	if !ok {
 		prev := currentState()
-		Init(base, prefix)
-		defer Init(prev.baseURL, prev.apiPrefix)
+		Init(base)
+		defer Init(prev.baseURL)
 		next()
 		return
 	}
 
 	prev, hadPrev := overrideStates.Load(gid)
 	overrideStates.Store(gid, state{
-		baseURL:   base,
-		apiPrefix: normalizePrefix(prefix),
+		baseURL: base,
 	})
 	defer func() {
 		if hadPrev {
@@ -81,7 +74,7 @@ func currentState() state {
 	if v := defaultState.Load(); v != nil {
 		return v.(state)
 	}
-	return state{apiPrefix: "/api/v3"}
+	return state{}
 }
 
 func currentGoroutineID() (uint64, bool) {
@@ -107,11 +100,11 @@ func Base() string { return currentState().baseURL }
 
 func apiBase() string {
 	st := currentState()
-	return strings.TrimRight(st.baseURL, "/") + st.apiPrefix
+	return strings.TrimRight(st.baseURL, "/") + APIPrefix()
 }
 
-// APIBase returns the absolute API base URL, including the configured REST
-// prefix, for handlers that build URLs outside the transform package.
+// APIBase returns the absolute API base URL for handlers that build URLs
+// outside the transform package.
 func APIBase() string { return apiBase() }
 
 // host extracts the hostname from baseURL for ssh/git URL generation.
@@ -134,7 +127,7 @@ func HTMLBase() string {
 	return strings.Replace(base(), "http://", "https://", 1)
 }
 
-func APIPrefix() string { return currentState().apiPrefix }
+func APIPrefix() string { return "/api/v3" }
 
 func repoAPIURL(fullName string) string  { return base() + APIPrefix() + "/repos/" + fullName }
 func repoHTMLURL(fullName string) string { return htmlBase() + "/" + fullName }
@@ -167,21 +160,6 @@ func nodeID(typ string, id any) string {
 
 func actionRunURL(fullName string, runID uint) string {
 	return fmt.Sprintf("%s%s/repos/%s/actions/runs/%d", base(), APIPrefix(), fullName, runID)
-}
-
-func normalizePrefix(prefix string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		return "/api/v3"
-	}
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
-	}
-	prefix = strings.TrimRight(prefix, "/")
-	if prefix == "" {
-		return "/"
-	}
-	return prefix
 }
 
 // User converts a db.User to a GitHub REST API user object.

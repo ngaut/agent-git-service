@@ -114,9 +114,8 @@ func TestWrap_IsolatesConcurrentState(t *testing.T) {
 	t.Cleanup(func() { transform.Init(testBase) })
 
 	type result struct {
-		base   string
-		api    string
-		prefix string
+		base string
+		api  string
 	}
 
 	results := make(chan result, 2)
@@ -124,28 +123,27 @@ func TestWrap_IsolatesConcurrentState(t *testing.T) {
 	var ready sync.WaitGroup
 	ready.Add(2)
 
-	run := func(base, prefix string) {
-		transform.Wrap(base, prefix, func() {
+	run := func(base string) {
+		transform.Wrap(base, func() {
 			ready.Done()
 			<-start
 			results <- result{
-				base:   transform.Base(),
-				api:    transform.APIBase(),
-				prefix: transform.APIPrefix(),
+				base: transform.Base(),
+				api:  transform.APIBase(),
 			}
 		})
 	}
 
-	go run("http://one.local", "/api/v1")
-	go run("http://two.local", "/api/v9")
+	go run("http://one.local")
+	go run("http://two.local")
 
 	ready.Wait()
 	close(start)
 
 	got := []result{<-results, <-results}
 	want := map[string]string{
-		"http://one.local": "http://one.local/api/v1",
-		"http://two.local": "http://two.local/api/v9",
+		"http://one.local": "http://one.local/api/v3",
+		"http://two.local": "http://two.local/api/v3",
 	}
 	for _, item := range got {
 		if item.api != want[item.base] {

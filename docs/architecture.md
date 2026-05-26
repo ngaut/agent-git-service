@@ -116,7 +116,7 @@ Shutdown is graceful with a 10-second timeout.
 Route wiring lives in `internal/router/router.go`.
 That file is the executable truth for concrete endpoints.
 This document records the stable structure around those routes.
-The default REST prefix is `/api/v3`, and embedders can additionally expose the same REST surface under a custom prefix through `config.Config.RESTPrefix`.
+The REST prefix is fixed at `/api/v3` to remain compatible with GitHub-compatible clients, including `gh`.
 
 ### Request Families
 

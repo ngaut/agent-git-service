@@ -13,7 +13,6 @@ import (
 type Config struct {
 	Port       string
 	BaseURL    string
-	RESTPrefix string
 	DBdsn      string
 	GitRepoDir string
 
@@ -82,7 +81,6 @@ func New() (Config, error) {
 	cfg := Config{
 		Port:           os.Getenv("PORT"),
 		BaseURL:        os.Getenv("BASE_URL"),
-		RESTPrefix:     os.Getenv("REST_PREFIX"),
 		ConsoleBaseURL: os.Getenv("CONSOLE_BASE_URL"),
 		DBdsn:          os.Getenv("DB_DSN"),
 		GitRepoDir:     os.Getenv("GIT_REPO_DIR"),
@@ -141,7 +139,6 @@ func New() (Config, error) {
 func Normalize(cfg Config) (Config, error) {
 	cfg.Port = firstNonEmpty(cfg.Port, "8080")
 	cfg.BaseURL = firstNonEmpty(cfg.BaseURL, "http://localhost:8080")
-	cfg.RESTPrefix = normalizeRESTPrefix(firstNonEmpty(cfg.RESTPrefix, "/api/v3"))
 	cfg.ConsoleBaseURL = firstNonEmpty(cfg.ConsoleBaseURL, "http://localhost:5173")
 	cfg.GitRepoDir = firstNonEmpty(cfg.GitRepoDir, "gitrepos")
 	cfg.ListenMode = firstNonEmpty(cfg.ListenMode, "development")
@@ -203,19 +200,4 @@ func firstNonEmpty(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func normalizeRESTPrefix(prefix string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		return "/api/v3"
-	}
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
-	}
-	prefix = strings.TrimRight(prefix, "/")
-	if prefix == "" {
-		return "/"
-	}
-	return prefix
 }
