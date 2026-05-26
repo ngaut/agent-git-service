@@ -5,8 +5,6 @@ Update it when behavior, package boundaries, or the local development workflow c
 Avoid putting transient status here such as exact passing test counts; the codebase and CI are the truth for fast-moving inventory.
 This document records the current implemented architecture. Planned multi-agent changes live in [design/multi-agent.md](design/multi-agent.md) until the corresponding code lands.
 
-Wiki compaction is catalog-first and insert-only. A compact attempt creates one new changeset plus one new revision per live page, marks older revisions/changesets as superseded instead of deleting them, and only materializes an optional git projection after the catalog transaction commits.
-
 ## Purpose
 
 `agent-git-service` is a self-hosted Git-backed server for standard GitHub-compatible API and Git transport workflows. The development binary is currently named `gh-server`.
@@ -34,15 +32,11 @@ Authority is split by concern:
 - The relational database is authoritative for higher-level metadata such as users, auth, issues, pull requests, reviews, labels, workflow records, and related product state.
 - `service` coordinates flows that need both Git-backed and DB-backed state.
 
-Current wiki exception:
+Current wiki contract:
 
-- Wiki page content and history are authoritative in `wikicatalog` tables after the catalog cutover.
-- The sibling bare `*.wiki.git` repository remains a materialized projection maintained by the post-commit hook plus the git receive-pack migration hook so clone, fetch, pull, and ref-pinned reads still preserve real Git semantics for clients.
-
-Planned wiki replacement:
-
-- The approved target direction for issue #1488 is documented in [architecture/wiki-storage-v2.md](architecture/wiki-storage-v2.md).
-- Until that rewrite lands, the current catalog-first wiki exception above remains the implemented production contract.
+- The sibling bare `*.wiki.git` repository is the durable authority for wiki page content, path layout, commit history, ref-pinned reads, rename semantics, and prefix moves.
+- TiDB-backed wiki tables still serve current-page and search/list read paths through catalog-backed projections while the final #1488 cutover and cleanup work remains in progress.
+- Remaining wiki re-architecture work for issue #1488 is about removing those transitional read paths so current-page and indexed metadata reads become obviously rebuildable from git without reintroducing catalog-first writes.
 
 This does not prohibit repository- or pull-request-related metadata in the database.
 The rule is about authority: Git-native behavior stays Git-backed, while relational metadata stays DB-backed.
