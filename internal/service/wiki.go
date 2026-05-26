@@ -736,12 +736,6 @@ func (s *Service) withWikiCatalogWriteLock(ctx context.Context, repoFullName str
 // replaces the legacy "git ls-tree + per-page git log" walk that
 // produced 55 s sidebar latencies at 3000 pages.
 func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts ListWikiPagesOptions) ([]WikiPageSummary, error) {
-	if s.WikiCatalog == nil {
-		return nil, errors.New("wiki catalog unavailable")
-	}
-	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
-		return nil, err
-	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return nil, err
@@ -750,6 +744,17 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 		if err := validateReadableWikiSlug(opts.Path); err != nil {
 			return nil, err
 		}
+	}
+	if rows, ok, err := s.loadCurrentWikiV2Rows(ctx, repoFullName, rep.ID); err != nil {
+		return nil, err
+	} else if ok {
+		return s.listWikiPagesFromV2Rows(ctx, rep.ID, rows, opts)
+	}
+	if s.WikiCatalog == nil {
+		return nil, errors.New("wiki catalog unavailable")
+	}
+	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+		return nil, err
 	}
 
 	var pages []db.WikiPage
@@ -875,12 +880,6 @@ func (s *Service) GetWikiPageAtRef(ctx context.Context, repoFullName, slug, ref 
 	if err := validateReadableWikiSlug(slug); err != nil {
 		return WikiPage{}, ErrNotFound
 	}
-	if s.WikiCatalog == nil {
-		return WikiPage{}, errors.New("wiki catalog unavailable")
-	}
-	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
-		return WikiPage{}, err
-	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return WikiPage{}, err
@@ -888,6 +887,20 @@ func (s *Service) GetWikiPageAtRef(ctx context.Context, repoFullName, slug, ref 
 	ref = strings.TrimSpace(ref)
 	if ref != "" && !wikiCommitSHARE.MatchString(ref) {
 		return WikiPage{}, fmt.Errorf("%w: invalid ref", ErrValidation)
+	}
+
+	if ref == "" {
+		if page, ok, err := s.getWikiPageFromV2(ctx, repoFullName, rep.ID, slug); err != nil {
+			return WikiPage{}, err
+		} else if ok {
+			return page, nil
+		}
+	}
+	if s.WikiCatalog == nil {
+		return WikiPage{}, errors.New("wiki catalog unavailable")
+	}
+	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+		return WikiPage{}, err
 	}
 
 	if ref == "" {
@@ -910,6 +923,140 @@ func (s *Service) GetWikiPageAtRef(ctx context.Context, repoFullName, slug, ref 
 	// keyed by the page row's slug_ci_v1 (which the catalog updates on
 	// every rename) plus the commit SHA pin.
 	return s.getWikiPageAtRevision(ctx, rep.ID, slug, ref)
+}
+
+func (s *Service) getWikiPageFromV2(ctx context.Context, repoFullName string, repoID uint, slug string) (WikiPage, bool, error) {
+	row, ok, err := s.loadCurrentWikiV2Page(ctx, repoFullName, repoID, slug)
+	if err != nil || !ok {
+		return WikiPage{}, ok, err
+	}
+	body, _, err := s.Git.ReadFileWithSHAAtRef(ctx, wikiRepoFullName(repoFullName), wikiSlugToPath(row.Slug), row.HeadCommitSHA)
+	if err != nil {
+		return WikiPage{}, false, nil
+	}
+	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, repoID, []string{row.Slug})
+	if err != nil {
+		return WikiPage{}, false, err
+	}
+	return WikiPage{
+		Slug:       row.Slug,
+		Title:      row.Title,
+		Body:       string(body),
+		UpdatedAt:  row.UpdatedAt,
+		SHA:        row.HeadBlobSHA,
+		LastAuthor: row.LastAuthor,
+		Labels:     labelsBySlug[row.Slug],
+	}, true, nil
+}
+
+func (s *Service) listWikiPagesFromV2Rows(ctx context.Context, repoID uint, rows []db.WikiPageIndex, opts ListWikiPagesOptions) ([]WikiPageSummary, error) {
+	pageSlugs := make([]string, 0, len(rows))
+	filtered := make([]db.WikiPageIndex, 0, len(rows))
+	for _, row := range rows {
+		if !wikiSlugMatchesPathFilter(row.Slug, opts.Path, opts.Recursive) {
+			continue
+		}
+		filtered = append(filtered, row)
+		pageSlugs = append(pageSlugs, row.Slug)
+	}
+
+	labelFilters := WikiLabelFilters{Labels: opts.Labels, ExcludeLabels: opts.ExcludeLabels}
+	var allowedSlugs map[string]struct{}
+	var err error
+	if hasWikiLabelFilters(labelFilters) {
+		var noResults bool
+		allowedSlugs, noResults, err = s.wikiSlugsMatchingLabelFilters(ctx, repoID, pageSlugs, labelFilters)
+		if err != nil {
+			return nil, err
+		}
+		if noResults {
+			return []WikiPageSummary{}, nil
+		}
+	}
+	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, repoID, pageSlugs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]WikiPageSummary, 0, len(filtered))
+	for _, row := range filtered {
+		if allowedSlugs != nil {
+			if _, ok := allowedSlugs[row.Slug]; !ok {
+				continue
+			}
+		}
+		out = append(out, WikiPageSummary{
+			Slug:       row.Slug,
+			Title:      row.Title,
+			SHA:        row.HeadBlobSHA,
+			UpdatedAt:  row.UpdatedAt,
+			LastAuthor: row.LastAuthor,
+			Labels:     labelsBySlug[row.Slug],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out, nil
+}
+
+func (s *Service) loadCurrentWikiV2Page(ctx context.Context, repoFullName string, repoID uint, slug string) (db.WikiPageIndex, bool, error) {
+	headSHA, ok, err := s.loadCurrentWikiV2HeadSHA(ctx, repoFullName, repoID)
+	if err != nil || !ok {
+		return db.WikiPageIndex{}, false, err
+	}
+	var row db.WikiPageIndex
+	if err := s.DBForCtx(ctx).
+		Preload("LastAuthor").
+		Where("repository_id = ? AND slug = ? AND LOWER(head_commit_sha) = LOWER(?)", repoID, slug, headSHA).
+		Take(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return db.WikiPageIndex{}, false, nil
+		}
+		return db.WikiPageIndex{}, false, err
+	}
+	return row, true, nil
+}
+
+func (s *Service) loadCurrentWikiV2Rows(ctx context.Context, repoFullName string, repoID uint) ([]db.WikiPageIndex, bool, error) {
+	headSHA, ok, err := s.loadCurrentWikiV2HeadSHA(ctx, repoFullName, repoID)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	var rows []db.WikiPageIndex
+	if err := s.DBForCtx(ctx).
+		Preload("LastAuthor").
+		Where("repository_id = ? AND LOWER(head_commit_sha) = LOWER(?)", repoID, headSHA).
+		Find(&rows).Error; err != nil {
+		return nil, false, err
+	}
+	return rows, true, nil
+}
+
+func (s *Service) loadCurrentWikiV2HeadSHA(ctx context.Context, repoFullName string, repoID uint) (string, bool, error) {
+	if s.Git == nil {
+		return "", false, nil
+	}
+	full := wikiRepoFullName(repoFullName)
+	if !s.Git.Exists(ctx, full) || s.Git.IsEmpty(ctx, full) {
+		return "", false, nil
+	}
+	liveHeadSHA, err := s.Git.ResolveContentCommit(ctx, full, wikiDefaultBranch)
+	if err != nil {
+		return "", false, err
+	}
+	var state db.WikiIndexState
+	if err := s.DBForCtx(ctx).First(&state, "repository_id = ?", repoID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, nil
+		}
+		if isMissingTableErr(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(state.IndexedCommitSHA), strings.TrimSpace(liveHeadSHA)) {
+		return "", false, nil
+	}
+	return liveHeadSHA, true, nil
 }
 
 // getWikiPageAtRevision returns a single page projected from the

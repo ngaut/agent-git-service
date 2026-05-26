@@ -176,3 +176,78 @@ func TestReconcileWikiV2UsesPerPageCommitMetadata(t *testing.T) {
 		t.Fatalf("updated_at order = [%s, %s], want later commit on guides/setup", rows[0].UpdatedAt, rows[1].UpdatedAt)
 	}
 }
+
+func TestWikiV2HeadReadsUseDerivedIndexWhenCurrent(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	setupRepoForTest(t, svc, "v2reader", "wiki-v2-derived")
+	full := "v2reader/wiki-v2-derived"
+
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nFrom git.\n", "seed home", ""); err != nil {
+		t.Fatalf("PutWikiPage(home): %v", err)
+	}
+	if _, err := svc.ReconcileWikiV2(ctx, full); err != nil {
+		t.Fatalf("ReconcileWikiV2: %v", err)
+	}
+
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	if err := svc.DB.Where("repository_id = ?", repo.ID).Delete(&db.WikiPage{}).Error; err != nil {
+		t.Fatalf("delete legacy wiki pages: %v", err)
+	}
+
+	page, err := svc.GetWikiPage(ctx, full, "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage(home): %v", err)
+	}
+	if page.Slug != "home" || page.Body != "# Home\n\nFrom git.\n" {
+		t.Fatalf("unexpected v2 page: %+v", page)
+	}
+
+	pages, err := svc.ListWikiPages(ctx, full, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages: %v", err)
+	}
+	if len(pages) != 1 || pages[0].Slug != "home" {
+		t.Fatalf("unexpected v2 list result: %+v", pages)
+	}
+}
+
+func TestWikiV2HeadReadsFallBackWhenIndexStateIsStale(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	setupRepoForTest(t, svc, "v2stale", "wiki-v2-stale")
+	full := "v2stale/wiki-v2-stale"
+
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n", "seed home", ""); err != nil {
+		t.Fatalf("PutWikiPage(home): %v", err)
+	}
+	if _, err := svc.ReconcileWikiV2(ctx, full); err != nil {
+		t.Fatalf("ReconcileWikiV2: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "guides/setup", "# Setup\n", "seed setup", ""); err != nil {
+		t.Fatalf("PutWikiPage(guides/setup): %v", err)
+	}
+
+	pages, err := svc.ListWikiPages(ctx, full, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("ListWikiPages count = %d, want 2 after fallback", len(pages))
+	}
+
+	page, err := svc.GetWikiPage(ctx, full, "guides/setup")
+	if err != nil {
+		t.Fatalf("GetWikiPage(guides/setup): %v", err)
+	}
+	if page.Slug != "guides/setup" {
+		t.Fatalf("unexpected fallback page: %+v", page)
+	}
+}
