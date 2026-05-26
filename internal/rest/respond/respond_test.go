@@ -236,6 +236,12 @@ func TestServiceError(t *testing.T) {
 			wantMsg:    "duplicate: conflict",
 		},
 		{
+			name:       "context canceled maps to client closed request",
+			err:        fmt.Errorf("query aborted: %w", context.Canceled),
+			wantStatus: respond.StatusClientClosedRequest,
+			wantMsg:    "Client Closed Request",
+		},
+		{
 			name:       "unknown error",
 			err:        errors.New("something broke"),
 			wantStatus: http.StatusInternalServerError,
@@ -309,6 +315,39 @@ func TestServiceErrorContext_LogsInternalErrorsAtErrorLevel(t *testing.T) {
 	}
 	if !strings.Contains(logLine, "error_kind=internal") {
 		t.Fatalf("expected error_kind=internal in log, got %q", logLine)
+	}
+}
+
+func TestServiceErrorContext_LogsContextCanceledAsClientClosed(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	slog.SetDefault(logger)
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+	})
+
+	w := httptest.NewRecorder()
+	respond.ServiceErrorContext(context.Background(), w, fmt.Errorf("query aborted: %w", context.Canceled))
+
+	if w.Code != respond.StatusClientClosedRequest {
+		t.Fatalf("status = %d, want %d", w.Code, respond.StatusClientClosedRequest)
+	}
+	logLine := buf.String()
+	if !strings.Contains(logLine, "level=INFO") {
+		t.Fatalf("expected INFO level log, got %q", logLine)
+	}
+	if strings.Contains(logLine, "level=ERROR") {
+		t.Fatalf("did not expect ERROR level log, got %q", logLine)
+	}
+	if !strings.Contains(logLine, "msg=\"service request canceled\"") {
+		t.Fatalf("expected canceled service log, got %q", logLine)
+	}
+	if !strings.Contains(logLine, "status=499") {
+		t.Fatalf("expected status=499 in log, got %q", logLine)
+	}
+	if !strings.Contains(logLine, "error_kind=client_closed") {
+		t.Fatalf("expected error_kind=client_closed in log, got %q", logLine)
 	}
 }
 

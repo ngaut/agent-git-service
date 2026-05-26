@@ -2,7 +2,6 @@ package rest
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,7 +42,11 @@ func (d *Deps) SearchRepos(w http.ResponseWriter, r *http.Request) {
 		var err error
 		repos, err = d.Svc.SearchRepos(r.Context(), q)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "search repositories failed", "query", q, "error", err)
+			if isContextCanceled(err) {
+				respond.ServiceErrorRequest(r, w, err)
+				return
+			}
+			logErr(r.Context(), "search repositories failed", err, "query", q)
 			respond.JSON(w, http.StatusInternalServerError, map[string]any{"error": "internal server error"})
 			return
 		}
@@ -356,7 +359,7 @@ func (d *Deps) SearchIssues(w http.ResponseWriter, r *http.Request) {
 	if sq.IsPR {
 		prs, err := d.Svc.SearchPRs(r.Context(), q)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "search pull requests failed", "query", q, "error", err)
+			logErr(r.Context(), "search pull requests failed", err, "query", q)
 		}
 		for _, pr := range prs {
 			assoc := getAssoc(pr.Repository)
@@ -367,7 +370,7 @@ func (d *Deps) SearchIssues(w http.ResponseWriter, r *http.Request) {
 	} else {
 		issues, err := d.Svc.SearchIssues(r.Context(), q)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "search issues failed", "query", q, "error", err)
+			logErr(r.Context(), "search issues failed", err, "query", q)
 		}
 		// Batch-fetch reaction counts for all issues in one query
 		// instead of N individual queries.
@@ -377,7 +380,7 @@ func (d *Deps) SearchIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		allReactions, err := d.Svc.CountReactionsBatch(r.Context(), issueIDs)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "search issues batch reaction count failed", "error", err)
+			logErr(r.Context(), "search issues batch reaction count failed", err)
 			allReactions = nil
 		}
 		for _, iss := range issues {
@@ -646,7 +649,11 @@ func (d *Deps) SearchCommits(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		if err := g.Wait(); err != nil {
-			slog.ErrorContext(r.Context(), "search commits failed", "query", q, "error", err)
+			if isContextCanceled(err) {
+				respond.ServiceErrorRequest(r, w, err)
+				return
+			}
+			logErr(r.Context(), "search commits failed", err, "query", q)
 			respond.JSON(w, http.StatusInternalServerError, map[string]any{"error": "internal server error"})
 			return
 		}
@@ -766,7 +773,11 @@ func (d *Deps) SearchCode(w http.ResponseWriter, r *http.Request) {
 
 	viewerRepos, err := d.Svc.ListViewerRepos(r.Context())
 	if err != nil {
-		slog.ErrorContext(r.Context(), "search code list viewer repos failed", "query", q, "error", err)
+		if isContextCanceled(err) {
+			respond.ServiceErrorRequest(r, w, err)
+			return
+		}
+		logErr(r.Context(), "search code list viewer repos failed", err, "query", q)
 		respond.JSON(w, http.StatusInternalServerError, map[string]any{"error": "internal server error"})
 		return
 	}
@@ -850,7 +861,11 @@ func (d *Deps) SearchCode(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err := g.Wait(); err != nil {
-		slog.ErrorContext(r.Context(), "search code failed", "query", q, "error", err)
+		if isContextCanceled(err) {
+			respond.ServiceErrorRequest(r, w, err)
+			return
+		}
+		logErr(r.Context(), "search code failed", err, "query", q)
 		respond.JSON(w, http.StatusInternalServerError, map[string]any{"error": "internal server error"})
 		return
 	}

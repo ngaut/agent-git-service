@@ -398,10 +398,16 @@ func (d *Deps) mustGetOrg(w http.ResponseWriter, r *http.Request) *db.User {
 }
 
 // logErr logs a non-nil error from a service call that would otherwise be swallowed.
-func logErr(ctx context.Context, op string, err error) {
-	if err != nil {
-		slog.ErrorContext(ctx, op, "error", err)
+func logErr(ctx context.Context, op string, err error, attrs ...any) {
+	if err == nil || isContextCanceled(err) {
+		return
 	}
+	attrs = append(attrs, "error", err)
+	slog.ErrorContext(ctx, op, attrs...)
+}
+
+func isContextCanceled(err error) bool {
+	return errors.Is(err, context.Canceled)
 }
 
 // decodeBody decodes JSON from the request body into dst.

@@ -5,6 +5,9 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
+
+	gormlogger "gorm.io/gorm/logger"
 )
 
 type logEntry struct {
@@ -78,4 +81,22 @@ func captureLogs(t *testing.T) *logSink {
 		slog.SetDefault(prev)
 	})
 	return sink
+}
+
+func TestGormSlogLoggerSkipsContextCanceledTrace(t *testing.T) {
+	sink := captureLogs(t)
+	logger := &gormSlogLogger{cfg: gormlogger.Config{LogLevel: gormlogger.Warn}}
+
+	fcCalled := false
+	logger.Trace(context.Background(), time.Now(), func() (string, int64) {
+		fcCalled = true
+		return "SELECT * FROM issues", 0
+	}, context.Canceled)
+
+	if fcCalled {
+		t.Fatal("did not expect SQL formatter to run for context cancellation")
+	}
+	if entries := sink.Entries(); len(entries) != 0 {
+		t.Fatalf("expected no logs for context cancellation, got %#v", entries)
+	}
 }

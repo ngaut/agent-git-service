@@ -19,6 +19,7 @@ import (
 const (
 	maxCapturedErrorBodyBytes  = 4 << 10
 	maxLoggedErrorMessageRunes = 512
+	statusClientClosedRequest  = 499
 )
 
 // RequestLogging attaches request-scoped structured fields and emits a single
@@ -69,6 +70,8 @@ func RequestLogging() func(http.Handler) http.Handler {
 			switch {
 			case status >= 500:
 				slog.ErrorContext(ctx, "http request completed", args...)
+			case status == statusClientClosedRequest:
+				slog.InfoContext(ctx, "http request completed", args...)
 			case status >= 400:
 				slog.WarnContext(ctx, "http request completed", args...)
 			default:

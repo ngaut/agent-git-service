@@ -69,6 +69,9 @@ func (l *gormSlogLogger) Trace(ctx context.Context, begin time.Time, fc func() (
 	if l.cfg.LogLevel == gormlogger.Silent {
 		return
 	}
+	if errors.Is(err, context.Canceled) {
+		return
+	}
 
 	elapsed := time.Since(begin)
 	switch {
