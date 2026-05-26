@@ -1031,6 +1031,155 @@ func (s *Service) loadCurrentWikiV2Rows(ctx context.Context, repoFullName string
 	return rows, true, nil
 }
 
+func (s *Service) listWikiPageHistoryFromV2(ctx context.Context, repoFullName string, repoID uint, slug string, page, perPage int) ([]WikiPageHistoryEntry, int, bool, error) {
+	if _, ok, err := s.loadCurrentWikiV2Page(ctx, repoFullName, repoID, slug); err != nil || !ok {
+		return nil, 0, ok, err
+	}
+	var total int64
+	if err := s.DBForCtx(ctx).Model(&db.WikiPageHistory{}).
+		Where("repository_id = ? AND slug = ?", repoID, slug).
+		Count(&total).Error; err != nil {
+		return nil, 0, false, err
+	}
+	if total == 0 {
+		return nil, 0, false, nil
+	}
+	var missingSequenceCount int64
+	if err := s.DBForCtx(ctx).Model(&db.WikiPageHistory{}).
+		Where("repository_id = ? AND slug = ?", repoID, slug).
+		Where("path_sequence <= 0").
+		Count(&missingSequenceCount).Error; err != nil {
+		return nil, 0, false, err
+	}
+	if missingSequenceCount > 0 {
+		return nil, 0, false, nil
+	}
+	if slugCI, err := wikicatalog.CanonicalV1(slug); err == nil {
+		var pageRow db.WikiPage
+		err := s.DBForCtx(ctx).Unscoped().
+			Select("page_id").
+			Where("repository_id = ? AND slug_ci_v1 = ?", repoID, slugCI).
+			Take(&pageRow).Error
+		switch {
+		case err == nil:
+			var legacyTotal int64
+			if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
+				Where("page_id = ? AND superseded_by_changeset_id IS NULL", pageRow.PageID).
+				Count(&legacyTotal).Error; err != nil {
+				return nil, 0, false, err
+			}
+			if legacyTotal > 0 && legacyTotal != total {
+				return nil, 0, false, nil
+			}
+		case errors.Is(err, gorm.ErrRecordNotFound):
+		default:
+			return nil, 0, false, err
+		}
+	}
+	if page < 1 {
+		page = 1
+	}
+	if perPage <= 0 {
+		perPage = 30
+	}
+	offset := (page - 1) * perPage
+	var rows []db.WikiPageHistory
+	query := s.DBForCtx(ctx).
+		Preload("Author").
+		Preload("Committer").
+		Where("repository_id = ? AND slug = ?", repoID, slug)
+	if err := query.
+		Order("committed_at desc, path_sequence desc, commit_sha desc").
+		Offset(offset).Limit(perPage).
+		Find(&rows).Error; err != nil {
+		return nil, 0, false, err
+	}
+	if len(rows) == 0 {
+		return []WikiPageHistoryEntry{}, int(total), true, nil
+	}
+	out := make([]WikiPageHistoryEntry, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, WikiPageHistoryEntry{
+			SHA:       row.CommitSHA,
+			Message:   row.Message,
+			Author:    row.Author,
+			Committer: row.Committer,
+			Date:      row.CommittedAt,
+			BodySize:  row.BodySize,
+		})
+	}
+	return out, int(total), true, nil
+}
+
+func (s *Service) listWikiBacklinksFromV2(ctx context.Context, repoFullName string, repoID uint, slug string) ([]WikiBacklink, bool, error) {
+	headSHA, ok, err := s.loadCurrentWikiV2HeadSHA(ctx, repoFullName, repoID)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var state db.WikiIndexState
+	if err := s.DBForCtx(ctx).Select("backlinks_indexed_sha").First(&state, "repository_id = ?", repoID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) || isMissingTableErr(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(state.BacklinksIndexedSHA), strings.TrimSpace(headSHA)) {
+		return nil, false, nil
+	}
+	rows, ok, err := s.loadCurrentWikiV2Rows(ctx, repoFullName, repoID)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	pages := make(map[string]struct{}, len(rows))
+	topLevelPages := make(map[string]struct{}, len(rows))
+	canonicalPages := make(map[string]string, len(rows))
+	canonicalTopLevelPages := make(map[string]string, len(rows))
+	for _, row := range rows {
+		pages[row.Slug] = struct{}{}
+		if !strings.Contains(row.Slug, "/") {
+			topLevelPages[row.Slug] = struct{}{}
+		}
+		if canonical := canonicalWikiLookupSlug(row.Slug); canonical != "" {
+			canonicalPages[canonical] = row.Slug
+			if !strings.Contains(row.Slug, "/") {
+				canonicalTopLevelPages[canonical] = row.Slug
+			}
+		}
+	}
+	if _, exists := pages[slug]; !exists {
+		return nil, false, nil
+	}
+	var links []db.WikiBacklink
+	if err := s.DBForCtx(ctx).
+		Where("repository_id = ? AND dst_slug = ? AND resolved = ?", repoID, slug, true).
+		Order("src_slug asc").
+		Find(&links).Error; err != nil {
+		return nil, false, err
+	}
+	full := wikiRepoFullName(repoFullName)
+	backlinks := make([]WikiBacklink, 0, len(links))
+	for _, link := range links {
+		body, err := s.Git.ReadFileAtRef(ctx, full, wikiSlugToPath(link.SrcSlug), headSHA)
+		if err != nil {
+			continue
+		}
+		snippet := ""
+		for _, match := range extractWikiLinkMatches(string(body)) {
+			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages, canonicalPages, canonicalTopLevelPages)
+			if ok && resolvedTarget == slug {
+				snippet = match.snippet
+				break
+			}
+		}
+		backlinks = append(backlinks, WikiBacklink{
+			Slug:    link.SrcSlug,
+			Title:   titleFromSlug(link.SrcSlug),
+			Snippet: snippet,
+		})
+	}
+	return backlinks, true, nil
+}
+
 func (s *Service) loadCurrentWikiV2HeadSHA(ctx context.Context, repoFullName string, repoID uint) (string, bool, error) {
 	if s.Git == nil {
 		return "", false, nil
@@ -1157,14 +1306,19 @@ func (s *Service) ListWikiPageHistoryPage(ctx context.Context, repoFullName, slu
 	if err := validateWikiSlug(slug); err != nil {
 		return nil, 0, err
 	}
+	rep, err := s.getRepoBase(ctx, repoFullName)
+	if err != nil {
+		return nil, 0, err
+	}
+	if history, total, ok, err := s.listWikiPageHistoryFromV2(ctx, repoFullName, rep.ID, slug, page, perPage); err != nil {
+		return nil, 0, err
+	} else if ok {
+		return history, total, nil
+	}
 	if s.WikiCatalog == nil {
 		return nil, 0, errors.New("wiki catalog unavailable")
 	}
 	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
-		return nil, 0, err
-	}
-	rep, err := s.getRepoBase(ctx, repoFullName)
-	if err != nil {
 		return nil, 0, err
 	}
 	// Locate the page id, including soft-deleted pages — history is
@@ -1296,6 +1450,15 @@ func (s *Service) ListWikiBacklinks(ctx context.Context, repoFullName, slug stri
 	full := wikiRepoFullName(repoFullName)
 	if !s.Git.Exists(ctx, full) {
 		return nil, ErrNotFound
+	}
+	rep, err := s.getRepoBase(ctx, repoFullName)
+	if err != nil {
+		return nil, err
+	}
+	if backlinks, ok, err := s.listWikiBacklinksFromV2(ctx, repoFullName, rep.ID, slug); err != nil {
+		return nil, err
+	} else if ok {
+		return backlinks, nil
 	}
 	backlinks, err := s.loadWikiBacklinksForSlug(ctx, repoFullName, slug)
 	if err != nil {
