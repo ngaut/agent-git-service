@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"gorm.io/gorm"
 )
 
 // IssueListPageFilter groups DB-pageable filters for the REST issues list.
@@ -46,7 +47,7 @@ type issueListPageRow struct {
 
 // ListIssuesForRESTPage returns one DB-paginated /issues page across issues and PRs.
 func (s *Service) ListIssuesForRESTPage(ctx context.Context, filter IssueListPageFilter) (IssueListPage, error) {
-	rep, err := s.GetRepo(ctx, filter.RepoFullName)
+	rep, err := s.getRepoForIssueListPage(ctx, filter.RepoFullName)
 	if err != nil {
 		return IssueListPage{}, err
 	}
@@ -62,28 +63,80 @@ func (s *Service) ListIssuesForRESTPage(ctx context.Context, filter IssueListPag
 		return IssueListPage{}, nil
 	}
 
-	countSQL, countArgs := buildIssueListPageQuery(rep.ID, normalized, labelNames, labelIDsByName, false, false)
-	var total int64
-	if err := s.DBForCtx(ctx).Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
+	pageSQL, pageArgs := buildIssueListPageQuery(rep.ID, normalized, labelNames, labelIDsByName, true, normalized.sort == "comments", normalized.perPage+1)
+	var rows []issueListPageRow
+	if err := s.DBForCtx(ctx).Raw(pageSQL, pageArgs...).Scan(&rows).Error; err != nil {
+		return IssueListPage{}, err
+	}
+	hasMore := len(rows) > normalized.perPage
+	if hasMore {
+		rows = rows[:normalized.perPage]
+	}
+	total, err := s.issueListPageTotal(ctx, rep.ID, normalized, labelNames, labelIDsByName, len(rows), hasMore)
+	if err != nil {
 		return IssueListPage{}, err
 	}
 	if total == 0 {
 		return IssueListPage{}, nil
 	}
-
-	pageSQL, pageArgs := buildIssueListPageQuery(rep.ID, normalized, labelNames, labelIDsByName, true, normalized.sort == "comments")
-	var rows []issueListPageRow
-	if err := s.DBForCtx(ctx).Raw(pageSQL, pageArgs...).Scan(&rows).Error; err != nil {
-		return IssueListPage{}, err
-	}
-	items, err := s.hydrateIssueListPageItems(ctx, rows, filter.OmitIssueBody)
+	items, err := s.hydrateIssueListPageItems(ctx, rep, rows, filter.OmitIssueBody)
 	if err != nil {
 		return IssueListPage{}, err
 	}
-	if err := s.countIssueListPageComments(ctx, items); err != nil {
-		return IssueListPage{}, err
-	}
 	return IssueListPage{Items: items, Total: total}, nil
+}
+
+func (s *Service) getRepoForIssueListPage(ctx context.Context, fullName string) (db.Repository, error) {
+	if cached, ok := repoCacheGet(ctx, fullName); ok {
+		return cached, nil
+	}
+	rep, err := s.lookupRepo(ctx, fullName, func() *gorm.DB {
+		return s.DBForCtx(ctx).Preload("Owner")
+	})
+	if err != nil {
+		return rep, err
+	}
+	if viewer, ok := UserFromContext(ctx); ok && viewer.ID != 0 {
+		perm, err := s.HasRepoAccess(ctx, rep.ID, viewer.ID)
+		if err != nil {
+			return db.Repository{}, err
+		}
+		if !perm.AtLeast(RepoPermissionRead) && !s.isPublicRepo(ctx, rep.ID) {
+			return db.Repository{}, ErrNotFound
+		}
+		repoPermissionCacheSet(ctx, rep.ID, perm)
+	} else if err := s.requireRepoPermission(ctx, rep.ID, RepoPermissionRead); err != nil {
+		return db.Repository{}, err
+	}
+	return rep, nil
+}
+
+func (s *Service) issueListPageTotal(
+	ctx context.Context,
+	repoID uint,
+	filter normalizedIssueListPageFilter,
+	labelNames []string,
+	labelIDsByName map[string][]uint,
+	rowCount int,
+	hasMore bool,
+) (int64, error) {
+	if !hasMore {
+		if rowCount == 0 && filter.page > 1 {
+			return s.countIssueListPageRows(ctx, repoID, filter, labelNames, labelIDsByName)
+		}
+		offset := (filter.page - 1) * filter.perPage
+		return int64(offset + rowCount), nil
+	}
+	return s.countIssueListPageRows(ctx, repoID, filter, labelNames, labelIDsByName)
+}
+
+func (s *Service) countIssueListPageRows(ctx context.Context, repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint) (int64, error) {
+	countSQL, countArgs := buildIssueListPageQuery(repoID, filter, labelNames, labelIDsByName, false, false, 0)
+	var total int64
+	if err := s.DBForCtx(ctx).Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 type normalizedIssueListPageFilter struct {
@@ -189,7 +242,7 @@ func splitIssueListPageLabels(raw string) []string {
 	return names
 }
 
-func buildIssueListPageQuery(repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, paginate bool, includeComments bool) (string, []any) {
+func buildIssueListPageQuery(repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, paginate bool, includeComments bool, limit int) (string, []any) {
 	issueSQL, issueArgs := buildIssueListPageEntitySQL("issue", "issues", repoID, filter, labelNames, labelIDsByName, includeComments)
 	prSQL, prArgs := buildIssueListPageEntitySQL("pr", "pull_requests", repoID, filter, labelNames, labelIDsByName, includeComments)
 	args := append(issueArgs, prArgs...)
@@ -206,11 +259,21 @@ func buildIssueListPageQuery(repoID uint, filter normalizedIssueListPageFilter, 
 	}
 	direction := strings.ToUpper(filter.direction)
 	offset := (filter.page - 1) * filter.perPage
-	args = append(args, filter.perPage, offset)
-	return fmt.Sprintf(
+	if limit < 1 {
+		limit = filter.perPage
+	}
+	args = append(args, limit, offset)
+	pageSQL := fmt.Sprintf(
 		"SELECT kind, id, number, comments FROM (%s) AS combined ORDER BY %s %s, number %s LIMIT ? OFFSET ?",
 		unionSQL, sortColumn, direction, direction,
-	), args
+	)
+	if includeComments {
+		return pageSQL, args
+	}
+	args = append([]any{repoID}, args...)
+	return "SELECT kind, id, number, " +
+		"(SELECT COUNT(*) FROM issue_comments ic WHERE ic.repository_id = ? AND ic.issue_number = page.number) AS comments " +
+		"FROM (" + pageSQL + ") AS page", args
 }
 
 func buildIssueListPageEntitySQL(kind, table string, repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, includeComments bool) (string, []any) {
@@ -298,7 +361,7 @@ func appendIssueListPageLabelWhere(where []string, args []any, table string, lab
 	return where, args
 }
 
-func (s *Service) hydrateIssueListPageItems(ctx context.Context, rows []issueListPageRow, omitIssueBody bool) ([]IssueListPageItem, error) {
+func (s *Service) hydrateIssueListPageItems(ctx context.Context, repo db.Repository, rows []issueListPageRow, omitIssueBody bool) ([]IssueListPageItem, error) {
 	issueIDs := make([]uint, 0, len(rows))
 	prIDs := make([]uint, 0, len(rows))
 	for _, row := range rows {
@@ -313,7 +376,7 @@ func (s *Service) hydrateIssueListPageItems(ctx context.Context, rows []issueLis
 	issuesByID := make(map[uint]db.Issue, len(issueIDs))
 	if len(issueIDs) > 0 {
 		var issues []db.Issue
-		q := preloadIssue(s.DBForCtx(ctx))
+		q := preloadIssueForRESTList(s.DBForCtx(ctx))
 		if omitIssueBody {
 			q = q.Omit("Body")
 		}
@@ -321,6 +384,7 @@ func (s *Service) hydrateIssueListPageItems(ctx context.Context, rows []issueLis
 			return nil, err
 		}
 		for _, issue := range issues {
+			issue.Repository = repo
 			issuesByID[issue.ID] = issue
 		}
 	}
@@ -328,10 +392,11 @@ func (s *Service) hydrateIssueListPageItems(ctx context.Context, rows []issueLis
 	prsByID := make(map[uint]db.PullRequest, len(prIDs))
 	if len(prIDs) > 0 {
 		var prs []db.PullRequest
-		if err := preloadPRFull(s.DBForCtx(ctx)).Where("pull_requests.id IN ?", prIDs).Find(&prs).Error; err != nil {
+		if err := preloadPRForRESTIssueList(s.DBForCtx(ctx)).Where("pull_requests.id IN ?", prIDs).Find(&prs).Error; err != nil {
 			return nil, err
 		}
 		for _, pr := range prs {
+			pr.Repository = repo
 			prsByID[pr.ID] = pr
 		}
 	}

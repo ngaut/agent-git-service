@@ -335,15 +335,15 @@ func (d *Deps) authorAssociationChecks(ctx context.Context, repo db.Repository) 
 	)
 	collabCheck := func(userID uint) bool {
 		if !collabLoaded {
-			collabs, err := d.Svc.ListCollaborators(ctx, repo.ID)
+			userIDs, err := d.Svc.ListCollaboratorUserIDs(ctx, repo.ID)
 			if err != nil {
 				logErr(ctx, "authorAssociation: list collaborators", err)
 				collabLoaded = true
 				return false
 			}
-			collabIDs = make(map[uint]struct{}, len(collabs))
-			for _, c := range collabs {
-				collabIDs[c.UserID] = struct{}{}
+			collabIDs = make(map[uint]struct{}, len(userIDs))
+			for _, id := range userIDs {
+				collabIDs[id] = struct{}{}
 			}
 			collabLoaded = true
 		}

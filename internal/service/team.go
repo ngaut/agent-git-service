@@ -555,6 +555,39 @@ func (s *Service) IsOrgMember(ctx context.Context, orgID, userID uint) (bool, er
 	return count > 0, wrapErr(err)
 }
 
+// ListOrgMemberUserIDs returns the subset of userIDs that are members of orgID.
+func (s *Service) ListOrgMemberUserIDs(ctx context.Context, orgID uint, userIDs []uint) (map[uint]struct{}, error) {
+	members := make(map[uint]struct{})
+	if orgID == 0 || len(userIDs) == 0 {
+		return members, nil
+	}
+	seen := make(map[uint]struct{}, len(userIDs))
+	cleaned := make([]uint, 0, len(userIDs))
+	for _, id := range userIDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		cleaned = append(cleaned, id)
+	}
+	if len(cleaned) == 0 {
+		return members, nil
+	}
+	var rows []uint
+	if err := s.DBForCtx(ctx).Model(&db.OrganizationMember{}).
+		Where("organization_id = ? AND user_id IN ?", orgID, cleaned).
+		Pluck("user_id", &rows).Error; err != nil {
+		return nil, wrapErr(err)
+	}
+	for _, id := range rows {
+		members[id] = struct{}{}
+	}
+	return members, nil
+}
+
 // IsOrgAdmin checks whether the user can administer teams for an organization.
 // Site admins are always allowed. Otherwise the user must be an org owner.
 func (s *Service) IsOrgAdmin(ctx context.Context, orgID, userID uint) (bool, error) {
