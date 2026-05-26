@@ -2,7 +2,7 @@
 
 Status: Approved direction, implementation planning in progress
 
-This document turns the approved Wiki V2 direction from issue #1488 into an
+This document turns the approved Wiki V2 direction from issue `#1488` into an
 implementation plan for the repo. The target architecture baseline lives in
 [`../architecture/wiki-storage-v2.md`](../architecture/wiki-storage-v2.md).
 The current production implementation remains documented in
@@ -46,9 +46,9 @@ Expected changes:
 
 - `docs/architecture/wiki-storage-v2.md` as the target architecture baseline.
 - This implementation-plan document.
-- Contract notes in `docs/architecture/service.md`,
-  `docs/architecture/rest.md`, and `docs/module-contracts.md` that explain
-  which current wiki behaviors are transitional and which must survive cutover.
+- Contract notes in `docs/architecture.md` and `docs/module-contracts.md` that
+  explain which current wiki behaviors are transitional and which must survive
+  cutover.
 
 Acceptance:
 
@@ -105,7 +105,8 @@ Expected code areas:
   building derived indexes from git.
 - Verification helpers that compare page content, flat list results, labels,
   backlinks, and search parity.
-- Metrics and logs for reconciler lag, rebuild duration, and migration failures.
+- Metrics and logs for reconciler lag, rebuild duration, and migration
+  failures.
 
 Acceptance:
 
@@ -155,7 +156,7 @@ The rewrite will span these primary areas:
   response-shape preservation or controlled redesign.
 - `internal/router/router.go`: provisional routes, cutover wiring, and any new
   tree endpoints.
-- `internal/db/models_wiki_*.go` and migration wiring in `main.go`.
+- `internal/db/models_wiki_*.go` and migration wiring in startup.
 - `internal/testharness` plus `internal/rest/*wiki*` and
   `internal/service/*wiki*` tests.
 - `docs/architecture*.md`, `docs/module-contracts.md`, and operations docs.
@@ -168,8 +169,8 @@ The rewrite will span these primary areas:
   history boundary at cutover.
 - Which git-tracked metadata format becomes the durable source for wiki labels
   and how it remains compatible with the existing label REST contract.
-- Whether direct pushes to the bare wiki repo are rejected outright or validated
-  through hooks.
+- Whether direct pushes to the bare wiki repo are rejected outright or
+  validated through hooks.
 - Whether `/wiki/pages` and `/wiki/tree` keep the current compatible shapes or
   intentionally adopt a cleaner V2 contract in the same cutover.
 - How read-your-writes behavior is guaranteed for endpoints that currently
@@ -196,11 +197,12 @@ Cutover-capable slices additionally require:
 
 ## Exit Criteria
 
-Issue #1488 is complete only when all of the following are true:
+Issue `#1488` is complete only when all of the following are true:
 
 - git is the only durable wiki content authority
 - list/search/label/backlink/history acceleration data in TiDB is rebuildable
   from git
 - current or intentionally redesigned REST contracts are documented and tested
 - migration, rebuild, rollback, and lag-monitoring procedures exist in `docs/`
-- obsolete catalog-authority code has been removed after the verification window
+- obsolete catalog-authority code has been removed after the verification
+  window

@@ -3,7 +3,7 @@
 Status: Draft
 
 This runbook defines the operator evidence required before the Wiki V2 route
-cutover from issue #1488. It complements the target design in
+cutover from issue `#1488`. It complements the target design in
 [`../architecture/wiki-storage-v2.md`](../architecture/wiki-storage-v2.md) and
 the implementation plan in
 [`../design/wiki-storage-rearchitecture.md`](../design/wiki-storage-rearchitecture.md).
@@ -12,8 +12,8 @@ the implementation plan in
 
 - The git-backed wiki implementation and derived-index reconciler have already
   landed behind a feature flag or provisional route.
-- Migration tooling can import a wiki from the legacy catalog state into git and
-  rebuild all required derived indexes.
+- Migration tooling can import a wiki from the legacy catalog state into git
+  and rebuild all required derived indexes.
 - Router/service/integration tests for wiki CRUD, history, tree, labels,
   backlinks, search, rename, and prefix move are green.
 - Acceptance coverage (`make test` or an equivalent acceptance suite) is green

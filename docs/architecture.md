@@ -35,8 +35,8 @@ Authority is split by concern:
 Current wiki contract:
 
 - The sibling bare `*.wiki.git` repository is the durable authority for wiki page content, path layout, commit history, ref-pinned reads, rename semantics, and prefix moves.
-- TiDB-backed wiki tables still serve current-page and search/list read paths through catalog-backed projections while the final #1488 cutover and cleanup work remains in progress.
-- Remaining wiki re-architecture work for issue #1488 is about removing those transitional read paths so current-page and indexed metadata reads become obviously rebuildable from git without reintroducing catalog-first writes.
+- TiDB-backed wiki tables still serve some list/search/current-page compatibility paths while the final `#1488` cutover and cleanup work remains in progress.
+- Remaining wiki re-architecture work for issue `#1488` is tracked in [architecture/wiki-storage-v2.md](architecture/wiki-storage-v2.md) and the cutover runbook in [operations/wiki-storage-v2-cutover.md](operations/wiki-storage-v2-cutover.md).
 
 This does not prohibit repository- or pull-request-related metadata in the database.
 The rule is about authority: Git-native behavior stays Git-backed, while relational metadata stays DB-backed.
@@ -466,3 +466,4 @@ To inspect the current acceptance inventory instead of hard-coding counts:
 ### Design Documents
 
 - [Multi-Agent Architecture](design/multi-agent.md) — per-agent TiDB routing, stateless deployment, JuiceFS storage
+- [Wiki Storage Re-Architecture](design/wiki-storage-rearchitecture.md) — delivery plan for issue #1488
