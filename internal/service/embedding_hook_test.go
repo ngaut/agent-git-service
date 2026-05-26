@@ -183,7 +183,7 @@ func TestEmbedHook_EmbedFailureLeavesNull(t *testing.T) {
 	}
 }
 
-// TestEmbedHook_TextTruncation tests that text > 32KB is truncated.
+// TestEmbedHook_TextTruncation tests that text is truncated by embedding tokens.
 func TestEmbedHook_TextTruncation(t *testing.T) {
 	tmpDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -220,8 +220,14 @@ func TestEmbedHook_TextTruncation(t *testing.T) {
 		t.Fatalf("failed to create issue: %v", err)
 	}
 
-	// Create text > 32KB
-	longText := strings.Repeat("x", 35000)
+	longText := strings.Repeat(" token", embedding.MaxInputTokens+512)
+	originalTokens, err := embedding.CountInputTokens("title\n" + longText)
+	if err != nil {
+		t.Fatalf("count original tokens: %v", err)
+	}
+	if originalTokens <= embedding.MaxInputTokens {
+		t.Fatalf("test fixture has %d tokens, want > %d", originalTokens, embedding.MaxInputTokens)
+	}
 
 	// Call EmbedIssue with long text
 	svc.EmbedIssue(context.Background(), issue.ID, "title", longText)
@@ -229,11 +235,16 @@ func TestEmbedHook_TextTruncation(t *testing.T) {
 	// Wait for background goroutine
 	svc.Wg.Wait()
 
-	// Verify FakeEmbedder received truncated text (32000 chars)
-	// Note: EmbedIssue concatenates "title\n" + body, so truncation happens on the combined string
-	expectedLen := 32000
-	if len(fakeEmbedder.LastText) != expectedLen {
-		t.Errorf("Expected truncated text (%d chars), got %d chars", expectedLen, len(fakeEmbedder.LastText))
+	// Note: EmbedIssue concatenates "title\n" + body, so truncation happens on the combined string.
+	gotTokens, err := embedding.CountInputTokens(fakeEmbedder.LastText)
+	if err != nil {
+		t.Fatalf("count truncated tokens: %v", err)
+	}
+	if gotTokens > embedding.MaxInputTokens {
+		t.Errorf("expected <= %d tokens, got %d", embedding.MaxInputTokens, gotTokens)
+	}
+	if len(fakeEmbedder.LastText) >= len("title\n"+longText) {
+		t.Errorf("expected text to be truncated, got %d chars", len(fakeEmbedder.LastText))
 	}
 	// Verify it starts with "title\n"
 	if !strings.HasPrefix(fakeEmbedder.LastText, "title\n") {

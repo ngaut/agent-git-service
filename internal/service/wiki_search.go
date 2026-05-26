@@ -350,6 +350,7 @@ func (s *Service) wikiSearchDocumentsFullText(ctx context.Context, repoID uint, 
 }
 
 func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, limit, offset int, lexicalEmpty bool) ([]WikiSearchResult, bool, error) {
+	query = embedding.TruncateInput(query)
 	vec, err := s.Embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, false, err
@@ -916,9 +917,6 @@ func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName str
 	updateColumns := []string{"title", "body", "revision_sha", "updated_at"}
 	if s.Embedder != nil && !embedding.IsNop(s.Embedder) {
 		text := title + "\n" + wikiPageLabelsText(page.Labels) + "\n" + page.Body
-		if len(text) > 32000 {
-			text = text[:32000]
-		}
 		hasEmbeddingColumn := targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
 		vec, err := s.embedWithRetry(ctx, text)
 		if err != nil {

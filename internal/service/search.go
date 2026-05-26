@@ -141,11 +141,7 @@ func (s *Service) embedQuery(ctx context.Context, text string) string {
 	if s.Embedder == nil || embedding.IsNop(s.Embedder) {
 		return ""
 	}
-	// Enforce the same 32KB truncation used by embedAndStore to prevent
-	// oversized search queries from triggering OpenAI 400 errors.
-	if len(text) > 32000 {
-		text = text[:32000]
-	}
+	text = embedding.TruncateInput(text)
 	vec, err := s.Embedder.Embed(ctx, text)
 	if err != nil {
 		slog.WarnContext(ctx, "search embed query failed; falling back to lexical search", "error", err)
