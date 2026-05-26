@@ -80,7 +80,7 @@ func (r *DBRouter) ResolveToken(ctx context.Context, token string) (db.User, *go
 
 	// Step 1: look up token → CPUser in control plane
 	var cpToken CPToken
-	if err := r.cpDB.WithContext(ctx).Preload("CPUser").Where("value = ?", token).First(&cpToken).Error; err != nil {
+	if err := r.cpDB.WithContext(ctx).Preload("CPUser").Where("value = ?", token).Take(&cpToken).Error; err != nil {
 		return db.User{}, nil, fmt.Errorf("%w: %v", authn.ErrUnknownToken, err)
 	}
 	cpUser := cpToken.CPUser

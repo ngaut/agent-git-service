@@ -132,7 +132,7 @@ func (s *Service) ValidateToken(ctx context.Context, token string) bool {
 	var tok db.Token
 	// Use retry logic for token lookup to handle TiDB PD timeouts
 	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).First(&tok, "value = ?", token).Error
+		return s.DBForCtx(qctx).Take(&tok, "value = ?", token).Error
 	}); err != nil {
 		return false
 	}
@@ -429,7 +429,7 @@ func (s *Service) ExchangeDeviceCode(ctx context.Context, deviceCode string) (ac
 
 			// Ensure this token belongs to the approving user (defense in depth).
 			var persisted db.Token
-			if err := tx.Select("id", "user_id").First(&persisted, "value = ?", code.AccessToken).Error; err != nil {
+			if err := tx.Select("id", "user_id").Take(&persisted, "value = ?", code.AccessToken).Error; err != nil {
 				return err
 			}
 			if persisted.UserID != approver.ID {
@@ -478,7 +478,7 @@ func (s *Service) ResolveUserByToken(ctx context.Context, token string) (db.User
 	var tok db.Token
 	// Use retry logic for token lookup to handle TiDB PD timeouts
 	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).Preload("User").First(&tok, "value = ?", token).Error
+		return s.DBForCtx(qctx).Preload("User").Take(&tok, "value = ?", token).Error
 	}); err != nil {
 		return db.User{}, fmt.Errorf("ResolveUserByToken: %w", err)
 	}
@@ -505,7 +505,7 @@ func (s *Service) ValidateAndResolveTokenDetailed(ctx context.Context, token str
 	var tok db.Token
 	// Use retry logic for token lookup to handle TiDB PD timeouts
 	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).Preload("User").First(&tok, "value = ?", token).Error
+		return s.DBForCtx(qctx).Preload("User").Take(&tok, "value = ?", token).Error
 	}); err == nil {
 		if tok.ExpiresAt != nil && !tok.ExpiresAt.After(time.Now().UTC()) {
 			return db.User{}, TokenValidationFailureExpiredToken, nil
