@@ -265,7 +265,6 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 		if err := s.DBForCtx(ctx).Where("changeset_id = ?", repoHead.HeadChangesetID).Take(&previousChangeset).Error; err != nil {
 			return err
 		}
-
 		pageIDs := make([]uint64, 0, len(livePages))
 		for _, page := range livePages {
 			pageIDs = append(pageIDs, page.PageID)
