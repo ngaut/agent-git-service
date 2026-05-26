@@ -528,8 +528,8 @@ func TestWiki_ReadsListsAndIndexesLegacyStoredSlugs_Issue1355(t *testing.T) {
 		t.Fatalf("write normalized legacy referrer: %v", err)
 	}
 	// Import the pre-existing git-only content into the catalog,
-	// matching what cmd/wiki-migrate does for production backfill and
-	// what the receive-pack hook will do for live pushes.
+	// matching what the background migration replay does for backfill
+	// and what the receive-pack hook will do for live pushes.
 	if _, err := svc.MigrateWiki(ctx, full, service.WikiMigrationOptions{}); err != nil {
 		t.Fatalf("MigrateWiki: %v", err)
 	}

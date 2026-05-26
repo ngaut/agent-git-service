@@ -101,3 +101,27 @@ func (s *Service) SetWorkflowStepRunnerForTest(timeout time.Duration, fn func(ct
 func (s *Service) SetWikiMigrationAfterSnapshotHookForTest(fn func(repoFullName string)) {
 	s.testWikiMigrationAfterSnapshot = fn
 }
+
+// SetWikiBackgroundMigrationStartedHookForTest installs a test-only hook fired
+// when a repo-scoped background wiki migration is claimed and scheduled.
+func (s *Service) SetWikiBackgroundMigrationStartedHookForTest(fn func(repoFullName string)) {
+	s.testWikiBackgroundMigrationStarted = fn
+}
+
+// ClaimWikiBackgroundMigrationForTest exposes background migration slot claims for tests.
+func (s *Service) ClaimWikiBackgroundMigrationForTest(ctx context.Context, repoFullName string) bool {
+	repo, err := s.LookupRepoIdentity(ctx, repoFullName)
+	if err != nil {
+		return false
+	}
+	return s.claimWikiBackgroundMigration(s.wikiRepoKey(ctx, repo))
+}
+
+// ReleaseWikiBackgroundMigrationForTest exposes background migration cleanup for tests.
+func (s *Service) ReleaseWikiBackgroundMigrationForTest(ctx context.Context, repoFullName string) {
+	repo, err := s.LookupRepoIdentity(ctx, repoFullName)
+	if err != nil {
+		return
+	}
+	s.releaseWikiBackgroundMigration(s.wikiRepoKey(ctx, repo))
+}

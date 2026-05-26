@@ -716,7 +716,11 @@ func (s *Service) ensureWikiRepo(ctx context.Context, repoFullName string) error
 // from racing REST writes through the same catalog tables on SQLite-backed
 // test runs and in production.
 func (s *Service) withWikiCatalogWriteLock(ctx context.Context, repoFullName string, fn func() error) error {
-	mu := s.getWikiMigrationSyncMu(repoFullName)
+	repo, err := s.LookupRepoIdentity(ctx, repoFullName)
+	if err != nil {
+		return err
+	}
+	mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(ctx, repo))
 	mu.Lock()
 	defer mu.Unlock()
 

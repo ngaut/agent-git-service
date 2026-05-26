@@ -2,12 +2,18 @@ package service_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"gh-server/internal/db"
+	"gh-server/internal/embedding"
+	"gh-server/internal/gitstore"
 	"gh-server/internal/service"
+	"gh-server/internal/wikicatalog"
 )
 
 // TestDBForCtxUsesTenantDB verifies that DBForCtx returns the tenant DB
@@ -42,6 +48,78 @@ func TestDBForCtxUsesTenantDB(t *testing.T) {
 	}
 	if gotSQL == defaultSQL {
 		t.Error("DBForCtx returned the default DB instead of the context DB")
+	}
+}
+
+func TestWikiBackgroundMigrationStateIsTenantScoped_Issue1448(t *testing.T) {
+	defaultDB, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "default.sqlite")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open default db: %v", err)
+	}
+	tenantDB, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "tenant.sqlite")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open tenant db: %v", err)
+	}
+	for _, gdb := range []*gorm.DB{defaultDB, tenantDB} {
+		if err := db.Migrate(gdb); err != nil {
+			t.Fatalf("migrate db: %v", err)
+		}
+	}
+
+	store, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	blobStore := wikicatalog.NewBlobStore(t.TempDir())
+	wikiCat := wikicatalog.New(defaultDB, blobStore)
+	svc := &service.Service{
+		Ctx:            context.Background(),
+		DB:             defaultDB,
+		Git:            store,
+		WikiCatalog:    wikiCat,
+		WikiBlob:       blobStore,
+		AttachmentRoot: t.TempDir(),
+		BaseURL:        "http://localhost:8080",
+		Embedder:       embedding.NopEmbedder{},
+	}
+	wikiCat.DBFor = svc.DBForCtx
+	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
+
+	defaultCtx := context.Background()
+	tenantCtx := service.ContextWithDB(context.Background(), tenantDB)
+	for _, tc := range []struct {
+		ctx  context.Context
+		gdb  *gorm.DB
+		user string
+	}{
+		{ctx: defaultCtx, gdb: defaultDB, user: "shared-owner"},
+		{ctx: tenantCtx, gdb: tenantDB, user: "shared-owner"},
+	} {
+		owner := db.User{Login: tc.user, Name: tc.user, Type: db.TypeUser}
+		if err := tc.gdb.Create(&owner).Error; err != nil {
+			t.Fatalf("create %s owner: %v", tc.user, err)
+		}
+		if _, err := svc.CreateRepo(tc.ctx, service.CreateRepoInput{OwnerLogin: owner.Login, Name: "shared-name", AutoInit: true}); err != nil {
+			t.Fatalf("CreateRepo %s: %v", tc.user, err)
+		}
+		repoFullName := owner.Login + "/shared-name"
+		if err := tc.gdb.Model(&db.Repository{}).Where("full_name = ?", repoFullName).Update("has_wiki", true).Error; err != nil {
+			t.Fatalf("set has_wiki for %s: %v", repoFullName, err)
+		}
+	}
+
+	defaultRepo := "shared-owner/shared-name"
+	tenantRepo := "shared-owner/shared-name"
+	if !svc.ClaimWikiBackgroundMigrationForTest(defaultCtx, defaultRepo) {
+		t.Fatal("expected to claim default tenant migration slot")
+	}
+	defer svc.ReleaseWikiBackgroundMigrationForTest(defaultCtx, defaultRepo)
+
+	if !svc.IsWikiBackgroundMigrationRunning(defaultCtx, defaultRepo) {
+		t.Fatal("expected default tenant migration state to be visible in default context")
+	}
+	if svc.IsWikiBackgroundMigrationRunning(tenantCtx, tenantRepo) {
+		t.Fatal("tenant-scoped migration state leaked from default DB into tenant DB")
 	}
 }
 
@@ -147,5 +225,84 @@ func TestContextHelpers(t *testing.T) {
 	_, ok = service.DBFromContext(emptyCtx)
 	if ok {
 		t.Fatal("DBFromContext returned ok=true for context without DB")
+	}
+}
+
+func TestKickBackgroundWikiMigration_UsesCallerTenantContext_Issue1448(t *testing.T) {
+	defaultDB, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "default.sqlite")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open default db: %v", err)
+	}
+	tenantDB, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "tenant.sqlite")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open tenant db: %v", err)
+	}
+	for _, gdb := range []*gorm.DB{defaultDB, tenantDB} {
+		if err := db.Migrate(gdb); err != nil {
+			t.Fatalf("migrate db: %v", err)
+		}
+	}
+
+	store, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	blobStore := wikicatalog.NewBlobStore(t.TempDir())
+	wikiCat := wikicatalog.New(defaultDB, blobStore)
+	svc := &service.Service{
+		Ctx:            context.Background(),
+		DB:             defaultDB,
+		Git:            store,
+		WikiCatalog:    wikiCat,
+		WikiBlob:       blobStore,
+		AttachmentRoot: t.TempDir(),
+		BaseURL:        "http://localhost:8080",
+		Embedder:       embedding.NopEmbedder{},
+	}
+	wikiCat.DBFor = svc.DBForCtx
+	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
+
+	tenantCtx := service.ContextWithDB(context.Background(), tenantDB)
+	owner := db.User{Login: "tenant-owner", Name: "tenant-owner", Type: db.TypeUser}
+	if err := tenantDB.Create(&owner).Error; err != nil {
+		t.Fatalf("create tenant owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(tenantCtx, service.CreateRepoInput{OwnerLogin: owner.Login, Name: "tenant-wiki", AutoInit: true}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	repoFullName := owner.Login + "/tenant-wiki"
+	if err := tenantDB.Model(&db.Repository{}).Where("full_name = ?", repoFullName).Update("has_wiki", true).Error; err != nil {
+		t.Fatalf("set has_wiki: %v", err)
+	}
+	if _, err := svc.PutWikiPage(tenantCtx, repoFullName, "home", "v1", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage home: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(context.Background(), repoFullName+".wiki", "master", "about.md", "add about", []byte("about body")); err != nil {
+		t.Fatalf("git write about: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	svc.SetWikiBackgroundMigrationStartedHookForTest(func(fullName string) {
+		if fullName == repoFullName {
+			started <- struct{}{}
+		}
+	})
+	defer svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
+
+	svc.KickBackgroundWikiMigration(tenantCtx, repoFullName)
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for background migration to start")
+	}
+	svc.Wg.Wait()
+
+	pages, err := svc.ListWikiPages(tenantCtx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages after background migration: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("pages = %+v, want 2 pages after background migration", pages)
 	}
 }

@@ -41,4 +41,3 @@ coverage.out
 # Frontend/tool caches
 .vite/
 visualization/.vite/
-wiki-migrate

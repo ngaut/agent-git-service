@@ -317,9 +317,9 @@ func (s *Service) ResetAgentToken(ctx context.Context, humanID uint, agentLogin 
 	return tok, nil
 }
 
-func (s *Service) boundHumanIDForAgent(ctx context.Context, agentID uint) (uint, bool, error) {
+func boundHumanIDForAgentQuery(q *gorm.DB, agentID uint) (uint, bool, error) {
 	var binding db.AgentBinding
-	if err := s.DBForCtx(ctx).Select("human_user_id").First(&binding, "agent_user_id = ?", agentID).Error; err != nil {
+	if err := q.Select("human_user_id").First(&binding, "agent_user_id = ?", agentID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return 0, false, nil
 		}
@@ -329,4 +329,8 @@ func (s *Service) boundHumanIDForAgent(ctx context.Context, agentID uint) (uint,
 		return 0, false, err
 	}
 	return binding.HumanUserID, true, nil
+}
+
+func (s *Service) boundHumanIDForAgent(ctx context.Context, agentID uint) (uint, bool, error) {
+	return boundHumanIDForAgentQuery(s.DBForCtx(ctx), agentID)
 }
