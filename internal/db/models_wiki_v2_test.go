@@ -1,0 +1,107 @@
+package db
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
+)
+
+func TestWikiV2Migrate_Idempotent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wiki-v2.db")
+	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, err := gdb.DB(); err == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+
+	if err := Migrate(gdb); err != nil {
+		t.Fatalf("first Migrate: %v", err)
+	}
+	if err := Migrate(gdb); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+
+	for _, table := range []string{"wiki_page_index", "wiki_index_state"} {
+		if !gdb.Migrator().HasTable(table) {
+			t.Fatalf("expected table %q after Migrate", table)
+		}
+	}
+	for _, idx := range []struct {
+		table string
+		name  string
+	}{
+		{table: "wiki_page_index", name: "idx_wiki_page_index_repo_commit"},
+		{table: "wiki_page_index", name: "idx_wiki_page_index_repo_updated"},
+	} {
+		if !gdb.Migrator().HasIndex(idx.table, idx.name) {
+			t.Fatalf("expected index %q on %q", idx.name, idx.table)
+		}
+	}
+}
+
+func TestWikiV2RoundTrip(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wiki-v2-roundtrip.db")
+	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := Migrate(gdb); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	user := User{Login: "alice", Type: "User", Email: "a@example.com"}
+	if err := gdb.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	repo := Repository{OwnerID: user.ID, Name: "wiki", FullName: "alice/wiki", DefaultBranch: "main"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	now := time.Now().UTC().Round(time.Second)
+	state := WikiIndexState{
+		RepositoryID:         repo.ID,
+		IndexedCommitSHA:     "1111111111111111111111111111111111111111",
+		IndexedAt:            &now,
+		ReconcileRequestedAt: &now,
+	}
+	if err := gdb.Create(&state).Error; err != nil {
+		t.Fatalf("create state: %v", err)
+	}
+
+	row := WikiPageIndex{
+		RepositoryID:  repo.ID,
+		Slug:          "guides/setup",
+		HeadBlobSHA:   "2222222222222222222222222222222222222222",
+		HeadCommitSHA: state.IndexedCommitSHA,
+		Title:         "Setup",
+		Size:          42,
+		UpdatedAt:     now,
+		LastAuthorID:  &user.ID,
+	}
+	if err := gdb.Create(&row).Error; err != nil {
+		t.Fatalf("create index row: %v", err)
+	}
+
+	var gotState WikiIndexState
+	if err := gdb.First(&gotState, "repository_id = ?", repo.ID).Error; err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if gotState.IndexedCommitSHA != state.IndexedCommitSHA || gotState.IndexedAt == nil || !gotState.IndexedAt.Equal(now) {
+		t.Fatalf("state round-trip mismatch: %+v", gotState)
+	}
+
+	var gotRow WikiPageIndex
+	if err := gdb.First(&gotRow, "repository_id = ? AND slug = ?", repo.ID, row.Slug).Error; err != nil {
+		t.Fatalf("read index row: %v", err)
+	}
+	if gotRow.HeadBlobSHA != row.HeadBlobSHA || gotRow.HeadCommitSHA != row.HeadCommitSHA || gotRow.Size != row.Size {
+		t.Fatalf("row round-trip mismatch: %+v", gotRow)
+	}
+}

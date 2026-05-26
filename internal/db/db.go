@@ -312,6 +312,8 @@ func Migrate(database *gorm.DB) error {
 		&UserLastSeen{},
 		&IssueReadState{},
 		&WikiPageLabel{},
+		&WikiPageIndex{},
+		&WikiIndexState{},
 		&WikiSearchDocument{},
 		&WikiPage{},
 		&WikiPageRevision{},

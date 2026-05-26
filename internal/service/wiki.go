@@ -16,16 +16,17 @@ import (
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
+	"github.com/ngaut/agent-git-service/internal/wikiv2"
 )
 
 // wikiDefaultBranch matches GitHub's wiki convention so a wiki repo cloned
 // directly via git uses the same branch name clients expect.
-const wikiDefaultBranch = "master"
+const wikiDefaultBranch = wikiv2.DefaultBranch
 
 // wikiPageExt is the on-disk extension for a wiki page. Phase C ships
 // markdown only; future phases can support .rst / .textile by widening
 // the extension whitelist in resolveWikiSlug.
-const wikiPageExt = ".md"
+const wikiPageExt = wikiv2.PageExtension
 
 const (
 	wikiMaxSlugDepth      = 6
@@ -301,20 +302,18 @@ func validateReadableWikiSlugSegment(segment string) error {
 // wikiSlugToPath maps a slug to its on-disk markdown filename inside the
 // wiki repo.
 func wikiSlugToPath(slug string) string {
-	return slug + wikiPageExt
+	path, err := wikiv2.SlugToPath(slug)
+	if err != nil {
+		return slug + wikiPageExt
+	}
+	return path
 }
 
 // wikiPathToSlug returns the slug for a path in the wiki repo, or "" if
 // the path isn't a recognised wiki page.
 func wikiPathToSlug(path string) string {
-	if path == "" || strings.HasPrefix(path, ".") {
-		return ""
-	}
-	if !strings.HasSuffix(path, wikiPageExt) {
-		return ""
-	}
-	slug := strings.TrimSuffix(path, wikiPageExt)
-	if validateReadableWikiSlug(slug) != nil {
+	slug, ok := wikiv2.PathToSlug(path)
+	if !ok {
 		return ""
 	}
 	return slug
