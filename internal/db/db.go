@@ -314,6 +314,8 @@ func Migrate(database *gorm.DB) error {
 		&WikiPageLabel{},
 		&WikiPageIndex{},
 		&WikiIndexState{},
+		&WikiBacklink{},
+		&WikiPageHistory{},
 		&WikiSearchDocument{},
 		&WikiPage{},
 		&WikiPageRevision{},

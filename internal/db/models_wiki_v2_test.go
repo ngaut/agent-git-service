@@ -27,7 +27,12 @@ func TestWikiV2Migrate_Idempotent(t *testing.T) {
 		t.Fatalf("second Migrate: %v", err)
 	}
 
-	for _, table := range []string{"wiki_page_index", "wiki_index_state"} {
+	for _, table := range []string{
+		"wiki_page_index",
+		"wiki_index_state",
+		"wiki_backlinks",
+		"wiki_page_history",
+	} {
 		if !gdb.Migrator().HasTable(table) {
 			t.Fatalf("expected table %q after Migrate", table)
 		}
@@ -38,6 +43,9 @@ func TestWikiV2Migrate_Idempotent(t *testing.T) {
 	}{
 		{table: "wiki_page_index", name: "idx_wiki_page_index_repo_commit"},
 		{table: "wiki_page_index", name: "idx_wiki_page_index_repo_updated"},
+		{table: "wiki_backlinks", name: "idx_wiki_backlinks_repo_dst"},
+		{table: "wiki_backlinks", name: "idx_wiki_backlinks_repo_src"},
+		{table: "wiki_page_history", name: "idx_wiki_page_history_repo_slug_committed"},
 	} {
 		if !gdb.Migrator().HasIndex(idx.table, idx.name) {
 			t.Fatalf("expected index %q on %q", idx.name, idx.table)
@@ -103,5 +111,45 @@ func TestWikiV2RoundTrip(t *testing.T) {
 	}
 	if gotRow.HeadBlobSHA != row.HeadBlobSHA || gotRow.HeadCommitSHA != row.HeadCommitSHA || gotRow.Size != row.Size {
 		t.Fatalf("row round-trip mismatch: %+v", gotRow)
+	}
+
+	link := WikiBacklink{
+		RepositoryID: repo.ID,
+		SrcSlug:      "guides/setup",
+		DstSlug:      "guides/install",
+		Resolved:     true,
+		UpdatedAt:    now,
+	}
+	if err := gdb.Create(&link).Error; err != nil {
+		t.Fatalf("create backlink row: %v", err)
+	}
+
+	history := WikiPageHistory{
+		RepositoryID:    repo.ID,
+		Slug:            row.Slug,
+		CommitSHA:       "3333333333333333333333333333333333333333",
+		ParentCommitSHA: state.IndexedCommitSHA,
+		AuthorID:        &user.ID,
+		Message:         "Import wiki page snapshot",
+		CommittedAt:     now,
+	}
+	if err := gdb.Create(&history).Error; err != nil {
+		t.Fatalf("create history row: %v", err)
+	}
+
+	var gotLink WikiBacklink
+	if err := gdb.First(&gotLink, "repository_id = ? AND src_slug = ? AND dst_slug = ?", repo.ID, link.SrcSlug, link.DstSlug).Error; err != nil {
+		t.Fatalf("read backlink row: %v", err)
+	}
+	if gotLink.Resolved != link.Resolved {
+		t.Fatalf("backlink round-trip mismatch: %+v", gotLink)
+	}
+
+	var gotHistory WikiPageHistory
+	if err := gdb.First(&gotHistory, "repository_id = ? AND slug = ? AND commit_sha = ?", repo.ID, history.Slug, history.CommitSHA).Error; err != nil {
+		t.Fatalf("read history row: %v", err)
+	}
+	if gotHistory.ParentCommitSHA != history.ParentCommitSHA || gotHistory.Message != history.Message || !gotHistory.CommittedAt.Equal(history.CommittedAt) {
+		t.Fatalf("history round-trip mismatch: %+v", gotHistory)
 	}
 }
