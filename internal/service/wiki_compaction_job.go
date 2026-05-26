@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"gh-server/internal/db"
@@ -252,26 +253,39 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 			return err
 		}
 
-		var revisionRows []db.WikiPageRevision
 		pageIDs := make([]uint64, 0, len(livePages))
 		for _, page := range livePages {
 			pageIDs = append(pageIDs, page.PageID)
 		}
-		if err := s.DBForCtx(ctx).
+		var revisionCount int64
+		if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
 			Where("page_id IN ?", pageIDs).
-			Order("page_id ASC, revision_id DESC").
-			Find(&revisionRows).Error; err != nil {
+			Count(&revisionCount).Error; err != nil {
 			return err
 		}
-		if len(revisionRows) == 0 {
+		if revisionCount == 0 {
 			return ErrNotFound
 		}
 
-		nextRevisionByPage := make(map[uint64]uint64, len(livePages))
-		for _, rev := range revisionRows {
-			if _, ok := nextRevisionByPage[rev.PageID]; !ok {
-				nextRevisionByPage[rev.PageID] = rev.RevisionID + 1
-			}
+		type latestRevisionRow struct {
+			PageID     uint64
+			RevisionID uint64
+		}
+		var latestRevisionRows []latestRevisionRow
+		if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
+			Select("page_id, MAX(revision_id) AS revision_id").
+			Where("page_id IN ?", pageIDs).
+			Group("page_id").
+			Find(&latestRevisionRows).Error; err != nil {
+			return err
+		}
+		if len(latestRevisionRows) == 0 {
+			return ErrNotFound
+		}
+
+		nextRevisionByPage := make(map[uint64]uint64, len(latestRevisionRows))
+		for _, rev := range latestRevisionRows {
+			nextRevisionByPage[rev.PageID] = rev.RevisionID + 1
 		}
 
 		newCommitSHA, err := s.createWikiCompactCommitObject(ctx, repoFullName, now)
@@ -307,12 +321,13 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 				return err
 			}
 
+			newRevisions := make([]db.WikiPageRevision, 0, len(livePages))
 			for _, page := range livePages {
 				nextRevisionID, ok := nextRevisionByPage[page.PageID]
 				if !ok {
 					nextRevisionID = page.HeadRevisionID + 1
 				}
-				newRevision := db.WikiPageRevision{
+				newRevisions = append(newRevisions, db.WikiPageRevision{
 					PageID:      page.PageID,
 					RevisionID:  nextRevisionID,
 					ChangesetID: newChangeset.ChangesetID,
@@ -324,20 +339,13 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 					Op:          "update",
 					AuthorID:    newChangeset.AuthorID,
 					CommittedAt: now,
-				}
-				if err := tx.Create(&newRevision).Error; err != nil {
-					return err
-				}
-				if err := tx.Model(&db.WikiPage{}).
-					Where("page_id = ?", page.PageID).
-					Updates(map[string]any{
-						"head_revision_id":  newRevision.RevisionID,
-						"head_changeset_id": newChangeset.ChangesetID,
-						"last_author_id":    newChangeset.AuthorID,
-						"updated_at":        now,
-					}).Error; err != nil {
-					return err
-				}
+				})
+			}
+			if err := tx.CreateInBatches(newRevisions, 200).Error; err != nil {
+				return err
+			}
+			if err := updateWikiPagesForCompaction(tx, newRevisions, newChangeset.ChangesetID, newChangeset.AuthorID, now); err != nil {
+				return err
 			}
 			if err := tx.Where("repository_id = ? AND changeset_id <> ?", rep.ID, newChangeset.ChangesetID).Delete(&db.WikiChangeset{}).Error; err != nil {
 				return err
@@ -348,7 +356,7 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 				NewHead:         newCommitSHA,
 				CompactedBefore: now,
 				Pages:           len(livePages),
-				CommitsRemoved:  len(revisionRows) - len(livePages),
+				CommitsRemoved:  int(revisionCount) - len(livePages),
 			}
 			return nil
 		})
@@ -364,4 +372,31 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 	}
 	s.invalidateWikiBacklinks(repoFullName)
 	return result, nil
+}
+
+func updateWikiPagesForCompaction(tx *gorm.DB, revisions []db.WikiPageRevision, changesetID uint64, authorID *uint, now time.Time) error {
+	if len(revisions) == 0 {
+		return nil
+	}
+
+	args := make([]any, 0, len(revisions)*3+4)
+	caseSQL := strings.Builder{}
+	caseSQL.WriteString("CASE page_id")
+	pageIDs := make([]any, 0, len(revisions))
+	for _, rev := range revisions {
+		caseSQL.WriteString(" WHEN ? THEN ?")
+		args = append(args, rev.PageID, rev.RevisionID)
+		pageIDs = append(pageIDs, rev.PageID)
+	}
+	caseSQL.WriteString(" END")
+	args = append(args, changesetID, authorID, now)
+	args = append(args, pageIDs...)
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
+	sql := fmt.Sprintf(
+		"UPDATE wiki_pages SET head_revision_id = %s, head_changeset_id = ?, last_author_id = ?, updated_at = ? WHERE page_id IN (%s)",
+		caseSQL.String(),
+		placeholders,
+	)
+	return tx.Exec(sql, args...).Error
 }

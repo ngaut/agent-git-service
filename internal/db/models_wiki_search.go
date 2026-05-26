@@ -13,6 +13,7 @@ type WikiSearchDocument struct {
 	Title        string     `gorm:"size:1024;not null"`
 	Body         LargeText
 	RevisionSHA  string `gorm:"size:40;not null"`
+	LabelDigest  string `gorm:"type:text"`
 	Embedding    string `gorm:"column:embedding;-:migration"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time

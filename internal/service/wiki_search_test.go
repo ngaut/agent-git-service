@@ -97,6 +97,39 @@ func (r *recordingWikiEmbedder) LastCall() (string, int) {
 	return r.lastText, r.called
 }
 
+type concurrentWikiEmbedder struct {
+	delay         time.Duration
+	mu            sync.Mutex
+	called        int
+	inFlight      int
+	maxConcurrent int
+}
+
+func (e *concurrentWikiEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	e.mu.Lock()
+	e.called++
+	e.inFlight++
+	if e.inFlight > e.maxConcurrent {
+		e.maxConcurrent = e.inFlight
+	}
+	e.mu.Unlock()
+
+	time.Sleep(e.delay)
+
+	e.mu.Lock()
+	e.inFlight--
+	e.mu.Unlock()
+	return []float32{0.1, 0.2, 0.3}, nil
+}
+
+func (e *concurrentWikiEmbedder) Dimensions() int { return 3 }
+
+func (e *concurrentWikiEmbedder) Stats() (called, maxConcurrent int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.called, e.maxConcurrent
+}
+
 func TestWikiSearchTruncatesLongPageEmbeddingInput(t *testing.T) {
 	recorder := &recordingWikiEmbedder{vec: []float32{0.1, 0.2, 0.3}}
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
@@ -355,6 +388,152 @@ func TestWikiSearchVectorUnavailableFallsBackToLexicalAndReindex_Issue1362(t *te
 	}
 	if len(resp.Results) == 0 {
 		t.Fatal("expected results after reindex")
+	}
+}
+
+func TestReindexWikiSearchSkipsUnchangedDocuments(t *testing.T) {
+	recorder := &recordingWikiEmbedder{vec: []float32{0.1, 0.2, 0.3}}
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{Embedder: recorder})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-reindex-skip",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-reindex-skip"
+
+	if _, err := svc.PutWikiPage(ctx, full, "guides/one", "# One\n\nBody one.", "create one", ""); err != nil {
+		t.Fatalf("PutWikiPage(one): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "guides/two", "# Two\n\nBody two.", "create two", ""); err != nil {
+		t.Fatalf("PutWikiPage(two): %v", err)
+	}
+	svc.Wg.Wait()
+
+	if got := recorder.called; got != 2 {
+		t.Fatalf("initial embed calls = %d, want 2", got)
+	}
+	count, err := svc.ReindexWikiSearch(ctx, full)
+	if err != nil {
+		t.Fatalf("ReindexWikiSearch: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("ReindexWikiSearch count = %d, want 2", count)
+	}
+	if got := recorder.called; got != 2 {
+		t.Fatalf("embed calls after unchanged reindex = %d, want 2", got)
+	}
+}
+
+func TestReindexWikiSearchRefreshesLabelOnlyChanges(t *testing.T) {
+	recorder := &recordingWikiEmbedder{vec: []float32{0.1, 0.2, 0.3}}
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{Embedder: recorder})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-reindex-label-refresh",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-reindex-label-refresh"
+
+	if _, err := svc.PutWikiPage(ctx, full, "guides/one", "# One\n\nBody one.", "create one", ""); err != nil {
+		t.Fatalf("PutWikiPage(one): %v", err)
+	}
+	svc.Wg.Wait()
+
+	if got := recorder.called; got != 1 {
+		t.Fatalf("initial embed calls = %d, want 1", got)
+	}
+	if _, err := svc.CreateLabel(ctx, full, "ops", "0052CC", "Operations runbook"); err != nil {
+		t.Fatalf("CreateLabel: %v", err)
+	}
+	if _, err := svc.SetWikiPageLabels(ctx, full, "guides/one", []string{"ops"}); err != nil {
+		t.Fatalf("SetWikiPageLabels: %v", err)
+	}
+	svc.Wg.Wait()
+
+	if got := recorder.called; got != 2 {
+		t.Fatalf("embed calls after label update = %d, want 2", got)
+	}
+	count, err := svc.ReindexWikiSearch(ctx, full)
+	if err != nil {
+		t.Fatalf("ReindexWikiSearch: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("ReindexWikiSearch count = %d, want 1", count)
+	}
+	if got := recorder.called; got != 2 {
+		t.Fatalf("embed calls after label-only reindex = %d, want 2", got)
+	}
+}
+
+func TestReindexWikiSearchUsesConcurrentUpserts(t *testing.T) {
+	embedder := &concurrentWikiEmbedder{delay: 25 * time.Millisecond}
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{Embedder: embedder})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-reindex-concurrent",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-reindex-concurrent"
+
+	for i := 0; i < 6; i++ {
+		slug := fmt.Sprintf("guides/page-%d", i)
+		body := fmt.Sprintf("# Page %d\n\nBody %d.", i, i)
+		if _, err := svc.PutWikiPage(ctx, full, slug, body, "seed page", ""); err != nil {
+			t.Fatalf("PutWikiPage(%s): %v", slug, err)
+		}
+	}
+	svc.Wg.Wait()
+
+	if err := svc.DB.Where("repository_id > 0").Delete(&db.WikiSearchDocument{}).Error; err != nil {
+		t.Fatalf("clear search docs: %v", err)
+	}
+	beforeCalls, _ := embedder.Stats()
+	count, err := svc.ReindexWikiSearch(ctx, full)
+	if err != nil {
+		t.Fatalf("ReindexWikiSearch: %v", err)
+	}
+	if count != 6 {
+		t.Fatalf("ReindexWikiSearch count = %d, want 6", count)
+	}
+	afterCalls, maxConcurrent := embedder.Stats()
+	if afterCalls-beforeCalls != 6 {
+		t.Fatalf("reindex embed calls = %d, want 6", afterCalls-beforeCalls)
+	}
+	if maxConcurrent < 2 {
+		t.Fatalf("max concurrent embeds = %d, want at least 2", maxConcurrent)
 	}
 }
 
