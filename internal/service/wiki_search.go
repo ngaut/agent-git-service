@@ -26,7 +26,11 @@ const (
 	wikiSearchMaxLimit     = 50
 	wikiSnippetBudget      = 180
 	wikiSemanticMinScore   = 0.2
-	wikiSemanticMaxExact   = 1000
+	// When lexical search already found concrete token matches, keep
+	// semantic-only additions to high-confidence neighbors so short literal
+	// queries do not get flooded by weak vector nearest-neighbor noise.
+	wikiSemanticOnlyMinScoreWithLexical = 0.5
+	wikiSemanticMaxExact                = 1000
 )
 
 type WikiSearchResult struct {
@@ -94,21 +98,26 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 	labelFilters := WikiLabelFilters{Labels: opts.Labels, ExcludeLabels: opts.ExcludeLabels}
 
 	method := "substring"
-	results, err := s.searchWikiLexical(ctx, repo.ID, query, limit, offset, labelFilters)
+	lexical, err := s.searchWikiLexical(ctx, repo.ID, query, labelFilters)
 	if err != nil {
 		slog.WarnContext(ctx, "wiki search indexed path failed; falling back to git scan", "repo", repo.FullName, "error", err)
-		results, err = s.searchWikiLexicalFromGit(ctx, repoFullName, query, limit, offset, labelFilters)
+		lexical, err = s.searchWikiLexicalFromGit(ctx, repoFullName, query, labelFilters)
 		if err != nil {
 			return WikiSearchResponse{}, err
 		}
 	}
+	results := paginateWikiSearchResultList(lexical, limit, offset)
 
 	if s.Embedder != nil && !embedding.IsNop(s.Embedder) {
-		if semantic, ok, semanticErr := s.searchWikiSemantic(ctx, repo.ID, query, limit, offset, labelFilters); semanticErr != nil {
+		if semantic, ok, semanticErr := s.searchWikiSemantic(ctx, repo.ID, query, labelFilters, limit, offset, len(lexical) == 0); semanticErr != nil {
 			slog.WarnContext(ctx, "wiki search semantic path failed; falling back to substring", "repo", repo.FullName, "error", semanticErr)
 		} else if ok {
 			method = "vector"
-			results = semantic
+			if len(lexical) == 0 {
+				results = semantic
+			} else {
+				results = fuseWikiSearchResults(lexical, semantic, limit, offset)
+			}
 		}
 	}
 
@@ -120,11 +129,11 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 	}, nil
 }
 
-func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query string, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, error) {
+func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query string, filters WikiLabelFilters) ([]WikiSearchResult, error) {
 	if db.SupportsTiDBSearch(s.DBForCtx(ctx)) {
 		docs, err := s.wikiSearchDocumentsFullText(ctx, repoID, query, filters)
 		if err == nil {
-			return s.rankWikiLexicalDocuments(ctx, repoID, docs, query, limit, offset)
+			return s.rankWikiLexicalDocuments(ctx, repoID, docs, query)
 		}
 		slog.WarnContext(ctx, "wiki search TiDB full-text query failed; falling back to LIKE", "repo_id", repoID, "error", err)
 	}
@@ -133,10 +142,10 @@ func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query stri
 	if err != nil {
 		return nil, err
 	}
-	return s.rankWikiLexicalDocuments(ctx, repoID, docs, query, limit, offset)
+	return s.rankWikiLexicalDocuments(ctx, repoID, docs, query)
 }
 
-func (s *Service) rankWikiLexicalDocuments(ctx context.Context, repoID uint, docs []db.WikiSearchDocument, query string, limit, offset int) ([]WikiSearchResult, error) {
+func (s *Service) rankWikiLexicalDocuments(ctx context.Context, repoID uint, docs []db.WikiSearchDocument, query string) ([]WikiSearchResult, error) {
 	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
 		return nil, err
 	}
@@ -149,8 +158,8 @@ func (s *Service) rankWikiLexicalDocuments(ctx context.Context, repoID uint, doc
 	for _, doc := range docs {
 		labels := labelsBySlug[doc.Slug]
 		score := 0.0
-		if wikiTextContainsAllTokens(doc.Title, string(doc.Body), query) {
-			score += lexicalScore(doc.Title, string(doc.Body), query)
+		if wikiTextContainsAllTokens(doc.Title, doc.Slug, string(doc.Body), query) {
+			score += lexicalScore(doc.Title, doc.Slug, string(doc.Body), query)
 		}
 		score += wikiLabelLexicalScore(labels, query)
 		if score <= 0 {
@@ -167,10 +176,10 @@ func (s *Service) rankWikiLexicalDocuments(ctx context.Context, repoID uint, doc
 		}
 		return scored[i].score > scored[j].score
 	})
-	return paginateWikiSearchResults(scored, query, limit, offset), nil
+	return buildWikiSearchResults(scored, query), nil
 }
 
-func (s *Service) searchWikiLexicalFromGit(ctx context.Context, repoFullName, query string, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, error) {
+func (s *Service) searchWikiLexicalFromGit(ctx context.Context, repoFullName, query string, filters WikiLabelFilters) ([]WikiSearchResult, error) {
 	pages, err := s.ListWikiPages(ctx, repoFullName, ListWikiPagesOptions{
 		Recursive:     true,
 		Labels:        filters.Labels,
@@ -190,8 +199,8 @@ func (s *Service) searchWikiLexicalFromGit(ctx context.Context, repoFullName, qu
 			return nil, err
 		}
 		score := 0.0
-		if wikiTextContainsAllTokens(page.Title, page.Body, query) {
-			score += lexicalScore(page.Title, page.Body, query)
+		if wikiTextContainsAllTokens(page.Title, page.Slug, page.Body, query) {
+			score += lexicalScore(page.Title, page.Slug, page.Body, query)
 		}
 		score += wikiLabelLexicalScore(page.Labels, query)
 		if score <= 0 {
@@ -209,7 +218,7 @@ func (s *Service) searchWikiLexicalFromGit(ctx context.Context, repoFullName, qu
 		})
 	}
 	sortWikiScoredDocuments(scored)
-	return paginateWikiSearchResults(scored, query, limit, offset), nil
+	return buildWikiSearchResults(scored, query), nil
 }
 
 func escapeWikiSearchLike(s string) string {
@@ -340,7 +349,7 @@ func (s *Service) wikiSearchDocumentsFullText(ctx context.Context, repoID uint, 
 	return docs, nil
 }
 
-func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query string, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, bool, error) {
+func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, limit, offset int, lexicalEmpty bool) ([]WikiSearchResult, bool, error) {
 	vec, err := s.Embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, false, err
@@ -349,12 +358,15 @@ func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query str
 		return nil, false, nil
 	}
 	if !db.SupportsVectorDistance(s.DBForCtx(ctx)) {
-		return s.searchWikiSemanticInMemory(ctx, repoID, query, vec, limit, offset, filters)
+		return s.searchWikiSemanticInMemory(ctx, repoID, query, vec, limit, offset, filters, !lexicalEmpty)
 	}
-	return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters)
+	if lexicalEmpty {
+		return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters, false)
+	}
+	return s.searchWikiSemanticDB(ctx, repoID, query, vec, wikiSemanticMaxExact, 0, filters, true)
 }
 
-func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, bool, error) {
+func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, forFusion bool) ([]WikiSearchResult, bool, error) {
 	docs, err := s.wikiSearchDocuments(ctx, repoID, query, true, filters)
 	if err != nil {
 		return nil, false, err
@@ -388,12 +400,16 @@ func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, q
 		return nil, false, nil
 	}
 	sortWikiScoredDocuments(scored)
-	return paginateWikiSearchResults(scored, query, limit, offset), true, nil
+	if !forFusion {
+		return paginateWikiSearchResults(scored, query, limit, offset), true, nil
+	}
+	return buildWikiSearchResults(scored, query), true, nil
 }
 
 type wikiSemanticDBRow struct {
 	db.WikiSearchDocument `gorm:"embedded"`
 	SemanticDistance      float64 `gorm:"column:semantic_distance"`
+	LabelScore            float64 `gorm:"column:label_score"`
 }
 
 func wikiSemanticExactLimit(limit, offset int) int {
@@ -410,10 +426,15 @@ func wikiSemanticExactLimit(limit, offset int) int {
 	return n
 }
 
-func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters) ([]WikiSearchResult, bool, error) {
-	candidateLimit := wikiSemanticExactLimit(limit, offset)
-	if candidateLimit == 0 {
-		return nil, false, nil
+func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, exactWindow bool) ([]WikiSearchResult, bool, error) {
+	candidateLimit := wikiSemanticPageLimit(limit)
+	dbOffset := offset
+	if exactWindow {
+		candidateLimit = wikiSemanticExactLimit(limit, offset)
+		dbOffset = 0
+		if candidateLimit == 0 {
+			return nil, false, nil
+		}
 	}
 	vecLiteral := embedding.FormatVector(vec)
 	database := s.DBForCtx(ctx)
@@ -429,13 +450,22 @@ func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query s
 	if noResults {
 		return nil, false, nil
 	}
-
 	var rows []wikiSemanticDBRow
-	err = q.
-		Select("wiki_search_documents.*, VEC_COSINE_DISTANCE(wiki_search_documents.embedding, ?) AS semantic_distance", vecLiteral).
-		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: "semantic_distance ASC, wiki_search_documents.updated_at DESC, wiki_search_documents.slug ASC"}}).
-		Limit(candidateLimit).
-		Scan(&rows).Error
+	selectSQL := "wiki_search_documents.*, VEC_COSINE_DISTANCE(wiki_search_documents.embedding, ?) AS semantic_distance"
+	orderSQL := "semantic_distance ASC, wiki_search_documents.updated_at DESC, wiki_search_documents.slug ASC"
+	selectArgs := []any{vecLiteral}
+	if !exactWindow {
+		labelScoreSQL, labelScoreArgs := wikiSearchSemanticLabelScoreSQL(query)
+		selectSQL += ", " + labelScoreSQL + " AS label_score"
+		selectArgs = append(selectArgs, labelScoreArgs...)
+		orderSQL = "(semantic_distance - (label_score * 0.05)) ASC, wiki_search_documents.updated_at DESC, wiki_search_documents.slug ASC"
+	}
+	queryDB := q.
+		Select(selectSQL, selectArgs...).
+		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: orderSQL}}).
+		Offset(dbOffset).
+		Limit(candidateLimit)
+	err = queryDB.Scan(&rows).Error
 	if err != nil {
 		return nil, false, err
 	}
@@ -463,14 +493,54 @@ func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query s
 		}
 		doc := docs[i]
 		labels := labelsBySlug[doc.Slug]
-		score += wikiLabelLexicalScore(labels, query) * 0.05
+		if exactWindow {
+			score += wikiLabelLexicalScore(labels, query) * 0.05
+		} else {
+			score += row.LabelScore * 0.05
+		}
 		scored = append(scored, wikiScoredDocument{doc: doc, score: score, labels: labels})
 	}
 	if len(scored) == 0 {
 		return nil, false, nil
 	}
 	sortWikiScoredDocuments(scored)
-	return paginateWikiSearchResults(scored, query, limit, offset), true, nil
+	if exactWindow {
+		return paginateWikiSearchResults(scored, query, limit, offset), true, nil
+	}
+	return buildWikiSearchResults(scored, query), true, nil
+}
+
+func wikiSemanticPageLimit(limit int) int {
+	if limit <= 0 {
+		return wikiSearchDefaultLimit
+	}
+	return limit
+}
+
+func wikiSearchSemanticLabelScoreSQL(query string) (string, []any) {
+	tokens := wikiSearchTokens(query)
+	if len(tokens) == 0 {
+		return "0", nil
+	}
+
+	scoreTerms := make([]string, 0, len(tokens)*2)
+	args := make([]any, 0, len(tokens)*2)
+	for _, token := range tokens {
+		like := "%" + strings.ToLower(escapeWikiSearchLike(token)) + "%"
+		scoreTerms = append(scoreTerms, "CASE WHEN LOWER(labels.name) LIKE ? THEN 3 ELSE 0 END")
+		args = append(args, like)
+		scoreTerms = append(scoreTerms, "CASE WHEN LOWER(labels.description) LIKE ? THEN 1.5 ELSE 0 END")
+		args = append(args, like)
+	}
+	scoreExpr := strings.Join(scoreTerms, " + ")
+	sql := "COALESCE((" +
+		"SELECT SUM(" + scoreExpr + ") " +
+		"FROM wiki_page_labels " +
+		"JOIN labels ON labels.id = wiki_page_labels.label_id " +
+		"WHERE wiki_page_labels.repository_id = wiki_search_documents.repository_id " +
+		"AND wiki_page_labels.slug = wiki_search_documents.slug" +
+		"), 0)"
+	return sql, args
 }
 
 func sortWikiScoredDocuments(scored []wikiScoredDocument) {
@@ -486,15 +556,15 @@ func sortWikiScoredDocuments(scored []wikiScoredDocument) {
 }
 
 func paginateWikiSearchResults(scored []wikiScoredDocument, query string, limit, offset int) []WikiSearchResult {
-	if offset >= len(scored) {
+	return paginateWikiSearchResultList(buildWikiSearchResults(scored, query), limit, offset)
+}
+
+func buildWikiSearchResults(scored []wikiScoredDocument, query string) []WikiSearchResult {
+	if len(scored) == 0 {
 		return []WikiSearchResult{}
 	}
-	end := offset + limit
-	if end > len(scored) {
-		end = len(scored)
-	}
-	out := make([]WikiSearchResult, 0, end-offset)
-	for _, row := range scored[offset:end] {
+	out := make([]WikiSearchResult, 0, len(scored))
+	for _, row := range scored {
 		out = append(out, WikiSearchResult{
 			Slug:    row.doc.Slug,
 			Title:   titleFromSlug(row.doc.Slug),
@@ -504,6 +574,84 @@ func paginateWikiSearchResults(scored []wikiScoredDocument, query string, limit,
 		})
 	}
 	return out
+}
+
+func paginateWikiSearchResultList(results []WikiSearchResult, limit, offset int) []WikiSearchResult {
+	if offset >= len(results) {
+		return []WikiSearchResult{}
+	}
+	end := offset + limit
+	if end > len(results) {
+		end = len(results)
+	}
+	out := make([]WikiSearchResult, end-offset)
+	copy(out, results[offset:end])
+	return out
+}
+
+type wikiFusedSearchResult struct {
+	result       WikiSearchResult
+	score        float64
+	lexicalRank  int
+	semanticRank int
+}
+
+func wikiReciprocalRankScore(rank int) float64 {
+	if rank <= 0 {
+		return 0
+	}
+	return 1.0 / (60.0 + float64(rank))
+}
+
+func fuseWikiSearchResults(lexical, semantic []WikiSearchResult, limit, offset int) []WikiSearchResult {
+	bySlug := make(map[string]*wikiFusedSearchResult, len(lexical)+len(semantic))
+	for idx, result := range lexical {
+		rank := idx + 1
+		entry := &wikiFusedSearchResult{
+			result:      result,
+			score:       wikiReciprocalRankScore(rank),
+			lexicalRank: rank,
+		}
+		bySlug[result.Slug] = entry
+	}
+	for idx, result := range semantic {
+		rank := idx + 1
+		entry := bySlug[result.Slug]
+		if entry == nil {
+			if len(lexical) > 0 && result.Score < wikiSemanticOnlyMinScoreWithLexical {
+				continue
+			}
+			entry = &wikiFusedSearchResult{result: result}
+			bySlug[result.Slug] = entry
+		} else if result.Score > entry.result.Score {
+			entry.result.Score = result.Score
+		}
+		entry.score += wikiReciprocalRankScore(rank)
+		entry.semanticRank = rank
+	}
+
+	ranked := make([]wikiFusedSearchResult, 0, len(bySlug))
+	for _, entry := range bySlug {
+		ranked = append(ranked, *entry)
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score == ranked[j].score {
+			if (ranked[i].lexicalRank > 0) != (ranked[j].lexicalRank > 0) {
+				return ranked[i].lexicalRank > 0
+			}
+			if (ranked[i].semanticRank > 0) != (ranked[j].semanticRank > 0) {
+				return ranked[i].semanticRank > 0
+			}
+			return ranked[i].result.Slug < ranked[j].result.Slug
+		}
+		return ranked[i].score > ranked[j].score
+	})
+
+	results := make([]WikiSearchResult, 0, len(ranked))
+	for _, entry := range ranked {
+		results = append(results, entry.result)
+	}
+	return paginateWikiSearchResultList(results, limit, offset)
 }
 
 func (s *Service) wikiSearchDocuments(ctx context.Context, repoID uint, query string, requireEmbedding bool, filters WikiLabelFilters) ([]db.WikiSearchDocument, error) {
@@ -601,27 +749,30 @@ func roundWikiScore(score float64) float64 {
 	return math.Round(score*1000) / 1000
 }
 
-func lexicalScore(title, body, query string) float64 {
+func lexicalScore(title, slug, body, query string) float64 {
 	score := 0.0
 	titleLower := strings.ToLower(title)
+	slugLower := strings.ToLower(slug)
 	bodyLower := strings.ToLower(body)
 	for _, token := range wikiSearchTokens(query) {
 		tokenLower := strings.ToLower(token)
 		score += float64(strings.Count(bodyLower, tokenLower))
+		score += float64(strings.Count(slugLower, tokenLower)) * 1.5
 		score += float64(strings.Count(titleLower, tokenLower)) * 2
 	}
 	return score
 }
 
-func wikiTextContainsAllTokens(title, body, query string) bool {
+func wikiTextContainsAllTokens(title, slug, body, query string) bool {
 	titleLower := strings.ToLower(title)
+	slugLower := strings.ToLower(slug)
 	bodyLower := strings.ToLower(body)
 	for _, token := range wikiSearchTokens(query) {
 		token = strings.ToLower(token)
 		if token == "" {
 			continue
 		}
-		if !strings.Contains(titleLower, token) && !strings.Contains(bodyLower, token) {
+		if !strings.Contains(titleLower, token) && !strings.Contains(slugLower, token) && !strings.Contains(bodyLower, token) {
 			return false
 		}
 	}
