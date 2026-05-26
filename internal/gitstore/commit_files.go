@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // FileMutation describes one path change inside a single commit.
@@ -17,6 +18,21 @@ type FileMutation struct {
 
 // CommitFiles applies a set of file mutations and records them in one commit.
 func (s *Store) CommitFiles(ctx context.Context, fullName, branch, message string, changes []FileMutation) (string, error) {
+	return s.commitFilesAt(ctx, fullName, branch, message, changes, time.Time{})
+}
+
+// CommitFilesAt is like CommitFiles but pins the author and committer
+// timestamps to the supplied time. Used by the wiki catalog
+// post-commit hook so the materialized git commit's timestamp lines
+// up exactly with wiki_changesets.committed_at — otherwise the
+// wiki_pages.updated_at the catalog records (sub-second precision)
+// and the git commit's timestamp (seconds, taken at exec time) drift
+// by milliseconds.
+func (s *Store) CommitFilesAt(ctx context.Context, fullName, branch, message string, changes []FileMutation, at time.Time) (string, error) {
+	return s.commitFilesAt(ctx, fullName, branch, message, changes, at)
+}
+
+func (s *Store) commitFilesAt(ctx context.Context, fullName, branch, message string, changes []FileMutation, at time.Time) (string, error) {
 	if len(changes) == 0 {
 		return "", fmt.Errorf("no file changes supplied")
 	}
@@ -26,7 +42,10 @@ func (s *Store) CommitFiles(ctx context.Context, fullName, branch, message strin
 		return "", err
 	}
 
-	ref, parentSHA, err := s.resolveBranchParent(ctx, dir, branch, true)
+	// require=false: a brand-new repo has no master branch yet, and
+	// the first commit through CommitFiles needs to create it as a
+	// root commit (matching writeFile's behaviour).
+	ref, parentSHA, err := s.resolveBranchParent(ctx, dir, branch, false)
 	if err != nil {
 		return "", err
 	}
@@ -79,7 +98,7 @@ func (s *Store) CommitFiles(ctx context.Context, fullName, branch, message strin
 	}
 	newTreeSHA := strings.TrimSpace(string(treeOut))
 
-	commitSHA, err := s.commitTree(ctx, dir, newTreeSHA, parentSHA, message)
+	commitSHA, err := s.commitTreeAt(ctx, dir, newTreeSHA, parentSHA, message, at)
 	if err != nil {
 		return "", err
 	}

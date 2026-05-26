@@ -5,15 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gh-server/internal/db"
-	"gh-server/internal/gitstore"
-	"gh-server/internal/wikicatalog"
 	"log/slog"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
+
+	"gh-server/internal/db"
+	"gh-server/internal/wikicatalog"
 )
 
 // wikiDefaultBranch matches GitHub's wiki convention so a wiki repo cloned
@@ -709,18 +711,33 @@ func (s *Service) ensureWikiRepo(ctx context.Context, repoFullName string) error
 	return s.Git.Init(ctx, wikiRepoFullName(repoFullName), wikiDefaultBranch, false)
 }
 
+// withWikiCatalogWriteLock serializes catalog writes and migration-based
+// refreshes for one wiki repository. This keeps the read-path freshness hook
+// from racing REST writes through the same catalog tables on SQLite-backed
+// test runs and in production.
+func (s *Service) withWikiCatalogWriteLock(ctx context.Context, repoFullName string, fn func() error) error {
+	mu := s.getWikiMigrationSyncMu(repoFullName)
+	mu.Lock()
+	defer mu.Unlock()
+
+	full := wikiRepoFullName(repoFullName)
+	return s.Git.WithRepoLock(ctx, full, fn)
+}
+
 // ListWikiPages returns one summary entry per markdown page at the wiki
 // repo's HEAD. Returns an empty slice (not an error) if the wiki repo
 // has not been created yet.
 //
-// Reads come from the wikicatalog materialized view rather than walking
-// the git tree per request. ensureWikiCatalogCurrent refreshes the view
-// against the wiki repo's HEAD before each call; writes still flow
-// through the legacy git path, so the view stays a strict materialized
-// projection of git until M4 inverts the SOT.
+// Reads come from the wikicatalog. The catalog is the system of
+// record after the runtime cutover, so a single indexed query
+// replaces the legacy "git ls-tree + per-page git log" walk that
+// produced 55 s sidebar latencies at 3000 pages.
 func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts ListWikiPagesOptions) ([]WikiPageSummary, error) {
-	if s.Git == nil {
-		return nil, errors.New("git store unavailable")
+	if s.WikiCatalog == nil {
+		return nil, errors.New("wiki catalog unavailable")
+	}
+	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+		return nil, err
 	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
@@ -730,15 +747,6 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 		if err := validateReadableWikiSlug(opts.Path); err != nil {
 			return nil, err
 		}
-	}
-
-	full := wikiRepoFullName(repoFullName)
-	if !s.Git.Exists(ctx, full) {
-		return []WikiPageSummary{}, nil
-	}
-
-	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
-		return nil, err
 	}
 
 	var pages []db.WikiPage
@@ -796,13 +804,6 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 	return out, nil
 }
 
-func (s *Service) wikiBlobSHAsAtRef(ctx context.Context, repoFullName, ref string, paths []string) (map[string]string, error) {
-	if len(paths) == 0 {
-		return map[string]string{}, nil
-	}
-	return s.Git.BlobSHAs(ctx, repoFullName, ref, paths)
-}
-
 func wikiSlugMatchesPathFilter(slug, prefix string, recursive bool) bool {
 	if prefix == "" {
 		if recursive {
@@ -822,125 +823,6 @@ func wikiSlugMatchesPathFilter(slug, prefix string, recursive bool) bool {
 	}
 	rest := strings.TrimPrefix(slug, prefix)
 	return rest != "" && !strings.Contains(rest, "/")
-}
-
-type wikiPageMetadata struct {
-	UpdatedAt  time.Time
-	LastAuthor *db.User
-	CommitSHA  string
-}
-
-func (s *Service) wikiPageMetadata(ctx context.Context, repoFullName string, paths []string) (map[string]wikiPageMetadata, error) {
-	return s.wikiPageMetadataAtRef(ctx, repoFullName, "", paths)
-}
-
-func (s *Service) wikiPageMetadataAtRef(ctx context.Context, repoFullName, ref string, paths []string) (map[string]wikiPageMetadata, error) {
-	commits, err := s.Git.LatestCommitsForPathsAtRef(ctx, repoFullName, ref, paths)
-	if err != nil {
-		return nil, err
-	}
-	authors := s.resolveWikiCommitAuthors(ctx, commits)
-	out := make(map[string]wikiPageMetadata, len(commits))
-	for path, commit := range commits {
-		meta := wikiPageMetadata{
-			LastAuthor: authors[path],
-			CommitSHA:  commit.SHA,
-		}
-		if commit.Date != "" {
-			if updatedAt, err := time.Parse(time.RFC3339, commit.Date); err == nil {
-				meta.UpdatedAt = updatedAt
-			}
-		}
-		out[path] = meta
-	}
-	return out, nil
-}
-
-func (s *Service) resolveWikiCommitAuthors(ctx context.Context, commits map[string]gitstore.SearchCommitInfo) map[string]*db.User {
-	if len(commits) == 0 {
-		return nil
-	}
-
-	logins := make([]string, 0, len(commits))
-	emailSet := make(map[string]struct{}, len(commits))
-	emails := make([]string, 0, len(commits))
-	for _, commit := range commits {
-		login := strings.TrimSpace(commit.Author)
-		if login != "" {
-			logins = append(logins, login)
-		}
-		email := strings.ToLower(strings.TrimSpace(commit.Email))
-		if email == "" {
-			continue
-		}
-		if _, seen := emailSet[email]; seen {
-			continue
-		}
-		emailSet[email] = struct{}{}
-		emails = append(emails, email)
-	}
-
-	usersByLogin := s.GetUsersByLogins(ctx, logins)
-	usersByEmail := s.lookupUsersByEmailCI(ctx, emails)
-	out := make(map[string]*db.User, len(commits))
-	for path, commit := range commits {
-		email := strings.ToLower(strings.TrimSpace(commit.Email))
-		if user, ok := usersByEmail[email]; ok {
-			u := user
-			out[path] = &u
-			continue
-		}
-		login := strings.TrimSpace(commit.Author)
-		if user, ok := usersByLogin[login]; ok {
-			u := user
-			out[path] = &u
-		}
-	}
-	return out
-}
-
-func (s *Service) resolveWikiCommitUserMap(ctx context.Context, commits []gitstore.SearchCommitInfo, picker func(gitstore.SearchCommitInfo) (string, string)) map[string]*db.User {
-	if len(commits) == 0 {
-		return nil
-	}
-
-	logins := make([]string, 0, len(commits))
-	emailSet := make(map[string]struct{}, len(commits))
-	emails := make([]string, 0, len(commits))
-	for _, commit := range commits {
-		login, email := picker(commit)
-		login = strings.TrimSpace(login)
-		if login != "" {
-			logins = append(logins, login)
-		}
-		email = strings.ToLower(strings.TrimSpace(email))
-		if email == "" {
-			continue
-		}
-		if _, seen := emailSet[email]; seen {
-			continue
-		}
-		emailSet[email] = struct{}{}
-		emails = append(emails, email)
-	}
-
-	usersByLogin := s.GetUsersByLogins(ctx, logins)
-	usersByEmail := s.lookupUsersByEmailCI(ctx, emails)
-	out := make(map[string]*db.User, len(commits))
-	for _, commit := range commits {
-		login, email := picker(commit)
-		if user, ok := usersByLogin[strings.TrimSpace(login)]; ok {
-			u := user
-			out[commit.SHA] = &u
-			continue
-		}
-		email = strings.ToLower(strings.TrimSpace(email))
-		if user, ok := usersByEmail[email]; ok {
-			u := user
-			out[commit.SHA] = &u
-		}
-	}
-	return out
 }
 
 func (s *Service) lookupUsersByEmailCI(ctx context.Context, emails []string) map[string]db.User {
@@ -981,67 +863,132 @@ func (s *Service) GetWikiPage(ctx context.Context, repoFullName, slug string) (W
 // GetWikiPageAtRef reads a single page from the wiki repo at the requested ref.
 // Returns ErrNotFound if the wiki repo doesn't exist or the slug isn't present
 // at that revision, or ErrValidation if the supplied ref is malformed.
+//
+// Reads come from the catalog. Without a ref, the page's head revision
+// is returned via one indexed point lookup. With a ref, the matching
+// revision in wiki_page_revisions is loaded and projected — replacing
+// the legacy per-page git log + ReadFileWithSHAAtRef walk.
 func (s *Service) GetWikiPageAtRef(ctx context.Context, repoFullName, slug, ref string) (WikiPage, error) {
 	if err := validateReadableWikiSlug(slug); err != nil {
 		return WikiPage{}, ErrNotFound
 	}
-	if s.Git == nil {
-		return WikiPage{}, errors.New("git store unavailable")
+	if s.WikiCatalog == nil {
+		return WikiPage{}, errors.New("wiki catalog unavailable")
+	}
+	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+		return WikiPage{}, err
 	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return WikiPage{}, err
 	}
 	ref = strings.TrimSpace(ref)
-	if ref != "" {
-		if !wikiCommitSHARE.MatchString(ref) {
-			return WikiPage{}, fmt.Errorf("%w: invalid ref", ErrValidation)
-		}
+	if ref != "" && !wikiCommitSHARE.MatchString(ref) {
+		return WikiPage{}, fmt.Errorf("%w: invalid ref", ErrValidation)
 	}
-	full := wikiRepoFullName(repoFullName)
-	if !s.Git.Exists(ctx, full) {
-		return WikiPage{}, ErrNotFound
-	}
-	path := wikiSlugToPath(slug)
-	if ref != "" {
-		history, err := s.Git.ListAllCommits(ctx, full, &gitstore.ListCommitsOptions{Path: path})
+
+	if ref == "" {
+		page, err := s.loadLiveWikiPage(ctx, rep.ID, slug)
 		if err != nil {
 			return WikiPage{}, err
 		}
-		found := false
-		for _, commit := range history {
-			if strings.EqualFold(commit.SHA, ref) {
-				found = true
-				break
-			}
+		body, err := s.wikiPageBody(ctx, page)
+		if err != nil {
+			return WikiPage{}, err
 		}
-		if !found {
-			return WikiPage{}, ErrNotFound
+		labelsBySlug, err := s.wikiLabelsForSlugs(ctx, rep.ID, []string{slug})
+		if err != nil {
+			return WikiPage{}, err
 		}
+		return s.wikiPageFromCatalog(page, body, labelsBySlug[slug]), nil
 	}
-	body, blobSHA, err := s.Git.ReadFileWithSHAAtRef(ctx, full, path, ref)
-	if err != nil {
+
+	// Ref-pinned read: locate the revision in wiki_page_revisions
+	// keyed by the page row's slug_ci_v1 (which the catalog updates on
+	// every rename) plus the commit SHA pin.
+	return s.getWikiPageAtRevision(ctx, rep.ID, slug, ref)
+}
+
+// getWikiPageAtRevision returns a single page projected from the
+// wiki_page_revisions row whose commit SHA matches ref and whose
+// page_id maps to the requested slug. Returns ErrNotFound when the
+// slug was not present at that revision.
+func (s *Service) getWikiPageAtRevision(ctx context.Context, repoID uint, slug, ref string) (WikiPage, error) {
+	// CanonicalV1 validates the slug grammar; the query below joins on
+	// the raw slug_at_rev string, so the canonical form itself isn't
+	// needed here, only the validation it performs.
+	if _, err := wikicatalog.CanonicalV1(slug); err != nil {
 		return WikiPage{}, ErrNotFound
 	}
-	bodyStr := string(body)
-	metadata, err := s.wikiPageMetadataAtRef(ctx, full, ref, []string{path})
+	// Find any revision for this slug at the requested commit. The
+	// slug_at_rev column records the on-disk slug as of that revision
+	// so a revision before a rename still resolves by its historical
+	// slug; combined with the per-repo changeset filter the lookup is
+	// fully indexed.
+	var rev db.WikiPageRevision
+	err := s.DBForCtx(ctx).
+		Joins("JOIN wiki_changesets ON wiki_changesets.changeset_id = wiki_page_revisions.changeset_id").
+		Where("wiki_changesets.repository_id = ? AND LOWER(wiki_page_revisions.commit_sha) = LOWER(?) AND wiki_page_revisions.slug_at_rev = ?",
+			repoID, ref, slug).
+		Order("wiki_page_revisions.revision_id DESC").
+		Take(&rev).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return WikiPage{}, ErrNotFound
+	}
 	if err != nil {
 		return WikiPage{}, err
 	}
-	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, rep.ID, []string{slug})
+	if rev.Op == "delete" {
+		return WikiPage{}, ErrNotFound
+	}
+	body, err := s.wikiRevisionBody(ctx, rev)
 	if err != nil {
 		return WikiPage{}, err
 	}
-	meta := metadata[path]
-	return WikiPage{
-		Slug:       slug,
-		Title:      titleFromSlug(slug),
-		Body:       bodyStr,
-		UpdatedAt:  meta.UpdatedAt,
-		SHA:        blobSHA,
-		LastAuthor: meta.LastAuthor,
-		Labels:     labelsBySlug[slug],
-	}, nil
+	var page db.WikiPage
+	if err := s.DBForCtx(ctx).Unscoped().Preload("LastAuthor").
+		Where("page_id = ?", rev.PageID).Take(&page).Error; err != nil {
+		return WikiPage{}, err
+	}
+	page.LastAuthor = nil
+	var changeset db.WikiChangeset
+	if err := s.DBForCtx(ctx).Preload("Author").
+		First(&changeset, "changeset_id = ?", rev.ChangesetID).Error; err == nil {
+		// Prefer the changeset's author for the ref-pinned view since
+		// LastAuthor on the page row reflects HEAD, not this revision.
+		if changeset.Author != nil {
+			page.LastAuthor = changeset.Author
+		}
+		page.UpdatedAt = changeset.CommittedAt
+	}
+	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, repoID, []string{slug})
+	if err != nil {
+		return WikiPage{}, err
+	}
+	out := s.wikiPageFromCatalog(page, body, labelsBySlug[slug])
+	out.Slug = slug
+	out.Title = titleFromSlug(slug)
+	// At-ref reads project the revision's own blob SHA, not the
+	// page row's current HEAD SHA — otherwise the SHA returned
+	// would always equal HEAD regardless of the ref pin.
+	out.SHA = rev.BlobSHA
+	return out, nil
+}
+
+// wikiRevisionBody reads a revision's body, preferring the inline copy
+// embedded on the revision row and falling back to the catalog blob
+// store. Mirrors wikiPageBody but for WikiPageRevision rows.
+func (s *Service) wikiRevisionBody(ctx context.Context, rev db.WikiPageRevision) ([]byte, error) {
+	if len(rev.BodyInline) > 0 {
+		return rev.BodyInline, nil
+	}
+	if rev.BlobSHA == "" {
+		return nil, nil
+	}
+	if s.WikiBlob == nil {
+		return nil, errors.New("wiki blob store unavailable")
+	}
+	return s.WikiBlob.Get(ctx, rev.BlobSHA)
 }
 
 // ListWikiPageHistory returns newest-first revisions for one wiki page.
@@ -1052,73 +999,118 @@ func (s *Service) ListWikiPageHistory(ctx context.Context, repoFullName, slug st
 
 // ListWikiPageHistoryPage returns one page of newest-first revisions for one wiki page
 // plus the total number of matching revisions.
+//
+// Sourced from wiki_page_revisions joined with wiki_changesets so the
+// historical author, committer, and timestamp come from the catalog's
+// per-revision audit record rather than a per-page git log walk.
 func (s *Service) ListWikiPageHistoryPage(ctx context.Context, repoFullName, slug string, page, perPage int) ([]WikiPageHistoryEntry, int, error) {
 	if err := validateWikiSlug(slug); err != nil {
 		return nil, 0, err
 	}
-	if s.Git == nil {
-		return nil, 0, errors.New("git store unavailable")
+	if s.WikiCatalog == nil {
+		return nil, 0, errors.New("wiki catalog unavailable")
 	}
-	full := wikiRepoFullName(repoFullName)
-	if !s.Git.Exists(ctx, full) {
+	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+		return nil, 0, err
+	}
+	rep, err := s.getRepoBase(ctx, repoFullName)
+	if err != nil {
+		return nil, 0, err
+	}
+	// Locate the page id, including soft-deleted pages — history is
+	// kept around even after a delete so the catalog still has a
+	// truthful revision chain to project.
+	slugCI, err := wikicatalog.CanonicalV1(slug)
+	if err != nil {
 		return nil, 0, ErrNotFound
 	}
-	path := wikiSlugToPath(slug)
-	if _, err := s.Git.ReadFile(ctx, full, path); err != nil {
+	var pageRow db.WikiPage
+	if err := s.DBForCtx(ctx).Unscoped().
+		Where("repository_id = ? AND slug_ci_v1 = ?", rep.ID, slugCI).
+		Take(&pageRow).Error; err != nil {
 		return nil, 0, ErrNotFound
 	}
 
-	total, err := s.Git.CountCommits(ctx, full, &gitstore.ListCommitsOptions{Path: path})
-	if err != nil {
+	var total int64
+	if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
+		Where("page_id = ?", pageRow.PageID).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
 		return nil, 0, ErrNotFound
 	}
 
-	commits, err := s.Git.ListCommitsPage(ctx, full, page, perPage, &gitstore.ListCommitsOptions{Path: path})
-	if err != nil {
+	if page < 1 {
+		page = 1
+	}
+	if perPage <= 0 {
+		perPage = 30
+	}
+	offset := (page - 1) * perPage
+
+	type revWithCS struct {
+		db.WikiPageRevision
+		Message     string
+		CommittedAt time.Time
+		CSAuthorID  *uint
+	}
+	var rows []revWithCS
+	if err := s.DBForCtx(ctx).
+		Table("wiki_page_revisions").
+		Select(`wiki_page_revisions.*,
+			wiki_changesets.message AS message,
+			wiki_changesets.committed_at AS committed_at,
+			wiki_changesets.author_id AS cs_author_id`).
+		Joins("JOIN wiki_changesets ON wiki_changesets.changeset_id = wiki_page_revisions.changeset_id").
+		Where("wiki_page_revisions.page_id = ?", pageRow.PageID).
+		Order("wiki_page_revisions.revision_id DESC").
+		Offset(offset).Limit(perPage).
+		Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 
-	authors := s.resolveWikiCommitUserMap(ctx, commits, func(commit gitstore.SearchCommitInfo) (string, string) {
-		return commit.Author, commit.Email
-	})
-	committers := s.resolveWikiCommitUserMap(ctx, commits, func(commit gitstore.SearchCommitInfo) (string, string) {
-		return commit.Committer, commit.CommitterEmail
-	})
-
-	out := make([]WikiPageHistoryEntry, 0, len(commits))
-	for _, commit := range commits {
-		entry := WikiPageHistoryEntry{
-			SHA:       commit.SHA,
-			Message:   commit.Message,
-			Author:    authors[commit.SHA],
-			Committer: committers[commit.SHA],
+	// Batch-load the authors for the revisions on this page.
+	authorIDs := make(map[uint]struct{}, len(rows))
+	for _, r := range rows {
+		if r.AuthorID != nil {
+			authorIDs[*r.AuthorID] = struct{}{}
 		}
-		exists, err := s.Git.FileExistsAtRef(ctx, full, path, commit.SHA)
-		if err != nil {
+		if r.CSAuthorID != nil {
+			authorIDs[*r.CSAuthorID] = struct{}{}
+		}
+	}
+	users := make(map[uint]*db.User, len(authorIDs))
+	if len(authorIDs) > 0 {
+		ids := make([]uint, 0, len(authorIDs))
+		for id := range authorIDs {
+			ids = append(ids, id)
+		}
+		var found []db.User
+		if err := s.DBForCtx(ctx).Where("id IN ?", ids).Find(&found).Error; err != nil {
 			return nil, 0, err
 		}
-		if exists {
-			body, err := s.Git.ReadFileAtRef(ctx, full, path, commit.SHA)
-			if err != nil {
-				return nil, 0, err
-			}
-			entry.BodySize = len(body)
+		for i := range found {
+			users[found[i].ID] = &found[i]
 		}
-		dateValue := commit.CommitterDate
-		if dateValue == "" {
-			dateValue = commit.Date
+	}
+
+	out := make([]WikiPageHistoryEntry, 0, len(rows))
+	for _, r := range rows {
+		entry := WikiPageHistoryEntry{
+			SHA:      r.CommitSHA,
+			Message:  r.Message,
+			Date:     r.CommittedAt,
+			BodySize: r.BodySize,
 		}
-		if dateValue != "" {
-			if parsed, err := time.Parse(time.RFC3339, dateValue); err == nil {
-				entry.Date = parsed
-			}
+		if r.AuthorID != nil {
+			entry.Author = users[*r.AuthorID]
+		}
+		if r.CSAuthorID != nil {
+			entry.Committer = users[*r.CSAuthorID]
 		}
 		out = append(out, entry)
 	}
-	return out, total, nil
+	return out, int(total), nil
 }
 
 // WikiConflictError reports an optimistic-concurrency failure together with
@@ -1164,128 +1156,110 @@ func (s *Service) ListWikiBacklinks(ctx context.Context, repoFullName, slug stri
 // PutWikiPage creates or updates a page. Returns the current page view,
 // including the page blob SHA used by optimistic-concurrency clients, so
 // callers can render without a separate read.
+//
+// Writes flow through the wikicatalog ApplyChangeSet primitive: the
+// catalog is the system of record. The post-commit hook materializes
+// the change onto the wiki bare git repo so clone/pull continue to
+// work, and feeds the search index. See WikiCatalogPostCommit.
 func (s *Service) PutWikiPage(ctx context.Context, repoFullName, slug, body, message, expectedSHA string) (WikiPage, error) {
 	if err := validateWikiSlug(slug); err != nil {
 		return WikiPage{}, err
 	}
-	if s.Git == nil {
-		return WikiPage{}, errors.New("git store unavailable")
+	if s.WikiCatalog == nil {
+		return WikiPage{}, errors.New("wiki catalog unavailable")
 	}
 	if err := s.ensureWikiRepo(ctx, repoFullName); err != nil {
+		return WikiPage{}, err
+	}
+	rep, err := s.getRepoBase(ctx, repoFullName)
+	if err != nil {
 		return WikiPage{}, err
 	}
 	if message == "" {
 		message = "Update " + slug
 	}
-	full := wikiRepoFullName(repoFullName)
-	err := s.Git.WithRepoLock(ctx, full, func() error {
-		if err := s.ensureNoWikiPrefixCollision(ctx, full, slug, ""); err != nil {
-			return err
-		}
-		if expectedSHA == "" {
-			_, err := s.Git.WriteFile(
-				ctx,
-				full,
-				wikiDefaultBranch,
-				wikiSlugToPath(slug),
-				message,
-				[]byte(body),
-			)
-			return err
-		}
-		currentPage, headSHA, err := s.getCurrentWikiPageAtHEAD(ctx, repoFullName, slug)
-		switch {
-		case err == nil:
-			if !strings.EqualFold(expectedSHA, currentPage.SHA) {
-				return &WikiConflictError{ExpectedSHA: expectedSHA, CurrentPage: &currentPage}
-			}
-		case errors.Is(err, ErrNotFound):
-			return &WikiConflictError{ExpectedSHA: expectedSHA, CurrentPage: nil}
-		default:
-			return err
-		}
-		_, err = s.Git.WriteFileIfBranchHead(
-			ctx,
-			full,
-			wikiDefaultBranch,
-			wikiSlugToPath(slug),
-			message,
-			[]byte(body),
-			headSHA,
-		)
-		if errors.Is(err, gitstore.ErrRefChanged) {
-			currentPage, currentErr := s.getCurrentWikiPage(ctx, repoFullName, slug)
-			if currentErr == nil {
-				return &WikiConflictError{ExpectedSHA: expectedSHA, CurrentPage: &currentPage}
-			}
-			if errors.Is(currentErr, ErrNotFound) {
-				return &WikiConflictError{ExpectedSHA: expectedSHA, CurrentPage: nil}
-			}
-			return currentErr
-		}
-		return err
+
+	change := wikicatalog.Change{
+		Op:      wikicatalog.OpUpsert,
+		Slug:    slug,
+		Body:    []byte(body),
+		IfMatch: expectedSHA,
+	}
+	var result wikicatalog.ChangeSetResult
+	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
+		var applyErr error
+		result, applyErr = s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+			RepositoryID: rep.ID,
+			AuthorID:     s.resolveWikiAuthor(ctx),
+			Source:       wikicatalog.SourceREST,
+			Message:      message,
+			Changes:      []wikicatalog.Change{change},
+		})
+		return applyErr
 	})
 	if err != nil {
-		return WikiPage{}, err
+		return WikiPage{}, s.translateCatalogError(ctx, rep.ID, repoFullName, err, false)
 	}
-	s.invalidateWikiBacklinks(repoFullName)
-	page, err := s.getCurrentWikiPage(ctx, repoFullName, slug)
+	written := result.Changes[0]
+	page, err := s.loadLiveWikiPage(ctx, rep.ID, written.Slug)
 	if err != nil {
 		return WikiPage{}, err
 	}
-	s.queueWikiSearchUpsert(ctx, repoFullName, page)
-	return page, nil
+	bodyBytes, err := s.wikiPageBody(ctx, page)
+	if err != nil {
+		return WikiPage{}, err
+	}
+	labels, err := s.wikiLabelsForSlugs(ctx, rep.ID, []string{written.Slug})
+	if err != nil {
+		return WikiPage{}, err
+	}
+	return s.wikiPageFromCatalog(page, bodyBytes, labels[written.Slug]), nil
 }
 
 // DeleteWikiPage removes a page. Returns ErrNotFound when the wiki repo
 // or the slug doesn't exist (matches GitHub's REST contract).
+//
+// Routed through the catalog: OpDelete on ApplyChangeSet. The catalog
+// handles OCC retry internally on wiki_repo_heads, and the post-commit
+// materialize hook deletes the path in the wiki git repo. Search and
+// backlink cache are driven by the same hook.
 func (s *Service) DeleteWikiPage(ctx context.Context, repoFullName, slug, message string) error {
 	if err := validateWikiSlug(slug); err != nil {
 		return err
 	}
-	if s.Git == nil {
-		return errors.New("git store unavailable")
+	if s.WikiCatalog == nil {
+		return errors.New("wiki catalog unavailable")
 	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return err
 	}
-	full := wikiRepoFullName(repoFullName)
-	if !s.Git.Exists(ctx, full) {
-		return ErrNotFound
-	}
 	if message == "" {
 		message = "Delete " + slug
 	}
-	path := wikiSlugToPath(slug)
-	const maxDeleteAttempts = 5
-	for attempt := 0; attempt < maxDeleteAttempts; attempt++ {
-		err = s.Git.WithRepoLock(ctx, full, func() error {
-			if _, err := s.Git.ReadFile(ctx, full, path); err != nil {
-				return ErrNotFound
-			}
-			_, err := s.Git.DeleteFileFromRepo(ctx, full, wikiDefaultBranch, path, message)
-			return err
+	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
+		_, applyErr := s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+			RepositoryID: rep.ID,
+			AuthorID:     s.resolveWikiAuthor(ctx),
+			Source:       wikicatalog.SourceREST,
+			Message:      message,
+			Changes:      []wikicatalog.Change{{Op: wikicatalog.OpDelete, Slug: slug}},
 		})
-		if errors.Is(err, gitstore.ErrRefChanged) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		break
-	}
-	if errors.Is(err, gitstore.ErrRefChanged) {
-		return fmt.Errorf("delete wiki page %q: %w", slug, err)
+		return applyErr
+	})
+	if err != nil {
+		return s.translateCatalogError(ctx, rep.ID, repoFullName, err, false)
 	}
 	if err := s.deleteWikiPageLabels(ctx, rep.ID, slug); err != nil {
 		return err
 	}
 	s.invalidateWikiBacklinks(repoFullName)
-	s.queueWikiSearchDelete(ctx, repoFullName, slug)
 	return nil
 }
 
+// MoveWikiPage renames a page and rewrites inbound references to it
+// in one atomic catalog changeset. The materialize hook lands the
+// equivalent git commit so clone/pull stay coherent.
 func (s *Service) MoveWikiPage(ctx context.Context, repoFullName, slug, newSlug, ifMatch, message string) (WikiMoveResult, error) {
 	if err := validateWikiSlug(slug); err != nil {
 		return WikiMoveResult{}, err
@@ -1296,133 +1270,186 @@ func (s *Service) MoveWikiPage(ctx context.Context, repoFullName, slug, newSlug,
 	if ifMatch == "" {
 		return WikiMoveResult{}, fmt.Errorf("%w: if_match is required", ErrValidation)
 	}
-	if s.Git == nil {
-		return WikiMoveResult{}, errors.New("git store unavailable")
+	if s.WikiCatalog == nil {
+		return WikiMoveResult{}, errors.New("wiki catalog unavailable")
 	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return WikiMoveResult{}, err
 	}
 
-	full := wikiRepoFullName(repoFullName)
-	if !s.Git.Exists(ctx, full) {
-		return WikiMoveResult{}, ErrNotFound
-	}
-
-	rewrittenBodies := map[string]string{}
-	skipped := make([]WikiRewriteSkip, 0)
-	err = s.Git.WithRepoLock(ctx, full, func() error {
-		sourcePath := wikiSlugToPath(slug)
-		destPath := wikiSlugToPath(newSlug)
-
-		currentPage, _, err := s.getCurrentWikiPageAtHEAD(ctx, repoFullName, slug)
-		switch {
-		case errors.Is(err, ErrNotFound):
-			return ErrNotFound
-		case err != nil:
-			return err
-		}
-		if !strings.EqualFold(currentPage.SHA, ifMatch) {
-			return &wikiMoveConflictError{
-				code:    wikiMoveCodeStale,
-				message: fmt.Sprintf("%s: source page %q is stale", wikiMoveCodeStale, slug),
-			}
-		}
-		if _, err := s.Git.ReadFile(ctx, full, destPath); err == nil {
-			return &wikiMoveConflictError{
-				code:    wikiMoveCodeDestTaken,
-				message: fmt.Sprintf("%s: destination page %q already exists", wikiMoveCodeDestTaken, newSlug),
-			}
-		}
-		if err := s.ensureNoWikiPrefixCollision(ctx, full, newSlug, slug); err != nil {
-			return err
-		}
-
-		paths, err := s.Git.ListTreeFiles(ctx, full)
-		if err != nil {
-			return err
-		}
-		for _, path := range paths {
-			candidateSlug := wikiPathToSlug(path)
-			if candidateSlug == "" || candidateSlug == slug {
-				continue
-			}
-			body, err := s.Git.ReadFile(ctx, full, path)
-			if err != nil {
-				return err
-			}
-			rewritten, changed, err := rewriteWikiReferences(string(body), slug, newSlug)
-			if err != nil {
-				slog.WarnContext(ctx, "wiki move skipped inbound rewrite", "slug", candidateSlug, "reason", err.Error())
-				skipped = append(skipped, WikiRewriteSkip{
-					Slug:   candidateSlug,
-					Reason: err.Error(),
-				})
-				continue
-			}
-			if changed {
-				rewrittenBodies[candidateSlug] = rewritten
-			}
-		}
-
-		commitMessage := message
-		if commitMessage == "" {
-			commitMessage = "Move " + slug + " to " + newSlug
-			if len(rewrittenBodies) > 0 {
-				suffix := "pages"
-				if len(rewrittenBodies) == 1 {
-					suffix = "page"
-				}
-				commitMessage += fmt.Sprintf(" (rewrote refs in %d %s)", len(rewrittenBodies), suffix)
-			}
-		}
-
-		mutations := make([]gitstore.FileMutation, 0, len(rewrittenBodies)+2)
-		mutations = append(mutations,
-			gitstore.FileMutation{Path: sourcePath, Delete: true},
-			gitstore.FileMutation{Path: destPath, Content: []byte(currentPage.Body)},
-		)
-		rewrittenSlugs := make([]string, 0, len(rewrittenBodies))
-		for candidateSlug := range rewrittenBodies {
-			rewrittenSlugs = append(rewrittenSlugs, candidateSlug)
-		}
-		sort.Strings(rewrittenSlugs)
-		for _, candidateSlug := range rewrittenSlugs {
-			mutations = append(mutations, gitstore.FileMutation{
-				Path:    wikiSlugToPath(candidateSlug),
-				Content: []byte(rewrittenBodies[candidateSlug]),
-			})
-		}
-
-		_, err = s.Git.CommitFiles(ctx, full, wikiDefaultBranch, commitMessage, mutations)
-		return err
-	})
+	// Plan the inbound rewrites against the catalog so we can pack the
+	// rename and the body updates into a single atomic changeset. The
+	// catalog enforces the IfMatch, destination-occupied, and
+	// prefix-collision checks; we only have to compute the rewrites.
+	rewrittenBodies, skipped, err := s.planWikiMoveRewrites(ctx, rep.ID, slug, newSlug)
 	if err != nil {
 		return WikiMoveResult{}, err
 	}
 
-	s.invalidateWikiBacklinks(repoFullName)
+	commitMessage := message
+	if commitMessage == "" {
+		commitMessage = "Move " + slug + " to " + newSlug
+		if len(rewrittenBodies) > 0 {
+			suffix := "pages"
+			if len(rewrittenBodies) == 1 {
+				suffix = "page"
+			}
+			commitMessage += fmt.Sprintf(" (rewrote refs in %d %s)", len(rewrittenBodies), suffix)
+		}
+	}
+
+	changes := make([]wikicatalog.Change, 0, len(rewrittenBodies)+1)
+	changes = append(changes, wikicatalog.Change{
+		Op:      wikicatalog.OpRename,
+		Slug:    slug,
+		NewSlug: newSlug,
+		IfMatch: ifMatch,
+	})
+	rewriteSlugs := make([]string, 0, len(rewrittenBodies))
+	for s := range rewrittenBodies {
+		rewriteSlugs = append(rewriteSlugs, s)
+	}
+	sort.Strings(rewriteSlugs)
+	for _, rs := range rewriteSlugs {
+		changes = append(changes, wikicatalog.Change{
+			Op:   wikicatalog.OpUpsert,
+			Slug: rs,
+			Body: []byte(rewrittenBodies[rs]),
+		})
+	}
+
+	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
+		_, applyErr := s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+			RepositoryID: rep.ID,
+			AuthorID:     s.resolveWikiAuthor(ctx),
+			Source:       wikicatalog.SourceREST,
+			Message:      commitMessage,
+			Changes:      changes,
+		})
+		return applyErr
+	})
+	if err != nil {
+		return WikiMoveResult{}, s.translateCatalogError(ctx, rep.ID, repoFullName, err, true)
+	}
 	if err := s.moveWikiPageLabels(ctx, rep.ID, map[string]string{slug: newSlug}); err != nil {
 		return WikiMoveResult{}, err
 	}
-	moved, err := s.getCurrentWikiPage(ctx, repoFullName, newSlug)
+	s.queueWikiSearchRefreshBySlugs(ctx, repoFullName, append([]string{newSlug}, rewriteSlugs...))
+
+	s.invalidateWikiBacklinks(repoFullName)
+
+	movedRow, err := s.loadLiveWikiPage(ctx, rep.ID, newSlug)
 	if err != nil {
 		return WikiMoveResult{}, err
 	}
-	s.queueWikiSearchDelete(ctx, repoFullName, slug)
-	s.queueWikiSearchUpsert(ctx, repoFullName, moved)
-	rewrites, err := s.wikiSummariesForBodies(ctx, full, rewrittenBodies)
+	movedBody, err := s.wikiPageBody(ctx, movedRow)
 	if err != nil {
 		return WikiMoveResult{}, err
 	}
-	sort.Slice(skipped, func(i, j int) bool {
-		return skipped[i].Slug < skipped[j].Slug
-	})
+	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, rep.ID, append([]string{newSlug}, rewriteSlugs...))
+	if err != nil {
+		return WikiMoveResult{}, err
+	}
+	moved := s.wikiPageFromCatalog(movedRow, movedBody, labelsBySlug[newSlug])
+
+	rewrites, err := s.wikiSummariesFromCatalog(ctx, rep.ID, rewriteSlugs, labelsBySlug)
+	if err != nil {
+		return WikiMoveResult{}, err
+	}
+	sort.Slice(skipped, func(i, j int) bool { return skipped[i].Slug < skipped[j].Slug })
 	return WikiMoveResult{
 		Moved:    moved,
 		Rewrites: rewrites,
 		Skipped:  skipped,
 	}, nil
+}
+
+// planWikiMoveRewrites finds every live page that links to oldSlug and
+// computes the rewritten body for each. Failed rewrites are reported
+// via the skipped slice (same shape the legacy git-walking code
+// produced). The page being renamed is excluded from rewriting — its
+// content moves through OpRename unchanged, and a self-reference
+// rewrite would collide with OpRename's target slug.
+func (s *Service) planWikiMoveRewrites(ctx context.Context, repoID uint, oldSlug, newSlug string) (map[string]string, []WikiRewriteSkip, error) {
+	oldCI, err := wikicatalog.CanonicalV1(oldSlug)
+	if err != nil {
+		return nil, nil, err
+	}
+	var linkerIDs []uint64
+	if err := s.DBForCtx(ctx).Model(&db.WikiPageLink{}).
+		Where("repository_id = ? AND dst_slug_ci = ?", repoID, oldCI).
+		Distinct("src_page_id").
+		Pluck("src_page_id", &linkerIDs).Error; err != nil {
+		return nil, nil, fmt.Errorf("look up inbound linkers: %w", err)
+	}
+	if len(linkerIDs) == 0 {
+		return map[string]string{}, []WikiRewriteSkip{}, nil
+	}
+	var linkers []db.WikiPage
+	if err := s.DBForCtx(ctx).
+		Where("repository_id = ? AND page_id IN ? AND deleted_at IS NULL", repoID, linkerIDs).
+		Find(&linkers).Error; err != nil {
+		return nil, nil, fmt.Errorf("load linker pages: %w", err)
+	}
+	rewritten := make(map[string]string, len(linkers))
+	skipped := make([]WikiRewriteSkip, 0)
+	for _, p := range linkers {
+		if p.Slug == oldSlug {
+			continue
+		}
+		body, err := s.wikiPageBody(ctx, p)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read linker body for %q: %w", p.Slug, err)
+		}
+		out, changed, err := rewriteWikiReferences(string(body), oldSlug, newSlug)
+		if err != nil {
+			slog.WarnContext(ctx, "wiki move skipped inbound rewrite", "slug", p.Slug, "reason", err.Error())
+			skipped = append(skipped, WikiRewriteSkip{Slug: p.Slug, Reason: err.Error()})
+			continue
+		}
+		if changed {
+			rewritten[p.Slug] = out
+		}
+	}
+	return rewritten, skipped, nil
+}
+
+// wikiSummariesFromCatalog builds WikiPageSummary entries for a set
+// of slugs by reading their current catalog rows. Replaces the legacy
+// wikiSummariesForBodies that walked git for per-page metadata.
+func (s *Service) wikiSummariesFromCatalog(ctx context.Context, repoID uint, slugs []string, labelsBySlug map[string][]db.Label) ([]WikiPageSummary, error) {
+	if len(slugs) == 0 {
+		return []WikiPageSummary{}, nil
+	}
+	cis := make([]string, 0, len(slugs))
+	for _, sl := range slugs {
+		ci, err := wikicatalog.CanonicalV1(sl)
+		if err != nil {
+			continue
+		}
+		cis = append(cis, ci)
+	}
+	var pages []db.WikiPage
+	if err := s.DBForCtx(ctx).
+		Preload("LastAuthor").
+		Where("repository_id = ? AND slug_ci_v1 IN ? AND deleted_at IS NULL", repoID, cis).
+		Find(&pages).Error; err != nil {
+		return nil, err
+	}
+	out := make([]WikiPageSummary, 0, len(pages))
+	for _, p := range pages {
+		out = append(out, WikiPageSummary{
+			Slug:       p.Slug,
+			Title:      wikicatalog.TitleFromSlug(p.Slug),
+			SHA:        p.HeadBlobSHA,
+			UpdatedAt:  p.UpdatedAt,
+			LastAuthor: p.LastAuthor,
+			Labels:     labelsBySlug[p.Slug],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out, nil
 }
 
 // MoveWikiPagePrefix atomically moves every wiki page whose slug equals from or
@@ -1444,315 +1471,289 @@ func (s *Service) MoveWikiPagePrefix(ctx context.Context, repoFullName, from, to
 	if err != nil {
 		return WikiBulkMoveResult{}, err
 	}
-
-	full := wikiRepoFullName(repoFullName)
-	if !s.Git.Exists(ctx, full) {
-		return WikiBulkMoveResult{}, &WikiBulkMoveNotFoundError{From: from}
-	}
 	if message == "" {
 		message = "Move wiki prefix " + from + " to " + to
 	}
 
-	var (
-		result          WikiBulkMoveResult
-		rewrittenBodies = map[string]string{}
-		skipped         = make([]WikiRewriteSkip, 0)
-	)
-	err = s.Git.WithRepoLock(ctx, full, func() error {
-		headSHA, err := s.Git.HeadSHA(ctx, full, wikiDefaultBranch)
+	// Enumerate sources from the catalog (indexed prefix scan) instead
+	// of walking the git tree.
+	sources, sourcePages, err := s.findWikiBulkMoveSources(ctx, rep.ID, from)
+	if err != nil {
+		return WikiBulkMoveResult{}, err
+	}
+	if len(sources) == 0 {
+		return WikiBulkMoveResult{}, &WikiBulkMoveNotFoundError{From: from}
+	}
+
+	missing := make([]string, 0)
+	for _, slug := range sources {
+		if strings.TrimSpace(ifMatch[slug]) == "" {
+			missing = append(missing, slug)
+		}
+	}
+	if len(missing) > 0 {
+		return WikiBulkMoveResult{}, &WikiBulkMoveValidationError{From: from, MissingSlugs: missing}
+	}
+
+	// Build the rename plan + per-source destination map. The catalog
+	// enforces destination-occupied and prefix-collision at apply
+	// time, but we still need to detect them up front because the
+	// legacy REST contract returns them as a single batched
+	// WikiBulkMoveConflictError instead of bailing on the first.
+	sourceSet := make(map[string]struct{}, len(sources))
+	for _, slug := range sources {
+		sourceSet[slug] = struct{}{}
+	}
+	unaffectedPages, err := s.loadUnaffectedWikiPages(ctx, rep.ID, sourceSet)
+	if err != nil {
+		return WikiBulkMoveResult{}, err
+	}
+	unaffectedSlugs := make([]string, 0, len(unaffectedPages))
+	for slug := range unaffectedPages {
+		unaffectedSlugs = append(unaffectedSlugs, slug)
+	}
+
+	moved := make([]WikiBulkMoveEntry, 0, len(sources))
+	remaps := make([]WikiBulkMoveEntry, 0, len(sources))
+	movedBodies := make(map[string]string, len(sources))
+	movedTargets := make(map[string]struct{}, len(sources))
+	conflicts := make([]WikiBulkMoveConflict, 0)
+	for _, slug := range sources {
+		destSlug := remapWikiMoveSlug(slug, from, to)
+		if err := validateWikiSlug(destSlug); err != nil {
+			return WikiBulkMoveResult{}, err
+		}
+		page := sourcePages[slug]
+		expectedSHA := strings.TrimSpace(ifMatch[slug])
+		if !strings.EqualFold(page.HeadBlobSHA, expectedSHA) {
+			conflicts = append(conflicts, WikiBulkMoveConflict{
+				From:       slug,
+				To:         destSlug,
+				Code:       wikiMoveCodeStale,
+				Message:    fmt.Sprintf("%s: source page %q is stale", wikiMoveCodeStale, slug),
+				CurrentSHA: page.HeadBlobSHA,
+			})
+			continue
+		}
+		if _, taken := unaffectedPages[destSlug]; taken {
+			conflicts = append(conflicts, WikiBulkMoveConflict{
+				From:    slug,
+				To:      destSlug,
+				Code:    wikiMoveCodeDestTaken,
+				Message: fmt.Sprintf("%s: destination page %q already exists", wikiMoveCodeDestTaken, destSlug),
+			})
+			continue
+		}
+		if collision := findWikiPrefixCollision(destSlug, unaffectedSlugs, nil); collision != "" {
+			conflicts = append(conflicts, WikiBulkMoveConflict{
+				From:          slug,
+				To:            destSlug,
+				Code:          wikiMoveCodePrefix,
+				Message:       fmt.Sprintf("%s: destination page %q conflicts with existing page %q", wikiMoveCodePrefix, destSlug, collision),
+				ConflictsWith: collision,
+			})
+			continue
+		}
+		body, err := s.wikiPageBody(ctx, page)
 		if err != nil {
-			return &WikiBulkMoveNotFoundError{From: from}
+			return WikiBulkMoveResult{}, err
 		}
+		moved = append(moved, WikiBulkMoveEntry{From: slug, To: destSlug, SHA: page.HeadBlobSHA})
+		remaps = append(remaps, WikiBulkMoveEntry{From: slug, To: destSlug, SHA: page.HeadBlobSHA})
+		movedBodies[destSlug] = string(body)
+		movedTargets[destSlug] = struct{}{}
+	}
+	if len(conflicts) > 0 {
+		return WikiBulkMoveResult{}, &WikiBulkMoveConflictError{Conflicts: conflicts}
+	}
 
-		paths, err := s.Git.ListTreeFiles(ctx, full)
-		if err != nil {
-			return err
-		}
-		currentSlugs := wikiSlugsFromPaths(paths)
-		sources := wikiBulkMoveSources(currentSlugs, from)
-		if len(sources) == 0 {
-			return &WikiBulkMoveNotFoundError{From: from}
-		}
-
-		missing := make([]string, 0)
-		for _, slug := range sources {
-			if strings.TrimSpace(ifMatch[slug]) == "" {
-				missing = append(missing, slug)
-			}
-		}
-		if len(missing) > 0 {
-			return &WikiBulkMoveValidationError{From: from, MissingSlugs: missing}
-		}
-
-		sourceSet := make(map[string]struct{}, len(sources))
-		for _, slug := range sources {
-			sourceSet[slug] = struct{}{}
-		}
-		unaffected := make([]string, 0, len(currentSlugs)-len(sources))
-		for _, slug := range currentSlugs {
-			if _, ok := sourceSet[slug]; !ok {
-				unaffected = append(unaffected, slug)
-			}
-		}
-
-		moves := make([]gitstore.FileMove, 0, len(sources))
-		moved := make([]WikiBulkMoveEntry, 0, len(sources))
-		remaps := make([]WikiBulkMoveEntry, 0, len(sources))
-		movedBodies := make(map[string]string, len(sources))
-		movedTargets := make(map[string]struct{}, len(sources))
-		conflicts := make([]WikiBulkMoveConflict, 0)
-		for _, slug := range sources {
-			destSlug := remapWikiMoveSlug(slug, from, to)
-			if err := validateWikiSlug(destSlug); err != nil {
-				return err
-			}
-
-			page, err := s.getWikiPageAtRef(ctx, repoFullName, slug, headSHA)
+	// Rewrite inbound references in every body (unaffected pages plus
+	// the moved pages themselves — a moved page may reference another
+	// moved page and its body needs the new slug). Pages whose
+	// rewriter trips are recorded as skipped, matching the legacy
+	// behaviour for malformed content.
+	skipped := make([]WikiRewriteSkip, 0)
+	rewriteAllBodies := func(slug, body string) (string, bool, bool) {
+		// returns (newBody, changed, shouldSkip)
+		rewritten := body
+		changed := false
+		for _, remap := range remaps {
+			next, bodyChanged, err := rewriteWikiReferences(rewritten, remap.From, remap.To)
 			if err != nil {
-				return &WikiBulkMoveNotFoundError{From: from}
+				slog.WarnContext(ctx, "wiki bulk move skipped inbound rewrite", "slug", slug, "reason", err.Error())
+				skipped = append(skipped, WikiRewriteSkip{Slug: slug, Reason: err.Error()})
+				return body, false, true
 			}
-
-			expectedSHA := strings.TrimSpace(ifMatch[slug])
-			if !strings.EqualFold(page.SHA, expectedSHA) {
-				conflicts = append(conflicts, WikiBulkMoveConflict{
-					From:       slug,
-					To:         destSlug,
-					Code:       wikiMoveCodeStale,
-					Message:    fmt.Sprintf("%s: source page %q is stale", wikiMoveCodeStale, slug),
-					CurrentSHA: page.SHA,
-				})
-				continue
-			}
-
-			if sliceContains(unaffected, destSlug) {
-				conflicts = append(conflicts, WikiBulkMoveConflict{
-					From:    slug,
-					To:      destSlug,
-					Code:    wikiMoveCodeDestTaken,
-					Message: fmt.Sprintf("%s: destination page %q already exists", wikiMoveCodeDestTaken, destSlug),
-				})
-				continue
-			}
-
-			if collision := findWikiPrefixCollision(destSlug, unaffected, nil); collision != "" {
-				conflicts = append(conflicts, WikiBulkMoveConflict{
-					From:          slug,
-					To:            destSlug,
-					Code:          wikiMoveCodePrefix,
-					Message:       fmt.Sprintf("%s: destination page %q conflicts with existing page %q", wikiMoveCodePrefix, destSlug, collision),
-					ConflictsWith: collision,
-				})
-				continue
-			}
-
-			moves = append(moves, gitstore.FileMove{
-				OldPath: wikiSlugToPath(slug),
-				NewPath: wikiSlugToPath(destSlug),
-			})
-			moved = append(moved, WikiBulkMoveEntry{
-				From: slug,
-				To:   destSlug,
-				SHA:  page.SHA,
-			})
-			remaps = append(remaps, WikiBulkMoveEntry{
-				From: slug,
-				To:   destSlug,
-				SHA:  page.SHA,
-			})
-			movedBodies[destSlug] = page.Body
-			movedTargets[destSlug] = struct{}{}
-		}
-
-		if len(conflicts) > 0 {
-			return &WikiBulkMoveConflictError{Conflicts: conflicts}
-		}
-
-		mutatedBodies := make(map[string]string, len(movedBodies))
-		for slug, body := range movedBodies {
-			mutatedBodies[slug] = body
-		}
-		for _, candidateSlug := range unaffected {
-			body, err := s.Git.ReadFile(ctx, full, wikiSlugToPath(candidateSlug))
-			if err != nil {
-				return err
-			}
-			mutatedBodies[candidateSlug] = string(body)
-		}
-
-		for candidateSlug, originalBody := range mutatedBodies {
-			rewritten := originalBody
-			changed := false
-			skipPage := false
-			for _, remap := range remaps {
-				nextBody, bodyChanged, err := rewriteWikiReferences(rewritten, remap.From, remap.To)
-				if err != nil {
-					slog.WarnContext(ctx, "wiki bulk move skipped inbound rewrite", "slug", candidateSlug, "reason", err.Error())
-					skipped = append(skipped, WikiRewriteSkip{
-						Slug:   candidateSlug,
-						Reason: err.Error(),
-					})
-					skipPage = true
-					break
-				}
-				if bodyChanged {
-					rewritten = nextBody
-					changed = true
-				}
-			}
-			if skipPage {
-				continue
-			}
-			if changed {
-				mutatedBodies[candidateSlug] = rewritten
-				if _, isMovedTarget := movedTargets[candidateSlug]; !isMovedTarget {
-					rewrittenBodies[candidateSlug] = rewritten
-				}
+			if bodyChanged {
+				rewritten = next
+				changed = true
 			}
 		}
-
-		commitMessage := message
-		if len(rewrittenBodies) > 0 && !strings.Contains(commitMessage, "rewrote refs in") {
-			suffix := "pages"
-			if len(rewrittenBodies) == 1 {
-				suffix = "page"
-			}
-			commitMessage += fmt.Sprintf(" (rewrote refs in %d %s)", len(rewrittenBodies), suffix)
-		}
-
-		mutations := make([]gitstore.FileMutation, 0, len(moves)*2+len(mutatedBodies))
-		for _, move := range moves {
-			mutations = append(mutations,
-				gitstore.FileMutation{Path: move.OldPath, Delete: true},
-				gitstore.FileMutation{Path: move.NewPath, Content: []byte(mutatedBodies[wikiPathToSlug(move.NewPath)])},
-			)
-		}
-		rewrittenSlugs := make([]string, 0, len(rewrittenBodies))
-		for slug := range rewrittenBodies {
-			rewrittenSlugs = append(rewrittenSlugs, slug)
-		}
-		sort.Strings(rewrittenSlugs)
-		for _, slug := range rewrittenSlugs {
-			mutations = append(mutations, gitstore.FileMutation{
-				Path:    wikiSlugToPath(slug),
-				Content: []byte(rewrittenBodies[slug]),
-			})
-		}
-
-		commitSHA, err := s.Git.CommitFiles(ctx, full, wikiDefaultBranch, commitMessage, mutations)
+		return rewritten, changed, false
+	}
+	rewrittenBodies := map[string]string{}
+	for slug, page := range unaffectedPages {
+		body, err := s.wikiPageBody(ctx, page)
 		if err != nil {
-			return err
+			return WikiBulkMoveResult{}, err
 		}
-		result = WikiBulkMoveResult{
-			Moved:  moved,
-			Commit: commitSHA,
+		newBody, changed, skip := rewriteAllBodies(slug, string(body))
+		if skip || !changed {
+			continue
 		}
-		return nil
+		rewrittenBodies[slug] = newBody
+	}
+	// Apply the same rewrite pass to the bodies that move (keyed by
+	// the destination slug). These end up on OpUpsert at the new
+	// slug, not on OpRename, so the new revision can carry the
+	// rewritten content.
+	movedRewrittenBodies := make(map[string]string, len(moved))
+	for _, mv := range moved {
+		orig := movedBodies[mv.To]
+		newBody, _, skip := rewriteAllBodies(mv.From, orig)
+		if skip {
+			movedRewrittenBodies[mv.To] = orig
+			continue
+		}
+		movedRewrittenBodies[mv.To] = newBody
+	}
+
+	commitMessage := message
+	if len(rewrittenBodies) > 0 && !strings.Contains(commitMessage, "rewrote refs in") {
+		suffix := "pages"
+		if len(rewrittenBodies) == 1 {
+			suffix = "page"
+		}
+		commitMessage += fmt.Sprintf(" (rewrote refs in %d %s)", len(rewrittenBodies), suffix)
+	}
+
+	// Build the changeset: one OpRename per moved page, carrying the
+	// (possibly rewritten) body so the page identity stays continuous
+	// across the move. One OpUpsert per rewritten unaffected linker.
+	changes := make([]wikicatalog.Change, 0, len(moved)+len(rewrittenBodies))
+	for _, mv := range moved {
+		changes = append(changes, wikicatalog.Change{
+			Op:      wikicatalog.OpRename,
+			Slug:    mv.From,
+			NewSlug: mv.To,
+			Body:    []byte(movedRewrittenBodies[mv.To]),
+			IfMatch: mv.SHA,
+		})
+	}
+	rewriteSlugs := make([]string, 0, len(rewrittenBodies))
+	for slug := range rewrittenBodies {
+		rewriteSlugs = append(rewriteSlugs, slug)
+	}
+	sort.Strings(rewriteSlugs)
+	for _, slug := range rewriteSlugs {
+		changes = append(changes, wikicatalog.Change{
+			Op:   wikicatalog.OpUpsert,
+			Slug: slug,
+			Body: []byte(rewrittenBodies[slug]),
+		})
+	}
+
+	var applyResult wikicatalog.ChangeSetResult
+	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
+		var applyErr error
+		applyResult, applyErr = s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+			RepositoryID: rep.ID,
+			AuthorID:     s.resolveWikiAuthor(ctx),
+			Source:       wikicatalog.SourceREST,
+			Message:      commitMessage,
+			Changes:      changes,
+		})
+		return applyErr
 	})
 	if err != nil {
+		return WikiBulkMoveResult{}, s.translateCatalogError(ctx, rep.ID, repoFullName, err, true)
+	}
+	labelRemaps := make(map[string]string, len(moved))
+	for _, mv := range moved {
+		labelRemaps[mv.From] = mv.To
+	}
+	if err := s.moveWikiPageLabels(ctx, rep.ID, labelRemaps); err != nil {
 		return WikiBulkMoveResult{}, err
 	}
 
 	s.invalidateWikiBacklinks(repoFullName)
-	remaps := make(map[string]string, len(result.Moved))
-	for _, item := range result.Moved {
-		remaps[item.From] = item.To
+
+	labelLookupSlugs := make([]string, 0, len(moved)+len(rewriteSlugs))
+	for _, mv := range moved {
+		labelLookupSlugs = append(labelLookupSlugs, mv.To)
 	}
-	if err := s.moveWikiPageLabels(ctx, rep.ID, remaps); err != nil {
-		return WikiBulkMoveResult{}, err
-	}
-	for _, item := range result.Moved {
-		s.queueWikiSearchDelete(ctx, repoFullName, item.From)
-		if page, err := s.GetWikiPage(ctx, repoFullName, item.To); err == nil {
-			s.queueWikiSearchUpsert(ctx, repoFullName, page)
-		}
-	}
-	rewrites, err := s.wikiSummariesForBodies(ctx, full, rewrittenBodies)
+	labelLookupSlugs = append(labelLookupSlugs, rewriteSlugs...)
+	s.queueWikiSearchRefreshBySlugs(ctx, repoFullName, labelLookupSlugs)
+	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, rep.ID, labelLookupSlugs)
 	if err != nil {
 		return WikiBulkMoveResult{}, err
 	}
-	sort.Slice(skipped, func(i, j int) bool {
-		return skipped[i].Slug < skipped[j].Slug
-	})
-	result.Rewrites = rewrites
-	result.Skipped = skipped
-	return result, nil
-}
 
-func (s *Service) ensureNoWikiPrefixCollision(ctx context.Context, repoFullName, slug, ignore string) error {
-	if _, err := s.Git.HeadSHA(ctx, repoFullName, wikiDefaultBranch); err != nil {
-		return nil
-	}
-	paths, err := s.Git.ListTreeFiles(ctx, repoFullName)
+	rewrites, err := s.wikiSummariesFromCatalog(ctx, rep.ID, rewriteSlugs, labelsBySlug)
 	if err != nil {
-		return err
+		return WikiBulkMoveResult{}, err
 	}
-	ignoreSet := map[string]struct{}{}
-	if ignore != "" {
-		ignoreSet[ignore] = struct{}{}
-	}
-	if collision := findWikiPrefixCollision(slug, wikiSlugsFromPaths(paths), ignoreSet); collision != "" {
-		return fmt.Errorf("%w: wiki slug %q conflicts with existing page %q", ErrConflict, slug, collision)
-	}
-	return nil
-}
+	sort.Slice(skipped, func(i, j int) bool { return skipped[i].Slug < skipped[j].Slug })
 
-func (s *Service) getCurrentWikiPage(ctx context.Context, repoFullName, slug string) (WikiPage, error) {
-	page, err := s.GetWikiPage(ctx, repoFullName, slug)
-	if err != nil {
-		return WikiPage{}, err
-	}
-	return page, nil
-}
-
-func (s *Service) getCurrentWikiPageAtHEAD(ctx context.Context, repoFullName, slug string) (WikiPage, string, error) {
-	full := wikiRepoFullName(repoFullName)
-	headSHA, err := s.Git.HeadSHA(ctx, full, wikiDefaultBranch)
-	if err != nil {
-		return WikiPage{}, "", ErrNotFound
-	}
-	page, err := s.getWikiPageAtRef(ctx, repoFullName, slug, headSHA)
-	if err != nil {
-		return WikiPage{}, "", err
-	}
-	return page, headSHA, nil
-}
-
-func (s *Service) getWikiPageAtRef(ctx context.Context, repoFullName, slug, ref string) (WikiPage, error) {
-	full := wikiRepoFullName(repoFullName)
-	body, blobSHA, err := s.Git.ReadFileWithSHAAtRef(ctx, full, wikiSlugToPath(slug), ref)
-	if err != nil {
-		return WikiPage{}, ErrNotFound
-	}
-	bodyStr := string(body)
-	return WikiPage{
-		Slug:       slug,
-		Title:      titleFromSlug(slug),
-		Body:       bodyStr,
-		SHA:        blobSHA,
-		LastAuthor: nil,
+	return WikiBulkMoveResult{
+		Moved:    moved,
+		Commit:   applyResult.CommitSHA,
+		Rewrites: rewrites,
+		Skipped:  skipped,
 	}, nil
 }
 
-func wikiBulkMoveSources(slugs []string, from string) []string {
-	out := make([]string, 0)
-	for _, slug := range slugs {
-		if slug == from || strings.HasPrefix(slug, from+"/") {
-			out = append(out, slug)
-		}
+// findWikiBulkMoveSources returns every live wiki page whose slug
+// equals from or starts with from/. Bypasses the slow git tree walk
+// by querying the catalog's slug_ci_v1 prefix index.
+func (s *Service) findWikiBulkMoveSources(ctx context.Context, repoID uint, from string) ([]string, map[string]db.WikiPage, error) {
+	fromCI, err := wikicatalog.CanonicalV1(from)
+	if err != nil {
+		return nil, nil, err
 	}
-	return out
+	var pages []db.WikiPage
+	if err := s.DBForCtx(ctx).
+		Where("repository_id = ? AND deleted_at IS NULL AND (slug_ci_v1 = ? OR slug_ci_v1 LIKE ?)",
+			repoID, fromCI, fromCI+"/%").
+		Find(&pages).Error; err != nil {
+		return nil, nil, err
+	}
+	slugs := make([]string, 0, len(pages))
+	bySlug := make(map[string]db.WikiPage, len(pages))
+	for _, p := range pages {
+		if p.Slug != from && !strings.HasPrefix(p.Slug, from+"/") {
+			// The slug_ci_v1 prefix match can over-include when the
+			// canonicalisation folds case or unusual characters into
+			// the same key; filter on the raw slug to match legacy
+			// REST semantics exactly.
+			continue
+		}
+		slugs = append(slugs, p.Slug)
+		bySlug[p.Slug] = p
+	}
+	sort.Strings(slugs)
+	return slugs, bySlug, nil
 }
 
-func wikiSlugsFromPaths(paths []string) []string {
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		slug := wikiPathToSlug(path)
-		if slug != "" {
-			out = append(out, slug)
-		}
+// loadUnaffectedWikiPages returns every live wiki page in the repo
+// whose slug is NOT in the provided source set, keyed by raw slug.
+// Used by MoveWikiPagePrefix to find inbound rewrite candidates and
+// to detect destination collisions.
+func (s *Service) loadUnaffectedWikiPages(ctx context.Context, repoID uint, exclude map[string]struct{}) (map[string]db.WikiPage, error) {
+	var pages []db.WikiPage
+	if err := s.DBForCtx(ctx).
+		Where("repository_id = ? AND deleted_at IS NULL", repoID).
+		Find(&pages).Error; err != nil {
+		return nil, err
 	}
-	sort.Strings(out)
-	return out
+	out := make(map[string]db.WikiPage, len(pages))
+	for _, p := range pages {
+		if _, skip := exclude[p.Slug]; skip {
+			continue
+		}
+		out[p.Slug] = p
+	}
+	return out, nil
 }
 
 func remapWikiMoveSlug(slug, from, to string) string {
@@ -1786,48 +1787,4 @@ func sliceContains(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func (s *Service) wikiSummariesForBodies(ctx context.Context, wikiRepoFullName string, bodies map[string]string) ([]WikiPageSummary, error) {
-	if len(bodies) == 0 {
-		return []WikiPageSummary{}, nil
-	}
-	paths := make([]string, 0, len(bodies))
-	for slug := range bodies {
-		paths = append(paths, wikiSlugToPath(slug))
-	}
-	sort.Strings(paths)
-
-	snapshot, err := s.Git.ResolveContentCommit(ctx, wikiRepoFullName, "")
-	if err != nil {
-		return nil, err
-	}
-
-	metadata, err := s.wikiPageMetadataAtRef(ctx, wikiRepoFullName, snapshot, paths)
-	if err != nil {
-		return nil, err
-	}
-	blobSHAs, err := s.wikiBlobSHAsAtRef(ctx, wikiRepoFullName, snapshot, paths)
-	if err != nil {
-		return nil, err
-	}
-
-	summaries := make([]WikiPageSummary, 0, len(paths))
-	for _, path := range paths {
-		slug := wikiPathToSlug(path)
-		if slug == "" {
-			continue
-		}
-		summary := WikiPageSummary{
-			Slug:  slug,
-			Title: titleFromSlug(slug),
-			SHA:   blobSHAs[path],
-		}
-		if meta, ok := metadata[path]; ok {
-			summary.UpdatedAt = meta.UpdatedAt
-			summary.LastAuthor = meta.LastAuthor
-		}
-		summaries = append(summaries, summary)
-	}
-	return summaries, nil
 }

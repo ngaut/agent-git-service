@@ -123,6 +123,142 @@ func TestWikiPageLabelsLifecycleAndRecall(t *testing.T) {
 	}
 }
 
+func TestMoveWikiPagePrefix_PreservesLabelsOnMovedPages(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	owner := db.User{Login: "wiki-bulk-label-owner", Name: "wiki-bulk-label-owner", Type: db.TypeUser}
+	if err := svc.DB.Create(&owner).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "wiki-bulk-labels",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	full := owner.Login + "/wiki-bulk-labels"
+
+	if _, err := svc.CreateLabel(ctx, full, "auth", "d73a4a", "Authentication docs"); err != nil {
+		t.Fatalf("create auth label: %v", err)
+	}
+	if _, err := svc.CreateLabel(ctx, full, "runbook", "0e8a16", "Operational docs"); err != nil {
+		t.Fatalf("create runbook label: %v", err)
+	}
+
+	intro, err := svc.PutWikiPage(ctx, full, "tutorial/intro", "# Intro\n", "create intro", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage(intro): %v", err)
+	}
+	deep, err := svc.PutWikiPage(ctx, full, "tutorial/deep/link", "# Deep\n", "create deep", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage(deep): %v", err)
+	}
+	if _, err := svc.SetWikiPageLabels(ctx, full, "tutorial/intro", []string{"auth"}); err != nil {
+		t.Fatalf("SetWikiPageLabels(intro): %v", err)
+	}
+	if _, err := svc.SetWikiPageLabels(ctx, full, "tutorial/deep/link", []string{"runbook"}); err != nil {
+		t.Fatalf("SetWikiPageLabels(deep): %v", err)
+	}
+	svc.Wg.Wait()
+
+	result, err := svc.MoveWikiPagePrefix(ctx, full, "tutorial", "guides", map[string]string{
+		"tutorial/intro":     intro.SHA,
+		"tutorial/deep/link": deep.SHA,
+	}, "move tutorial")
+	if err != nil {
+		t.Fatalf("MoveWikiPagePrefix: %v", err)
+	}
+	svc.Wg.Wait()
+	if len(result.Moved) != 2 {
+		t.Fatalf("moved = %+v, want 2 rows", result.Moved)
+	}
+
+	introLabels, err := svc.ListWikiPageLabels(ctx, full, "guides/intro")
+	if err != nil {
+		t.Fatalf("ListWikiPageLabels(guides/intro): %v", err)
+	}
+	if got := labelNames(introLabels); len(got) != 1 || got[0] != "auth" {
+		t.Fatalf("guides/intro labels = %v, want [auth]", got)
+	}
+	deepLabels, err := svc.ListWikiPageLabels(ctx, full, "guides/deep/link")
+	if err != nil {
+		t.Fatalf("ListWikiPageLabels(guides/deep/link): %v", err)
+	}
+	if got := labelNames(deepLabels); len(got) != 1 || got[0] != "runbook" {
+		t.Fatalf("guides/deep/link labels = %v, want [runbook]", got)
+	}
+
+	if _, err := svc.ListWikiPageLabels(ctx, full, "tutorial/intro"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("old intro labels err = %v, want ErrNotFound", err)
+	}
+	if _, err := svc.ListWikiPageLabels(ctx, full, "tutorial/deep/link"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("old deep labels err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestWikiWrites_RecreateMissingGitProjection_Issue1446(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	owner := db.User{Login: "wiki-projection-owner", Name: "wiki-projection-owner", Type: db.TypeUser}
+	if err := svc.DB.Create(&owner).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "wiki-projection-rebuild",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	full := owner.Login + "/wiki-projection-rebuild"
+
+	intro, err := svc.PutWikiPage(ctx, full, "tutorial/intro", "# Intro\n", "create intro", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage(intro): %v", err)
+	}
+	deep, err := svc.PutWikiPage(ctx, full, "tutorial/deep/link", "# Deep\n", "create deep", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage(deep): %v", err)
+	}
+
+	if err := svc.Git.Delete(ctx, full+".wiki"); err != nil {
+		t.Fatalf("delete wiki projection before move: %v", err)
+	}
+	if _, err := svc.MoveWikiPage(ctx, full, "tutorial/intro", "guides/intro", intro.SHA, "move intro"); err != nil {
+		t.Fatalf("MoveWikiPage after projection loss: %v", err)
+	}
+	if !svc.Git.Exists(ctx, full+".wiki") {
+		t.Fatalf("wiki projection was not recreated after MoveWikiPage")
+	}
+
+	if err := svc.Git.Delete(ctx, full+".wiki"); err != nil {
+		t.Fatalf("delete wiki projection before bulk move: %v", err)
+	}
+	if _, err := svc.MoveWikiPagePrefix(ctx, full, "tutorial", "guides", map[string]string{
+		"tutorial/deep/link": deep.SHA,
+	}, "bulk move tutorial"); err != nil {
+		t.Fatalf("MoveWikiPagePrefix after projection loss: %v", err)
+	}
+	if !svc.Git.Exists(ctx, full+".wiki") {
+		t.Fatalf("wiki projection was not recreated after MoveWikiPagePrefix")
+	}
+
+	if err := svc.Git.Delete(ctx, full+".wiki"); err != nil {
+		t.Fatalf("delete wiki projection before delete: %v", err)
+	}
+	if err := svc.DeleteWikiPage(ctx, full, "guides/deep/link", "delete deep"); err != nil {
+		t.Fatalf("DeleteWikiPage after projection loss: %v", err)
+	}
+	if !svc.Git.Exists(ctx, full+".wiki") {
+		t.Fatalf("wiki projection was not recreated after DeleteWikiPage")
+	}
+}
+
 func labelNames(labels []db.Label) []string {
 	names := make([]string, 0, len(labels))
 	for _, label := range labels {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -531,12 +532,23 @@ func commitEnv() []string {
 }
 
 func (s *Store) commitTree(ctx context.Context, dir, treeSHA, parentSHA, message string) (string, error) {
+	return s.commitTreeAt(ctx, dir, treeSHA, parentSHA, message, time.Time{})
+}
+
+func (s *Store) commitTreeAt(ctx context.Context, dir, treeSHA, parentSHA, message string, at time.Time) (string, error) {
 	commitArgs := []string{"-C", dir, "commit-tree", treeSHA, "-m", message}
 	if parentSHA != "" {
 		commitArgs = append(commitArgs, "-p", parentSHA)
 	}
 	commitCmd := exec.CommandContext(ctx, "git", commitArgs...)
-	commitCmd.Env = commitEnv()
+	if at.IsZero() {
+		commitCmd.Env = commitEnv()
+	} else {
+		commitCmd.Env = append(commitEnv(),
+			"GIT_AUTHOR_DATE="+at.Format(time.RFC3339),
+			"GIT_COMMITTER_DATE="+at.Format(time.RFC3339),
+		)
+	}
 	commitOut, err := commitCmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("commit-tree failed: %w", err)

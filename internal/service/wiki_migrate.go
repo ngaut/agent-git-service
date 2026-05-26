@@ -97,9 +97,10 @@ func (s *Service) MigrateWiki(ctx context.Context, repoFullName string, opts Wik
 // ensureWikiCatalogCurrent is the read-path freshness hook for the
 // wiki catalog. It treats the wikicatalog tables as a materialized
 // view of the legacy git wiki repo: before serving a read, this
-// function compares the wiki repo's git HEAD against the last
-// migrated commit recorded in the catalog and replays only the new
-// commits if they diverge. The fast path is one Git HEAD lookup plus
+// function compares the wiki repo's visible content branch
+// (`wikiDefaultBranch`, matching GitHub wiki semantics) against the
+// last migrated commit recorded in the catalog and replays only the
+// new commits if they diverge. The fast path is one Git lookup plus
 // one indexed catalog query.
 //
 // This sits in front of catalog-backed read handlers while writes
@@ -117,11 +118,12 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 	if err != nil {
 		return err
 	}
-	lastMigratedSHA, err := s.loadLatestMigratedWikiCommitSHA(ctx, rep.ID)
+	last, err := s.loadLatestWikiChangesetState(ctx, rep.ID)
 	if err != nil {
 		return fmt.Errorf("read catalog head for %q: %w", repoFullName, err)
 	}
-	headSHA, err := s.Git.ResolveContentCommit(ctx, full, "")
+	lastMigratedSHA := last.CommitSHA
+	headSHA, err := s.Git.ResolveContentCommit(ctx, full, wikiDefaultBranch)
 	if err != nil || strings.TrimSpace(headSHA) == "" {
 		branches, branchErr := s.Git.ListBranches(ctx, full)
 		if branchErr != nil {
@@ -131,12 +133,30 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 			return fmt.Errorf("list wiki branches for %q: %w", repoFullName, branchErr)
 		}
 		if len(branches) == 0 {
-			if lastMigratedSHA != "" {
+			if lastMigratedSHA != "" && last.allowGitBackfillReset() {
 				if err := s.resetWikiCatalogRepo(ctx, rep.ID); err != nil {
 					return fmt.Errorf("reset empty wiki catalog for %q: %w", repoFullName, err)
 				}
 				if err := s.pruneWikiPageLabelsForMissingPages(ctx, rep.ID); err != nil {
 					return fmt.Errorf("prune wiki page labels for empty wiki %q: %w", repoFullName, err)
+				}
+			}
+			return nil
+		}
+		hasVisibleBranch := false
+		for _, branch := range branches {
+			if branch.Name == wikiDefaultBranch {
+				hasVisibleBranch = true
+				break
+			}
+		}
+		if !hasVisibleBranch {
+			if lastMigratedSHA != "" && last.allowGitBackfillReset() {
+				if err := s.resetWikiCatalogRepo(ctx, rep.ID); err != nil {
+					return fmt.Errorf("reset catalog without %s for %q: %w", wikiDefaultBranch, repoFullName, err)
+				}
+				if err := s.pruneWikiPageLabelsForMissingPages(ctx, rep.ID); err != nil {
+					return fmt.Errorf("prune wiki page labels without %s for %q: %w", wikiDefaultBranch, repoFullName, err)
 				}
 			}
 			return nil
@@ -147,6 +167,9 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 		return fmt.Errorf("resolve wiki content commit for %q: empty commit with %d branches", repoFullName, len(branches))
 	}
 	if strings.EqualFold(lastMigratedSHA, strings.ToLower(strings.TrimSpace(headSHA))) {
+		return nil
+	}
+	if lastMigratedSHA != "" && !last.allowGitBackfillReset() {
 		return nil
 	}
 	if _, err := s.migrateOneWiki(ctx, rep, WikiMigrationOptions{}); err != nil {
@@ -172,12 +195,13 @@ func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts W
 	}
 	stats.GitCommits = len(commits)
 
-	lastMigratedSHA, err := s.loadLatestMigratedWikiCommitSHA(ctx, repo.ID)
+	last, err := s.loadLatestWikiChangesetState(ctx, repo.ID)
 	if err != nil {
 		return stats, fmt.Errorf("load latest migrated SHA: %w", err)
 	}
+	lastMigratedSHA := last.CommitSHA
 	didReset := false
-	if lastMigratedSHA != "" && !wikiCommitInHistory(commits, lastMigratedSHA) {
+	if lastMigratedSHA != "" && last.allowGitBackfillReset() && !wikiCommitInHistory(commits, lastMigratedSHA) {
 		if err := s.resetWikiCatalogRepo(ctx, repo.ID); err != nil {
 			return stats, fmt.Errorf("reset rewritten wiki catalog: %w", err)
 		}
@@ -244,21 +268,35 @@ func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts W
 	return stats, nil
 }
 
-func (s *Service) loadLatestMigratedWikiCommitSHA(ctx context.Context, repoID uint) (string, error) {
+type wikiChangesetState struct {
+	CommitSHA      string
+	Source         wikicatalog.Source
+	SynthFormatVer int16
+}
+
+func (s *Service) loadLatestWikiChangesetState(ctx context.Context, repoID uint) (wikiChangesetState, error) {
 	var last db.WikiChangeset
 	err := s.DBForCtx(ctx).
-		Select("synth_commit_sha").
+		Select("synth_commit_sha", "source", "synth_format_ver").
 		Where("repository_id = ?", repoID).
 		Order("changeset_id DESC").
 		Limit(1).
 		Take(&last).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", nil
+		return wikiChangesetState{}, nil
 	}
 	if err != nil {
-		return "", err
+		return wikiChangesetState{}, err
 	}
-	return strings.ToLower(strings.TrimSpace(last.SynthCommitSHA)), nil
+	return wikiChangesetState{
+		CommitSHA:      strings.ToLower(strings.TrimSpace(last.SynthCommitSHA)),
+		Source:         wikicatalog.Source(strings.TrimSpace(last.Source)),
+		SynthFormatVer: last.SynthFormatVer,
+	}, nil
+}
+
+func (s wikiChangesetState) allowGitBackfillReset() bool {
+	return s.SynthFormatVer >= synthProjectionMaterialized
 }
 
 func wikiCommitInHistory(commits []gitstore.SearchCommitInfo, sha string) bool {

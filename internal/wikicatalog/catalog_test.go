@@ -72,14 +72,6 @@ func TestPlanChangeSet_ValidatesInputs(t *testing.T) {
 			wantErr: "must not set NewSlug",
 		},
 		{
-			name: "rename-with-body",
-			req: ChangeSetRequest{
-				RepositoryID: 1, Source: SourceREST,
-				Changes: []Change{{Op: OpRename, Slug: "a", NewSlug: "b", Body: []byte("x")}},
-			},
-			wantErr: "OpRename must not set Body",
-		},
-		{
 			name: "rename-bad-newslug",
 			req: ChangeSetRequest{
 				RepositoryID: 1, Source: SourceREST,

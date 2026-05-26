@@ -7,6 +7,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"sync/atomic"
@@ -15,22 +16,38 @@ import (
 
 	"gh-server/internal/db"
 	"gh-server/internal/service"
+	"gh-server/internal/testharness"
 	"gh-server/internal/wikicatalog"
 )
 
+func setupWikiMigrationTestService(t testing.TB) (*service.Service, func()) {
+	return testharness.NewService(t, testharness.ServiceConfig{MaxOpenConns: 1})
+}
+
 func TestMigrateAllWikis_ContinuesAfterRepoFailure(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	badRepo := seedRepoForWikiMigration(t, svc, "alice", "bad")
 	goodRepo := seedRepoForWikiMigration(t, svc, "bob", "good")
 
-	if _, err := svc.PutWikiPage(ctx, badRepo, "broken", "bad body", "create bad", ""); err != nil {
-		t.Fatalf("PutWikiPage bad repo: %v", err)
+	// Seed git directly (bypassing the catalog) so MigrateWiki has
+	// real work to do. After the runtime cutover, the only scenario
+	// where MigrateWiki sees uncataloged git commits is when the data
+	// pre-existed in git — exactly what this test models.
+	for _, full := range []string{badRepo + ".wiki", goodRepo + ".wiki"} {
+		if err := svc.Git.Init(ctx, full, "master", false); err != nil {
+			t.Fatalf("init wiki %q: %v", full, err)
+		}
 	}
-	if _, err := svc.PutWikiPage(ctx, goodRepo, "home", "good body", "create good", ""); err != nil {
-		t.Fatalf("PutWikiPage good repo: %v", err)
+	if _, err := svc.Git.WriteFile(ctx, badRepo+".wiki", "master",
+		"broken.md", "create bad", []byte("bad body")); err != nil {
+		t.Fatalf("seed git bad: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, goodRepo+".wiki", "master",
+		"home.md", "create good", []byte("good body")); err != nil {
+		t.Fatalf("seed git good: %v", err)
 	}
 
 	badIdentity, err := svc.GetRepo(ctx, badRepo)
@@ -63,7 +80,7 @@ func TestMigrateAllWikis_ContinuesAfterRepoFailure(t *testing.T) {
 }
 
 func TestMigrateWiki_EmptyRepoIsNoOp(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -77,7 +94,7 @@ func TestMigrateWiki_EmptyRepoIsNoOp(t *testing.T) {
 }
 
 func TestMigrateWiki_ReplaysSinglePage(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -90,7 +107,10 @@ func TestMigrateWiki_ReplaysSinglePage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrateWiki: %v", err)
 	}
-	if stats.GitCommits != 1 || stats.NewCommits != 1 || stats.Pages != 1 {
+	// PutWikiPage routes through the catalog and reconciles
+	// synth_commit_sha after materializing git, so the commit is
+	// already present in wiki_changesets when MigrateWiki runs.
+	if stats.GitCommits != 1 || stats.NewCommits != 0 || stats.SkippedExist != 1 || stats.Pages != 1 {
 		t.Fatalf("stats %+v", stats)
 	}
 
@@ -110,7 +130,7 @@ func TestMigrateWiki_ReplaysSinglePage(t *testing.T) {
 }
 
 func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -134,7 +154,11 @@ func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrateWiki: %v", err)
 	}
-	if stats.GitCommits != 4 || stats.NewCommits != 4 {
+	// PutWikiPage and DeleteWikiPage both route through the catalog
+	// and reconcile synth_commit_sha to the materialized git SHA, so
+	// all four commits are already known to the catalog and
+	// MigrateWiki has nothing left to do.
+	if stats.GitCommits != 4 || stats.NewCommits != 0 || stats.SkippedExist != 4 {
 		t.Fatalf("stats %+v", stats)
 	}
 	if stats.Pages != 1 {
@@ -176,7 +200,7 @@ func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
 }
 
 func TestMigrateWiki_IsIdempotent(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -189,8 +213,11 @@ func TestMigrateWiki_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if stats1.NewCommits != 1 {
-		t.Fatalf("first run NewCommits = %d, want 1", stats1.NewCommits)
+	// PUT already populated the catalog with synth_commit_sha == git
+	// SHA, so the first MigrateWiki call has nothing new to do — both
+	// runs of MigrateWiki are no-ops in this scenario.
+	if stats1.NewCommits != 0 || stats1.SkippedExist != 1 {
+		t.Fatalf("first run stats %+v, want NewCommits=0 SkippedExist=1", stats1)
 	}
 
 	stats2, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
@@ -206,7 +233,7 @@ func TestMigrateWiki_IsIdempotent(t *testing.T) {
 }
 
 func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -319,8 +346,118 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 	}
 }
 
+func TestGetWikiPageAndHistory_RefreshCatalogAfterNonFastForwardRewrite(t *testing.T) {
+	svc, cleanup := setupWikiMigrationTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+
+	homeV1, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", "")
+	if err != nil {
+		t.Fatalf("create home: %v", err)
+	}
+	headA, err := svc.Git.HeadSHA(ctx, repoFullName+".wiki", "master")
+	if err != nil {
+		t.Fatalf("head after A: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "about", "about body", "create about", ""); err != nil {
+		t.Fatalf("create about: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v2", "update home", homeV1.SHA); err != nil {
+		t.Fatalf("update home: %v", err)
+	}
+
+	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+
+	repoDir, err := svc.Git.GetRepoPath(ctx, repoFullName+".wiki")
+	if err != nil {
+		t.Fatalf("GetRepoPath: %v", err)
+	}
+	workDir := t.TempDir()
+	if out, err := exec.Command("git", "clone", repoDir, workDir).CombinedOutput(); err != nil {
+		t.Fatalf("git clone bare wiki: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "checkout", "master").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout master: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "reset", "--hard", headA).CombinedOutput(); err != nil {
+		t.Fatalf("git reset --hard %s: %v\n%s", headA, err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "push", "--force", "origin", "master").CombinedOutput(); err != nil {
+		t.Fatalf("git push --force origin master: %v\n%s", err, out)
+	}
+
+	page, err := svc.GetWikiPage(ctx, repoFullName, "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage after rewrite: %v", err)
+	}
+	if page.SHA != homeV1.SHA {
+		t.Fatalf("GetWikiPage returned SHA %q, want rewritten home SHA %q", page.SHA, homeV1.SHA)
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "about"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(about) err = %v, want ErrNotFound", err)
+	}
+
+	history, total, err := svc.ListWikiPageHistoryPage(ctx, repoFullName, "home", 1, 10)
+	if err != nil {
+		t.Fatalf("ListWikiPageHistoryPage after rewrite: %v", err)
+	}
+	if total != 1 || len(history) != 1 {
+		t.Fatalf("history total=%d len=%d, want 1/1", total, len(history))
+	}
+	if history[0].SHA != headA {
+		t.Fatalf("history SHA = %q, want rewritten head %q", history[0].SHA, headA)
+	}
+}
+
+func TestEnsureWikiCatalogCurrent_PreservesRESTHeadWhenGitProjectionLags_Issue1446(t *testing.T) {
+	svc, cleanup := setupWikiMigrationTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "projection-lag")
+
+	page, err := svc.PutWikiPage(ctx, repoFullName, "home", "catalog body", "create home", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+
+	rep, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	if err := svc.DB.Model(&db.WikiChangeset{}).
+		Where("repository_id = ?", rep.ID).
+		Updates(map[string]any{
+			"synth_commit_sha": "1111111111111111111111111111111111111111",
+			"synth_format_ver": int16(0),
+		}).Error; err != nil {
+		t.Fatalf("set pending synthetic SHA: %v", err)
+	}
+
+	got, err := svc.GetWikiPage(ctx, repoFullName, "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage after git lag: %v", err)
+	}
+	if got.Slug != "home" || got.SHA != page.SHA || got.Body != "catalog body" {
+		t.Fatalf("GetWikiPage = %+v, want slug=home sha=%s body preserved", got, page.SHA)
+	}
+
+	var changesets []db.WikiChangeset
+	if err := svc.DB.Where("repository_id = ?", rep.ID).Order("changeset_id ASC").Find(&changesets).Error; err != nil {
+		t.Fatalf("list wiki_changesets: %v", err)
+	}
+	if len(changesets) != 1 {
+		t.Fatalf("wiki_changesets rows = %d, want 1", len(changesets))
+	}
+	if changesets[0].Source != string(wikicatalog.SourceREST) {
+		t.Fatalf("changeset source = %q, want %q", changesets[0].Source, wikicatalog.SourceREST)
+	}
+}
+
 func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -395,7 +532,7 @@ func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 }
 
 func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -499,7 +636,7 @@ func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
 }
 
 func TestMigrateWiki_PreservesGitCommitSHAs(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -534,7 +671,7 @@ func TestMigrateWiki_PreservesGitCommitSHAs(t *testing.T) {
 }
 
 func TestMigrateWiki_PreservesLegacyReadableSlug(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -572,7 +709,7 @@ func TestMigrateWiki_PreservesLegacyReadableSlug(t *testing.T) {
 }
 
 func TestMigrateWiki_PreservesEmptyCommitSHA(t *testing.T) {
-	svc, cleanup := setupTestService(t)
+	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
@@ -616,8 +753,14 @@ func TestMigrateWiki_PreservesEmptyCommitSHA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrateWiki: %v", err)
 	}
-	if stats.NewCommits != 2 {
-		t.Fatalf("stats %+v, want both commits replayed", stats)
+	// After the runtime cutover, the first commit was created by
+	// PutWikiPage routing through ApplyChangeSet and is already in the
+	// catalog (synth_commit_sha == git SHA, reconciled by the
+	// post-commit materialize hook). MigrateWiki only needs to replay
+	// the externally-pushed empty commit, so NewCommits == 1 and the
+	// first commit shows up as SkippedExist == 1.
+	if stats.NewCommits != 1 || stats.SkippedExist != 1 {
+		t.Fatalf("stats %+v, want NewCommits=1 SkippedExist=1", stats)
 	}
 
 	rep, _ := svc.GetRepo(ctx, repoFullName)
