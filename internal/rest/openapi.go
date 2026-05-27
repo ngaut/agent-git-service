@@ -335,6 +335,13 @@ func buildRESTOpenAPIPaths() map[string]any {
 				param("name", "string"),
 			), response(200, "Remaining wiki page labels returned")),
 		},
+		"/api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels": map[string]any{
+			"get": operation("listWikiV2PageLabels", "List labels attached to a provisional Wiki V2 page.", nil, nil, pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+				wikiSlugParamSpec(),
+			), response(200, "Wiki V2 page labels returned")),
+		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/history": map[string]any{
 			"get": operation("listWikiPageHistory", "List paginated revision history for a wiki page slug.", nil, nil, append(pathParams(
 				param("owner", "string"),

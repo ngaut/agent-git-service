@@ -266,6 +266,13 @@ func (d *Deps) ListWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 	d.listWikiPageLabels(w, r, full, slug)
 }
 
+// ListWikiV2PageLabels handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
+func (d *Deps) ListWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	slug := wikiSlugParam(r)
+	d.listWikiPageLabels(w, r, full, slug)
+}
+
 // AddWikiPageLabels handles POST /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels
 func (d *Deps) AddWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
@@ -273,8 +280,22 @@ func (d *Deps) AddWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 	d.addWikiPageLabels(w, r, full, slug)
 }
 
+// AddWikiV2PageLabels handles POST /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
+func (d *Deps) AddWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	slug := wikiSlugParam(r)
+	d.addWikiPageLabels(w, r, full, slug)
+}
+
 // SetWikiPageLabels handles PUT /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels
 func (d *Deps) SetWikiPageLabels(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	slug := wikiSlugParam(r)
+	d.setWikiPageLabels(w, r, full, slug)
+}
+
+// SetWikiV2PageLabels handles PUT /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
+func (d *Deps) SetWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	d.setWikiPageLabels(w, r, full, slug)
@@ -288,8 +309,23 @@ func (d *Deps) RemoveWikiPageLabel(w http.ResponseWriter, r *http.Request) {
 	d.removeWikiPageLabel(w, r, full, slug, name)
 }
 
+// RemoveWikiV2PageLabel handles DELETE /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels/{name}
+func (d *Deps) RemoveWikiV2PageLabel(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	slug := wikiSlugParam(r)
+	name := pathParam(r, "name")
+	d.removeWikiPageLabel(w, r, full, slug, name)
+}
+
 // RemoveAllWikiPageLabels handles DELETE /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels
 func (d *Deps) RemoveAllWikiPageLabels(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	slug := wikiSlugParam(r)
+	d.removeAllWikiPageLabels(w, r, full, slug)
+}
+
+// RemoveAllWikiV2PageLabels handles DELETE /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
+func (d *Deps) RemoveAllWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	d.removeAllWikiPageLabels(w, r, full, slug)
