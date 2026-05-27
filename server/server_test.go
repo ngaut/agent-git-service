@@ -19,6 +19,7 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	agsauth "github.com/ngaut/agent-git-service/auth"
 	"github.com/ngaut/agent-git-service/config"
 	"github.com/ngaut/agent-git-service/internal/controlplane"
 	"github.com/ngaut/agent-git-service/internal/crypto"
@@ -32,6 +33,22 @@ import (
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
 )
+
+type headerAuthenticator struct {
+	header   string
+	identity agsauth.Identity
+}
+
+func (a headerAuthenticator) Authenticate(r *http.Request) (agsauth.Identity, bool, error) {
+	value := r.Header.Get(a.header)
+	if value == "" {
+		return agsauth.Identity{}, false, nil
+	}
+	if value == "bad" {
+		return agsauth.Identity{}, false, errors.New("bad embedded identity")
+	}
+	return a.identity, true, nil
+}
 
 func TestInitServiceDeps_EnablesAuth0CompatAlongsideGenericOIDC(t *testing.T) {
 	mainDB := openTestDB(t)
@@ -542,6 +559,232 @@ func TestNew_GitHTTPHandlerIsGitOnly(t *testing.T) {
 	srv.GitHTTPHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected git-only handler to return 404 for non-git paths, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
+	root := t.TempDir()
+	srv, err := New(config.Config{
+		DBdsn:       "file:" + filepath.Join(root, "embedded-auth.db"),
+		GitRepoDir:  filepath.Join(root, "repos"),
+		BaseURL:     "http://embed.local",
+		ListenMode:  "production",
+		Environment: "production",
+	}, WithAuthenticator(headerAuthenticator{
+		header: "X-Embedded-User",
+		identity: agsauth.Identity{
+			Provider: "meshx",
+			Subject:  "subject-1",
+			Login:    "gateway-user",
+			Name:     "Gateway User",
+			Email:    "gateway@example.com",
+		},
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	restReq := httptest.NewRequest(http.MethodGet, "/user", nil)
+	restReq.Header.Set("X-Embedded-User", "ok")
+	restRec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(restRec, restReq)
+	if restRec.Code != http.StatusOK {
+		t.Fatalf("embedded REST auth: expected 200, got %d: %s", restRec.Code, restRec.Body.String())
+	}
+	var restBody map[string]any
+	if err := json.Unmarshal(restRec.Body.Bytes(), &restBody); err != nil {
+		t.Fatalf("decode REST body: %v", err)
+	}
+	if got := restBody["login"]; got != "gateway-user" {
+		t.Fatalf("REST login = %v, want gateway-user", got)
+	}
+
+	user, err := srv.deps.SvcDeps.GetUser(context.Background(), "gateway-user")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if _, err := srv.deps.SvcDeps.CreateRepo(service.ContextWithUser(context.Background(), user), service.CreateRepoInput{
+		OwnerLogin: user.Login,
+		Name:       "embedded-private",
+		Private:    true,
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	if _, err := srv.deps.SvcDeps.CreateRepo(service.ContextWithUser(context.Background(), user), service.CreateRepoInput{
+		OwnerLogin: user.Login,
+		Name:       "embedded-public",
+		Private:    false,
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo public: %v", err)
+	}
+
+	query, err := json.Marshal(map[string]any{"query": `{ viewer { login } }`})
+	if err != nil {
+		t.Fatalf("marshal GraphQL query: %v", err)
+	}
+	gqlReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(query))
+	gqlReq.Header.Set("Content-Type", "application/json")
+	gqlReq.Header.Set("X-Embedded-User", "ok")
+	gqlRec := httptest.NewRecorder()
+	srv.GraphQLHandler().ServeHTTP(gqlRec, gqlReq)
+	if gqlRec.Code != http.StatusOK {
+		t.Fatalf("embedded GraphQL auth: expected 200, got %d: %s", gqlRec.Code, gqlRec.Body.String())
+	}
+	if !bytes.Contains(gqlRec.Body.Bytes(), []byte(`"login":"gateway-user"`)) {
+		t.Fatalf("embedded GraphQL body missing resolved login: %s", gqlRec.Body.String())
+	}
+
+	gitReq := httptest.NewRequest(http.MethodGet, "/gateway-user/embedded-private.git/info/refs?service=git-upload-pack", nil)
+	gitReq.Header.Set("X-Embedded-User", "ok")
+	gitRec := httptest.NewRecorder()
+	srv.GitHTTPHandler().ServeHTTP(gitRec, gitReq)
+	if gitRec.Code != http.StatusOK {
+		t.Fatalf("embedded Git auth: expected 200, got %d: %s", gitRec.Code, gitRec.Body.String())
+	}
+
+	createIssueBody, err := json.Marshal(map[string]any{
+		"title": "embedded write",
+		"body":  "created via embedded identity",
+	})
+	if err != nil {
+		t.Fatalf("marshal create issue body: %v", err)
+	}
+	writeReq := httptest.NewRequest(http.MethodPost, "/repos/gateway-user/embedded-public/issues", bytes.NewReader(createIssueBody))
+	writeReq.Header.Set("Content-Type", "application/json")
+	writeReq.Header.Set("X-Embedded-User", "ok")
+	writeRec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(writeRec, writeReq)
+	if writeRec.Code != http.StatusCreated {
+		t.Fatalf("embedded REST write auth: expected 201, got %d: %s", writeRec.Code, writeRec.Body.String())
+	}
+	var issueBody map[string]any
+	if err := json.Unmarshal(writeRec.Body.Bytes(), &issueBody); err != nil {
+		t.Fatalf("decode issue body: %v", err)
+	}
+	if got := issueBody["title"]; got != "embedded write" {
+		t.Fatalf("issue title = %v, want embedded write", got)
+	}
+
+	rateReq := httptest.NewRequest(http.MethodGet, "/rate_limit", nil)
+	rateReq.Header.Set("X-Embedded-User", "ok")
+	rateRec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(rateRec, rateReq)
+	if rateRec.Code != http.StatusOK {
+		t.Fatalf("embedded rate_limit auth: expected 200, got %d: %s", rateRec.Code, rateRec.Body.String())
+	}
+	if got := rateRec.Header().Get("X-RateLimit-Limit"); got != "1000" {
+		t.Fatalf("embedded rate_limit header = %q, want 1000", got)
+	}
+
+	if err := srv.deps.SvcDeps.StarRepo(service.ContextWithUser(context.Background(), user), "gateway-user/embedded-private", user.Login); err != nil {
+		t.Fatalf("StarRepo private: %v", err)
+	}
+	starredReq := httptest.NewRequest(http.MethodGet, "/users/gateway-user/starred", nil)
+	starredReq.Header.Set("X-Embedded-User", "ok")
+	starredRec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(starredRec, starredReq)
+	if starredRec.Code != http.StatusOK {
+		t.Fatalf("embedded starred auth: expected 200, got %d: %s", starredRec.Code, starredRec.Body.String())
+	}
+	var starredBody []map[string]any
+	if err := json.Unmarshal(starredRec.Body.Bytes(), &starredBody); err != nil {
+		t.Fatalf("decode starred body: %v", err)
+	}
+	if len(starredBody) != 1 {
+		t.Fatalf("starred repo count = %d, want 1", len(starredBody))
+	}
+	if got := starredBody[0]["full_name"]; got != "gateway-user/embedded-private" {
+		t.Fatalf("starred repo full_name = %v, want gateway-user/embedded-private", got)
+	}
+}
+
+func TestNew_EmbeddedIdentityPreservesAnonymousOptionalRoutes(t *testing.T) {
+	root := t.TempDir()
+	srv, err := New(config.Config{
+		DBdsn:       "file:" + filepath.Join(root, "embedded-anon.db"),
+		GitRepoDir:  filepath.Join(root, "repos"),
+		BaseURL:     "http://embed.local",
+		ListenMode:  "production",
+		Environment: "production",
+	}, WithAuthenticator(headerAuthenticator{
+		header: "X-Embedded-User",
+		identity: agsauth.Identity{
+			Provider: "meshx",
+			Subject:  "subject-2",
+			Login:    "public-owner",
+		},
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	owner, err := srv.deps.SvcDeps.ResolveEmbeddedIdentity(context.Background(), service.EmbeddedIdentity{
+		Provider: "meshx",
+		Subject:  "subject-2",
+		Login:    "public-owner",
+		Name:     "Public Owner",
+	})
+	if err != nil {
+		t.Fatalf("ResolveEmbeddedIdentity: %v", err)
+	}
+	if _, err := srv.deps.SvcDeps.CreateRepo(service.ContextWithUser(context.Background(), owner), service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "public-repo",
+		Private:    false,
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/repos/public-owner/public-repo", nil)
+	rec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("anonymous optional route: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rateReq := httptest.NewRequest(http.MethodGet, "/rate_limit", nil)
+	rateRec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(rateRec, rateReq)
+	if rateRec.Code != http.StatusOK {
+		t.Fatalf("anonymous rate_limit route: expected 200, got %d: %s", rateRec.Code, rateRec.Body.String())
+	}
+	if got := rateRec.Header().Get("X-RateLimit-Limit"); got != "100" {
+		t.Fatalf("anonymous rate_limit header = %q, want 100", got)
+	}
+
+	if err := srv.deps.SvcDeps.StarRepo(service.ContextWithUser(context.Background(), owner), "public-owner/public-repo", owner.Login); err != nil {
+		t.Fatalf("StarRepo public: %v", err)
+	}
+	if _, err := srv.deps.SvcDeps.CreateRepo(service.ContextWithUser(context.Background(), owner), service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "private-repo",
+		Private:    true,
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo private: %v", err)
+	}
+	if err := srv.deps.SvcDeps.StarRepo(service.ContextWithUser(context.Background(), owner), "public-owner/private-repo", owner.Login); err != nil {
+		t.Fatalf("StarRepo private: %v", err)
+	}
+
+	starredReq := httptest.NewRequest(http.MethodGet, "/users/public-owner/starred", nil)
+	starredRec := httptest.NewRecorder()
+	srv.RESTHandler().ServeHTTP(starredRec, starredReq)
+	if starredRec.Code != http.StatusOK {
+		t.Fatalf("anonymous starred route: expected 200, got %d: %s", starredRec.Code, starredRec.Body.String())
+	}
+	var starredBody []map[string]any
+	if err := json.Unmarshal(starredRec.Body.Bytes(), &starredBody); err != nil {
+		t.Fatalf("decode anonymous starred body: %v", err)
+	}
+	if len(starredBody) != 1 {
+		t.Fatalf("anonymous starred repo count = %d, want 1", len(starredBody))
+	}
+	if got := starredBody[0]["full_name"]; got != "public-owner/public-repo" {
+		t.Fatalf("anonymous starred repo full_name = %v, want public-owner/public-repo", got)
 	}
 }
 

@@ -639,8 +639,10 @@ Current state:
 Ownership split:
 
 - `middleware`: extract API auth headers, reject malformed or missing credentials, and inject request-scoped auth context
+- `server`: optional public embedding seam that can accept a trusted host authenticator, then adapt it into the shared middleware pipeline
+- `auth`: public identity shape for embedded hosts using the server package
 - `controlplane`: in multi-tenant mode, resolve token -> `CPUser` -> tenant `*gorm.DB`, and ensure the tenant-local `db.User` exists
-- `service`: validate API tokens and resolve user-by-token in single-DB mode; persist application users and tokens for Auth0-backed human login
+- `service`: validate API tokens and resolve user-by-token in single-DB mode; persist application users and tokens for Auth0-backed human login; map trusted embedded identities onto internal `db.User` + `UserIdentity` rows
 - `auth0`: perform outbound device-flow requests and ID token verification
 - `oidc`: perform provider-neutral discovery, device-flow requests, and ID token verification
 - `githttp`: uses the same auth middleware on Git routes, with `TokenAuth` in control-plane mode and `OptionalTokenAuth` in single-DB mode
@@ -650,7 +652,11 @@ Rule:
 
 - surface handlers must not parse auth headers themselves
 - control-plane routing and single-DB validation are both first-class current auth paths
+- embedded single-DB hosts may inject a trusted identity through `server.WithAuthenticator`; middleware must still be the single place that turns that identity into request context
+- the trusted identity contract requires non-empty `Provider`, `Subject`, and `Login`; AGS owns the mapping from that tuple onto `db.User` + `db.UserIdentity`
+- when embedded identity is present in single-DB mode, it takes precedence over `Authorization` headers and must flow through every REST/GraphQL/Git route family that already depends on optional or required auth context, including `/api/v3/rate_limit` and `/api/v3/users/{username}/starred`
 - outbound identity-provider clients such as `auth0` and `oidc` must not write application state directly
+- control-plane mode currently stays fail-closed for embedded identities until a tenant-aware resolver contract is added
 
 ### Collaboration Authorization
 

@@ -225,8 +225,12 @@ func SubjectForRequest(r *http.Request) Subject {
 	actor := ActorForRequest(r)
 	return Subject{
 		Actor:         actor,
-		Authenticated: strings.HasPrefix(actor, "token:"),
+		Authenticated: isAuthenticatedActor(actor),
 	}
+}
+
+func isAuthenticatedActor(actor string) bool {
+	return strings.HasPrefix(actor, "token:") || strings.HasPrefix(actor, "embedded:")
 }
 
 // ResourceForRequest classifies the GitHub rate-limit bucket for an HTTP request.
