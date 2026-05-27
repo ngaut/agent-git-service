@@ -4,8 +4,6 @@ import (
 	"context"
 )
 
-type OIDCSessionResult = Auth0SessionResult
-
 func (s *Service) OIDCLoginWithIDToken(ctx context.Context, idToken string) (OIDCSessionResult, error) {
 	profile, err := s.verifyOIDCIDToken(ctx, idToken)
 	if err != nil {

@@ -8,7 +8,10 @@ import (
 	"gorm.io/gorm"
 )
 
-type OIDCIdentityLookupResult = Auth0IdentityLookupResult
+type OIDCIdentityLookupResult struct {
+	Linked bool
+	User   db.User
+}
 
 func (s *Service) LookupOIDCIdentityWithIDToken(ctx context.Context, idToken string) (OIDCIdentityLookupResult, error) {
 	profile, err := s.verifyOIDCIDToken(ctx, idToken)

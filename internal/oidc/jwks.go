@@ -1,4 +1,4 @@
-package auth0
+package oidc
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// jwks represents the Auth0 JSON Web Key Set response.
+// jwks represents a provider JSON Web Key Set response.
 type jwks struct {
 	Keys []jwk `json:"keys"`
 }
@@ -29,7 +29,7 @@ type jwk struct {
 	E   string `json:"e"`
 }
 
-// JWKSClient fetches and caches Auth0's JSON Web Key Set.
+// JWKSClient fetches and caches a provider's JSON Web Key Set.
 type JWKSClient struct {
 	issuer   string
 	override string
@@ -62,7 +62,7 @@ func (j *JWKSClient) OverrideURL(raw string) {
 	j.override = raw
 }
 
-// fetchKeys retrieves the JWKS from Auth0 and caches the keys.
+// fetchKeys retrieves the provider JWKS and caches the keys.
 func (j *JWKSClient) fetchKeys(ctx context.Context) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()

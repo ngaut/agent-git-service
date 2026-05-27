@@ -16,54 +16,13 @@ import (
 
 var claimLoginRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,38}$`)
 
-type Auth0SessionResult struct {
+type OIDCSessionResult struct {
 	Token  string
 	UserID uint
 	Login  string
 }
 
-// Auth0LoginWithIDToken verifies an Auth0 id_token and returns a gh-server token
-// for the linked user (creating/linking a local user when needed).
-//
-// This is used by web redirect login flows (Authorization Code + PKCE) where the
-// browser obtains an id_token directly from Auth0 and then exchanges it with
-// gh-server.
-func (s *Service) Auth0LoginWithIDToken(ctx context.Context, idToken string) (Auth0SessionResult, error) {
-	profile, err := s.verifyAuth0IDToken(ctx, idToken)
-	if err != nil {
-		return Auth0SessionResult{}, err
-	}
-	return s.auth0LoginWithProfile(ctx, profile)
-}
-
-// Auth0Login exchanges a device code for an Auth0 identity and returns a fresh
-// gh-server token for the linked user. If the Auth0 subject is not yet linked,
-// it creates a new normal user (with no repositories) and links it.
-//
-// Token policy: one new token per login (no revocation). Tokens are long-lived
-// and no per-user LRU cap is enforced.
-func (s *Service) Auth0Login(ctx context.Context, deviceCode string) (Auth0SessionResult, error) {
-	profile, err := s.ExchangeAuth0DeviceCode(ctx, deviceCode)
-	if err != nil {
-		return Auth0SessionResult{}, err
-	}
-	return s.auth0LoginWithProfile(ctx, profile)
-}
-
-func (s *Service) auth0LoginWithProfile(ctx context.Context, profile Auth0Profile) (Auth0SessionResult, error) {
-	return s.oidcLoginWithProfile(ctx, OIDCProfile{
-		Provider:          profile.Provider,
-		Subject:           profile.Subject,
-		Email:             profile.Email,
-		EmailVerified:     profile.EmailVerified,
-		Name:              profile.Name,
-		Nickname:          profile.Nickname,
-		PreferredUsername: profile.PreferredUsername,
-		Picture:           profile.Picture,
-	})
-}
-
-func (s *Service) oidcLoginWithProfile(ctx context.Context, profile OIDCProfile) (Auth0SessionResult, error) {
+func (s *Service) oidcLoginWithProfile(ctx context.Context, profile OIDCProfile) (OIDCSessionResult, error) {
 	const (
 		maxAttempts      = 5
 		maxLoginAttempts = 10
@@ -135,7 +94,7 @@ func (s *Service) oidcLoginWithProfile(ctx context.Context, profile OIDCProfile)
 
 attemptLoop:
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		var out Auth0SessionResult
+		var out OIDCSessionResult
 		err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 			var ident db.UserIdentity
 			identErr := tx.Preload("User").First(&ident, "provider = ? AND subject = ?", profile.Provider, profile.Subject).Error
@@ -201,22 +160,22 @@ attemptLoop:
 				return err
 			}
 
-			out = Auth0SessionResult{Token: tok.Value, UserID: u.ID, Login: u.Login}
+			out = OIDCSessionResult{Token: tok.Value, UserID: u.ID, Login: u.Login}
 			return nil
 		})
 		if err == nil {
-			slog.InfoContext(ctx, "auth0 login succeeded", "user_login", out.Login, "user_id", out.UserID)
+			slog.InfoContext(ctx, "oidc login succeeded", "user_login", out.Login, "user_id", out.UserID)
 			return out, nil
 		}
 		if errors.Is(err, ErrConflict) || isSQLiteLockErr(err) {
-			slog.WarnContext(ctx, "auth0 login retry", "attempt", attempt+1, "error", err)
+			slog.WarnContext(ctx, "oidc login retry", "attempt", attempt+1, "error", err)
 			time.Sleep(retryDelay(attempt))
 			continue attemptLoop
 		}
-		slog.ErrorContext(ctx, "auth0 login failed", "attempt", attempt+1, "error", err)
-		return Auth0SessionResult{}, err
+		slog.ErrorContext(ctx, "oidc login failed", "attempt", attempt+1, "error", err)
+		return OIDCSessionResult{}, err
 	}
 
-	slog.ErrorContext(ctx, "auth0 login exhausted retries", "error", ErrConflict)
-	return Auth0SessionResult{}, fmt.Errorf("%w: auth0 login failed after retries", ErrConflict)
+	slog.ErrorContext(ctx, "oidc login exhausted retries", "error", ErrConflict)
+	return OIDCSessionResult{}, fmt.Errorf("%w: oidc login failed after retries", ErrConflict)
 }

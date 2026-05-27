@@ -50,7 +50,7 @@ func (a headerAuthenticator) Authenticate(r *http.Request) (agsauth.Identity, bo
 	return a.identity, true, nil
 }
 
-func TestInitServiceDeps_EnablesAuth0CompatAlongsideGenericOIDC(t *testing.T) {
+func TestInitServiceDeps_EnablesGenericOIDC(t *testing.T) {
 	mainDB := openTestDB(t)
 	tmpDir := t.TempDir()
 
@@ -67,9 +67,6 @@ func TestInitServiceDeps_EnablesAuth0CompatAlongsideGenericOIDC(t *testing.T) {
 		OIDCIssuer:            "http://localhost:8891/",
 		OIDCClientID:          "oidc-client-id",
 		OIDCAllowInsecureHTTP: true,
-		Auth0Issuer:           "http://localhost:9999/",
-		Auth0ClientID:         "auth0-client-id",
-		Auth0Audience:         "https://api.example",
 		WorkflowExecImage:     "bash:5.2",
 		WorkflowExecTimeout:   2 * time.Minute,
 		WorkflowExecCPUs:      "1.0",
@@ -87,15 +84,6 @@ func TestInitServiceDeps_EnablesAuth0CompatAlongsideGenericOIDC(t *testing.T) {
 	}
 	if got := deps.svc.OIDC.Provider(); got != "casdoor" {
 		t.Fatalf("expected generic OIDC provider casdoor, got %q", got)
-	}
-	if deps.svc.Auth0 == nil {
-		t.Fatal("expected Auth0 compatibility flow to be configured")
-	}
-	if got := deps.svc.Auth0.Issuer(); got != "http://localhost:9999/" {
-		t.Fatalf("expected Auth0 issuer http://localhost:9999/, got %q", got)
-	}
-	if got := deps.svc.Auth0.ClientID(); got != "auth0-client-id" {
-		t.Fatalf("expected Auth0 client id auth0-client-id, got %q", got)
 	}
 }
 

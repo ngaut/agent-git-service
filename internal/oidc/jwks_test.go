@@ -1,4 +1,4 @@
-package auth0
+package oidc
 
 import (
 	"context"
@@ -96,10 +96,10 @@ func createSignedJWT(t *testing.T, privKey *rsa.PrivateKey, kid string, claims j
 func TestNewJWKSClient(t *testing.T) {
 	t.Parallel()
 
-	client := NewJWKSClient("https://example.auth0.com/")
+	client := NewJWKSClient("https://example.oidc.test/")
 
 	assert.NotNil(t, client)
-	assert.Equal(t, "https://example.auth0.com/", client.issuer)
+	assert.Equal(t, "https://example.oidc.test/", client.issuer)
 	assert.NotNil(t, client.http)
 	assert.NotNil(t, client.cache)
 	assert.Equal(t, 1*time.Hour, client.cacheTTL)
@@ -109,8 +109,8 @@ func TestNewJWKSClient(t *testing.T) {
 func TestJWKSClient_jwksURL(t *testing.T) {
 	t.Parallel()
 
-	client := NewJWKSClient("https://example.auth0.com/")
-	assert.Equal(t, "https://example.auth0.com/.well-known/jwks.json", client.jwksURL())
+	client := NewJWKSClient("https://example.oidc.test/")
+	assert.Equal(t, "https://example.oidc.test/.well-known/jwks.json", client.jwksURL())
 }
 
 // TestJWKSClient_fetchKeys tests the fetchKeys method.
@@ -279,7 +279,7 @@ func TestJWKSClient_fetchKeys(t *testing.T) {
 func TestJWKSClient_parseJWK(t *testing.T) {
 	t.Parallel()
 
-	client := NewJWKSClient("https://example.auth0.com/")
+	client := NewJWKSClient("https://example.oidc.test/")
 
 	t.Run("valid RSA key", func(t *testing.T) {
 		n, _ := new(big.Int).SetString("1234567890abcdef1234567890abcdef", 16)
@@ -420,9 +420,9 @@ func TestJWKSClient_VerifyIDToken(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("parse token error", func(t *testing.T) {
-		client := NewJWKSClient("https://example.auth0.com/")
+		client := NewJWKSClient("https://example.oidc.test/")
 
-		_, err := client.VerifyIDToken(ctx, "not-a-token", "https://example.auth0.com/", "client-id")
+		_, err := client.VerifyIDToken(ctx, "not-a-token", "https://example.oidc.test/", "client-id")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "parse token")
 	})
@@ -532,7 +532,7 @@ func TestJWKSClient_VerifyIDToken(t *testing.T) {
 		// Create token with wrong issuer
 		claims := jwt.MapClaims{
 			"sub": "user123",
-			"iss": "https://wrong.auth0.com/",
+			"iss": "https://wrong.oidc.test/",
 			"aud": "test-client-id",
 			"exp": time.Now().Add(1 * time.Hour).Unix(),
 		}
@@ -785,7 +785,7 @@ func TestJWKSClient_VerifyIDToken_Integration(t *testing.T) {
 
 	// Create a comprehensive token with various claims
 	claims := jwt.MapClaims{
-		"sub":                "auth0|123456789",
+		"sub":                "oidc|123456789",
 		"iss":                issuer,
 		"aud":                "my-client-id",
 		"exp":                time.Now().Add(1 * time.Hour).Unix(),
@@ -802,7 +802,7 @@ func TestJWKSClient_VerifyIDToken_Integration(t *testing.T) {
 	result, err := client.VerifyIDToken(ctx, token, issuer, "my-client-id")
 	require.NoError(t, err)
 
-	assert.Equal(t, "auth0|123456789", result.Sub)
+	assert.Equal(t, "oidc|123456789", result.Sub)
 	assert.Equal(t, "test@example.com", result.Email)
 	assert.Equal(t, true, result.EmailVerified)
 	assert.Equal(t, "Test User", result.Name)

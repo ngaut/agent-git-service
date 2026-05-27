@@ -47,12 +47,12 @@ make test-e2e E2E_BASE_URL="https://github.localhost:8080"
 
 | Script | Description | Mode |
 |--------|-------------|------|
-| `agent-auth-flow.sh` | Agent registration, human binding, and Auth0-backed claim flow | Existing server plus mock Auth0 |
+| `agent-auth-flow.sh` | Agent registration, human binding, and OIDC-backed claim flow | Existing server plus mock OIDC |
 | `code-search-isolation-e2e.sh` | Code search tenant isolation, concurrent search, and no-leak checks | Self-contained TiDB |
 | `git-smart-http-auth-denial-matrix.sh` | Git Smart HTTP auth denial matrix | Existing server |
 | `multi-agent-isolation.sh` | Multi-agent control-plane tenant isolation | Self-contained TiDB |
 | `oauth-device-flow.sh` | OAuth device-flow bootstrap and polling behavior | Existing server |
-| `oidc-provider-flow.sh` | Generic OIDC callback, lookup, repeated-login, and token-validity flow using the mock discovery server | Running server with `OIDC_PROVIDER`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_ALLOW_INSECURE_HTTP=1`; mock OIDC/Auth0 server |
+| `oidc-provider-flow.sh` | Generic OIDC callback, lookup, repeated-login, and token-validity flow using the mock discovery server | Running server with `OIDC_PROVIDER`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_ALLOW_INSECURE_HTTP=1`; mock OIDC server |
 | `org-collaboration-governance.sh` | Org invitations, outside collaborators, and permission aliases | Existing server plus extra user tokens |
 | `push-postprocessing-consistency.sh` | Post-push HEAD, workflow sync, and cleanup behavior | Self-contained SQLite |
 | `repo-rollback-compensation.sh` | Repository create/fork rollback behavior | Self-contained SQLite |

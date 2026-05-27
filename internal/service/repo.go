@@ -39,7 +39,6 @@ type Service struct {
 	AttachmentRoot string
 	Embedder       embedding.Embedder
 	AllowAnyToken  bool
-	Auth0          Auth0DeviceFlow
 	OIDC           OIDCProvider
 	// AttachmentScanner is an optional hook for virus scanning or policy checks
 	// before an attachment is written to disk.

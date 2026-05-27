@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/ngaut/agent-git-service/internal/auth0"
 	"github.com/ngaut/agent-git-service/internal/oidc"
 )
 
@@ -33,6 +32,14 @@ type OIDCProfile struct {
 	RawClaims         map[string]any
 }
 
+var (
+	ErrOIDCNotConfigured = errors.New("oidc not configured")
+	ErrOIDCPending       = errors.New("oidc authorization pending")
+	ErrOIDCSlowDown      = errors.New("oidc slow down")
+	ErrOIDCExpired       = errors.New("oidc device code expired")
+	ErrOIDCAccessDenied  = errors.New("oidc access denied")
+)
+
 func (p OIDCProfile) DisplayName(fallback string) string {
 	if strings.TrimSpace(p.Name) != "" {
 		return strings.TrimSpace(p.Name)
@@ -48,7 +55,7 @@ func (p OIDCProfile) DisplayName(fallback string) string {
 
 func (s *Service) oidcClient() (OIDCProvider, error) {
 	if s.OIDC == nil {
-		return nil, ErrAuth0NotConfigured
+		return nil, ErrOIDCNotConfigured
 	}
 	return s.OIDC, nil
 }
@@ -73,17 +80,17 @@ func (s *Service) ExchangeOIDCDeviceCode(ctx context.Context, deviceCode string)
 	}
 	tok, err := c.ExchangeDeviceCode(ctx, deviceCode)
 	if err != nil {
-		var oe auth0.OAuthError
+		var oe oidc.OAuthError
 		if errors.As(err, &oe) {
 			switch oe.Code {
 			case "authorization_pending":
-				return OIDCProfile{}, ErrAuth0Pending
+				return OIDCProfile{}, ErrOIDCPending
 			case "slow_down":
-				return OIDCProfile{}, ErrAuth0SlowDown
+				return OIDCProfile{}, ErrOIDCSlowDown
 			case "expired_token":
-				return OIDCProfile{}, ErrAuth0Expired
+				return OIDCProfile{}, ErrOIDCExpired
 			case "access_denied":
-				return OIDCProfile{}, ErrAuth0AccessDenied
+				return OIDCProfile{}, ErrOIDCAccessDenied
 			}
 		}
 		return OIDCProfile{}, fmt.Errorf("oidc: %w", err)
@@ -129,40 +136,5 @@ func (s *Service) verifyOIDCIDToken(ctx context.Context, idToken string) (OIDCPr
 		PreferredUsername: strings.TrimSpace(claims.PreferredUsername),
 		Picture:           picture,
 		RawClaims:         claims.RawClaims,
-	}, nil
-}
-
-type auth0CompatFlow struct{ oidc OIDCProvider }
-
-func NewAuth0CompatFlow(provider OIDCProvider) Auth0DeviceFlow {
-	return auth0CompatFlow{oidc: provider}
-}
-
-func (a auth0CompatFlow) Issuer() string   { return a.oidc.Issuer() }
-func (a auth0CompatFlow) ClientID() string { return a.oidc.ClientID() }
-func (a auth0CompatFlow) RequestDeviceCode(ctx context.Context, scopes string) (auth0.DeviceCode, error) {
-	dc, err := a.oidc.RequestDeviceCode(ctx, scopes)
-	return auth0.DeviceCode(dc), err
-}
-func (a auth0CompatFlow) ExchangeDeviceCode(ctx context.Context, deviceCode string) (auth0.Token, error) {
-	tok, err := a.oidc.ExchangeDeviceCode(ctx, deviceCode)
-	return auth0.Token(tok), err
-}
-func (a auth0CompatFlow) VerifyIDToken(ctx context.Context, idToken string) (auth0.IDTokenClaims, error) {
-	claims, err := a.oidc.VerifyIDToken(ctx, idToken)
-	if err != nil {
-		return auth0.IDTokenClaims{}, err
-	}
-	return auth0.IDTokenClaims{
-		Sub:               claims.Sub,
-		Email:             claims.Email,
-		EmailVerified:     claims.EmailVerified,
-		Name:              claims.Name,
-		Nickname:          claims.Nickname,
-		PreferredUsername: claims.PreferredUsername,
-		Picture:           claims.Picture,
-		Iss:               claims.Iss,
-		Aud:               claims.Aud,
-		Exp:               claims.Exp,
 	}, nil
 }

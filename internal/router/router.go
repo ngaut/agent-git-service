@@ -166,11 +166,6 @@ func registerPublicAuthRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw fun
 		r.Post("/api/v3/oidc/session", handlers.OIDCSession)
 		r.Post("/api/v3/oidc/callback", handlers.OIDCCallback)
 		r.Post("/api/v3/oidc/lookup", handlers.OIDCLookup)
-		// Auth0 device flow (no auth required)
-		r.Post("/api/v3/auth0/device/code", handlers.Auth0DeviceCode)
-		r.Post("/api/v3/auth0/session", handlers.Auth0Session)
-		r.Post("/api/v3/auth0/callback", handlers.Auth0Callback)
-		r.Post("/api/v3/auth0/lookup", handlers.Auth0Lookup)
 	})
 }
 

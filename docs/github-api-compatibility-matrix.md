@@ -30,7 +30,7 @@ Local routing notes:
 - Public repo reads use optional auth. Writes require auth through middleware.
 - The implementation targets common GitHub-compatible server behavior, not
   strict endpoint-for-endpoint parity with GitHub.com.
-- agent memory, presence, attachments, read receipts, agent binding, Auth0, and
+- agent memory, presence, attachments, read receipts, agent binding, OIDC, and
   wiki routes are local extensions unless explicitly noted below.
 - The API root now advertises `openapi_url` so clients can discover the
   machine-readable local extension contract without source inspection.
@@ -197,7 +197,7 @@ GitHub; GAP = missing or materially incompatible.
 | Gists ([gists][gists-docs], [comments][gist-comments-docs]) | Authenticated list/create/get/update/delete | Supported | Public/starred/user gists, comments, commits, forks, star/unstar, and revision fetch are missing | Medium | PARTIAL/GAP |
 | GitHub App installations ([docs][apps-installations-docs]) | GitHub has full App/installation APIs | Local only returns empty `GET /app/installations` | Minimal compatibility stub only | Low | PARTIAL |
 | API discovery/meta/rate limit ([root][meta-root], [meta][meta-get], [rate limit][rate-limit-get]) | Rich discovery/meta/rate-limit envelopes | Discovery/meta are minimal/static; rate limit headers/body are local | Static/minimal metadata | Medium | PARTIAL |
-| OAuth/Auth0/agents ([OAuth apps][oauth-apps-docs], [device flow][oauth-device-flow-docs]) | GitHub OAuth/device flow uses GitHub identity; GitHub has no Auth0/agent binding routes | Local has GitHub-like OAuth plus Auth0, agent registration, invites, bindings | Auth model intentionally diverges | N/A | Extension |
+| OAuth/OIDC/agents ([OAuth apps][oauth-apps-docs], [device flow][oauth-device-flow-docs]) | GitHub OAuth/device flow uses GitHub identity; GitHub has no OIDC/agent binding routes | Local has GitHub-like OAuth plus OIDC, agent registration, invites, bindings | Auth model intentionally diverges | N/A | Extension |
 
 ## Webhooks, Dependabot, Rulesets, Pages, Templates
 
@@ -229,7 +229,7 @@ GitHub-compatible APIs:
 | Area | Routes |
 |---|---|
 | Agents | `/api/v3/agents`, `/agent-invites`, `/agent-bindings/confirm`, `/agent-bindings/{agent_login}/reset-token`, `/agent-bindings/{agent_login}/switch-session`, `/agent-bindings/{agent_login}/refresh-session`, `/user/agents` |
-| Auth0 | `/api/v3/auth0/device/code`, `/session`, `/callback`, `/lookup` |
+| OIDC | `/api/v3/oidc/device/code`, `/session`, `/callback`, `/lookup` |
 | Presence/typing/read state | `/presence/heartbeat`, `/issues/{id}/typing`, `/issues/{issue_id}/presence`, `/users/{user_id}/last-seen`, `/user/presence/privacy`, issue read-state routes |
 | Attachments | `/api/v3/issues/{id}/attachments`, `/api/v3/repos/{owner}/{repo}/attachments`, `/api/v3/repositories/{repo_id}/attachments`, `/api/v3/attachments/{uuid}` |
 | Wiki | `/api/v3/repos/{owner}/{repo}/wiki/pages...`, `/api/v3/repos/{owner}/{repo}/wiki/search`, `/api/v3/repos/{owner}/{repo}/wiki/move`, `/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move`, `/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks`, `/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` |

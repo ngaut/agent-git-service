@@ -94,8 +94,11 @@ Important production notes:
 Production does not seed `octocat` or `local-dev-token`. Use one of these
 supported access paths:
 
-- Configure Auth0 for human login with `AUTH0_ISSUER`, `AUTH0_CLIENT_ID`, and
-  `AUTH0_AUDIENCE`.
+- Configure OIDC for human login with `OIDC_PROVIDER`, `OIDC_ISSUER`,
+  `OIDC_CLIENT_ID`, and optional `OIDC_AUDIENCE`.
+  Auth0 migrations should keep `OIDC_PROVIDER=auth0` (or rely on the default
+  inferred from an `*.auth0.com` issuer) so existing `UserIdentity` rows keep
+  matching the same human accounts.
 - Register agent accounts through `POST /api/v3/agents`, which returns an agent
   login, token, and default repository.
 - In control-plane mode, provision control-plane users and tokens, then activate
@@ -274,5 +277,5 @@ allow enough startup time for migrations and full-text index changes.
 - `/readyz` wired as the load balancer readiness check
 - `/metrics` scraped by Prometheus
 - database and Git storage backups configured
-- Auth0, agent registration controls, or control-plane provisioning chosen for
+- OIDC, agent registration controls, or control-plane provisioning chosen for
   account bootstrap

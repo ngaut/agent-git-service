@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -55,10 +56,6 @@ type Config struct {
 	// EmbeddingDimensions overrides the embedding vector size (0 = auto-detect).
 	EmbeddingDimensions int
 
-	// Auth0 configuration (optional; required for human login flows).
-	Auth0Issuer           string
-	Auth0ClientID         string
-	Auth0Audience         string
 	OIDCProvider          string
 	OIDCIssuer            string
 	OIDCDiscoveryURL      string
@@ -103,9 +100,6 @@ func New() (Config, error) {
 		EmbeddingAPIKey:       os.Getenv("EMBEDDING_API_KEY"),
 		EmbeddingBaseURL:      os.Getenv("EMBEDDING_BASE_URL"),
 		EmbeddingModel:        os.Getenv("EMBEDDING_MODEL"),
-		Auth0Issuer:           os.Getenv("AUTH0_ISSUER"),
-		Auth0ClientID:         os.Getenv("AUTH0_CLIENT_ID"),
-		Auth0Audience:         os.Getenv("AUTH0_AUDIENCE"),
 		OIDCProvider:          os.Getenv("OIDC_PROVIDER"),
 		OIDCIssuer:            os.Getenv("OIDC_ISSUER"),
 		OIDCDiscoveryURL:      os.Getenv("OIDC_DISCOVERY_URL"),
@@ -203,19 +197,7 @@ func Normalize(cfg Config) (Config, error) {
 		return Config{}, fmt.Errorf("invalid WORKFLOW_EXEC_NOFILE %d: must be a positive integer", cfg.WorkflowExecNoFile)
 	}
 	if strings.TrimSpace(cfg.OIDCProvider) == "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "" || cfg.OIDCClientID != "") {
-		cfg.OIDCProvider = "oidc"
-	}
-	if cfg.OIDCIssuer == "" {
-		cfg.OIDCIssuer = cfg.Auth0Issuer
-	}
-	if cfg.OIDCClientID == "" {
-		cfg.OIDCClientID = cfg.Auth0ClientID
-	}
-	if cfg.OIDCAudience == "" {
-		cfg.OIDCAudience = cfg.Auth0Audience
-	}
-	if strings.TrimSpace(cfg.OIDCProvider) == "" && (cfg.Auth0Issuer != "" || cfg.Auth0ClientID != "" || cfg.Auth0Audience != "") {
-		cfg.OIDCProvider = "auth0"
+		cfg.OIDCProvider = defaultOIDCProvider(cfg.OIDCIssuer, cfg.OIDCDiscoveryURL)
 	}
 	return cfg, nil
 }
@@ -232,4 +214,24 @@ func firstNonEmpty(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func defaultOIDCProvider(issuer, discoveryURL string) string {
+	if looksLikeAuth0Issuer(issuer) || looksLikeAuth0Issuer(discoveryURL) {
+		return "auth0"
+	}
+	return "oidc"
+}
+
+func looksLikeAuth0Issuer(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	return host == "auth0.com" || strings.HasSuffix(host, ".auth0.com")
 }

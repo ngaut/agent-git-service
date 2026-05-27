@@ -1,6 +1,6 @@
-// Mock Auth0 server for E2E tests.
+// Mock OIDC server for E2E tests.
 // It supports configurable error responses to exercise all error-state contracts.
-// Usage: go run ./e2e/cmd/mock-auth0-server :8891
+// Usage: go run ./e2e/cmd/mock-oidc-server :8891
 //
 // Admin endpoints:
 //
@@ -62,7 +62,7 @@ func main() {
 
 	s, err := newState()
 	if err != nil {
-		log.Fatalf("mock auth0 init failed: %v", err)
+		log.Fatalf("mock OIDC init failed: %v", err)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__admin/state", s.handleAdminState)
@@ -73,7 +73,7 @@ func main() {
 	mux.HandleFunc("/oauth/token", s.handleToken)
 	mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)
 
-	log.Printf("mock auth0 server listening on %s", addr)
+	log.Printf("mock OIDC server listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("listen failed: %v", err)
 	}
@@ -195,8 +195,8 @@ func (s *state) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"device_code":               "mock-device-code-123",
 		"user_code":                 "MOCK-123",
-		"verification_uri":          "https://mock.auth0.example.com/activate",
-		"verification_uri_complete": "https://mock.auth0.example.com/activate?code=MOCK-123",
+		"verification_uri":          "https://mock.oidc.example.com/activate",
+		"verification_uri_complete": "https://mock.oidc.example.com/activate?code=MOCK-123",
 		"expires_in":                900,
 		"interval":                  5,
 	})
@@ -287,7 +287,7 @@ func (s *state) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 	subject := strings.TrimSpace(r.Form.Get("subject"))
 	if subject == "" {
-		subject = "auth0|mock123"
+		subject = "oidc|mock123"
 	}
 	idToken, err := s.signIDToken(issuerForRequest(r), clientID, subject)
 	if err != nil {
