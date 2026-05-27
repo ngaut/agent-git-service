@@ -130,6 +130,27 @@ func WikiV2SearchResponse(repoFullName string, resp service.WikiSearchResponse) 
 	return wikiSearchResponse(repoFullName, "wiki-v2", resp)
 }
 
+// WikiV2TreeEntry shapes one provisional wiki-v2 tree entry.
+func WikiV2TreeEntry(repoFullName string, entry service.WikiTreeEntry) map[string]any {
+	path := url.QueryEscape(entry.Path)
+	out := map[string]any{
+		"path": entry.Path,
+		"name": entry.Name,
+		"kind": entry.Kind,
+		"sha":  entry.SHA,
+		"url":  fmt.Sprintf("%s/repos/%s/wiki-v2/tree?path=%s", apiBase(), repoFullName, path),
+	}
+	if entry.Kind == "page" {
+		apiSlug := url.PathEscape(entry.Slug)
+		out["slug"] = entry.Slug
+		out["title"] = entry.Title
+		out["size"] = entry.Size
+		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, entry.Slug)
+		out["url"] = fmt.Sprintf("%s/repos/%s/wiki-v2/pages/%s", apiBase(), repoFullName, apiSlug)
+	}
+	return out
+}
+
 func WikiLabels(labels []db.Label) []any {
 	out := make([]any, 0, len(labels))
 	for _, label := range labels {

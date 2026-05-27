@@ -467,6 +467,7 @@ func registerRepoPagesRoutes(r chi.Router, handlers *rest.Deps) {
 func registerRepoWikiRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks", handlers.RepairWikiLocks)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/state", handlers.GetWikiV2State)
+	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/tree", handlers.ListWikiV2Tree)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/pages", handlers.ListWikiV2Pages)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/search", handlers.SearchWikiV2Pages)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}", handlers.GetWikiV2Page)

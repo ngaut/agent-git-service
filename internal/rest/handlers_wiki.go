@@ -33,6 +33,30 @@ type wikiV2StateResponse struct {
 	PageCount            int        `json:"page_count"`
 }
 
+// ListWikiV2Tree handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/tree
+func (d *Deps) ListWikiV2Tree(w http.ResponseWriter, r *http.Request) {
+	full := repoFullName(r)
+	if d.mustGetRepo(w, r) == nil {
+		return
+	}
+	tree, err := d.Svc.ListWikiTreeAtRef(
+		r.Context(),
+		full,
+		strings.TrimSpace(r.URL.Query().Get("path")),
+		strings.TrimSpace(r.URL.Query().Get("ref")),
+	)
+	if err != nil {
+		d.respondWikiReadError(w, r, full, err)
+		return
+	}
+	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	out := make([]any, 0, len(tree))
+	for _, entry := range tree {
+		out = append(out, transform.WikiV2TreeEntry(full, entry))
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func wikiLabelFiltersFromQuery(q url.Values) (labels, excludeLabels []string) {
 	labels = append(labels, splitCommaQueryValues(q["label"])...)
 	labels = append(labels, splitCommaQueryValues(q["labels"])...)

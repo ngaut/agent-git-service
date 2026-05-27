@@ -100,6 +100,17 @@ type WikiPageHistoryEntry struct {
 	BodySize  int
 }
 
+// WikiTreeEntry is the read model for one git-authoritative wiki tree entry.
+type WikiTreeEntry struct {
+	Path  string
+	Name  string
+	Kind  string
+	Slug  string
+	Title string
+	SHA   string
+	Size  int64
+}
+
 // WikiBulkMoveEntry reports one source-to-destination wiki slug move.
 type WikiBulkMoveEntry struct {
 	From string
@@ -342,6 +353,13 @@ func canonicalWikiLookupSlug(slug string) string {
 // deterministic and list responses do not need to read every page body.
 func titleFromSlug(slug string) string {
 	return wikicatalog.TitleFromSlug(slug)
+}
+
+func lastWikiSlugSegment(slug string) string {
+	if idx := strings.LastIndex(slug, "/"); idx >= 0 {
+		return slug[idx+1:]
+	}
+	return slug
 }
 
 func normalizeWikiReference(raw string) string {
@@ -809,6 +827,60 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out, nil
+}
+
+// ListWikiTreeAtRef returns the direct children for one wiki directory view.
+// Blob entries are normalized back to slug space so clients do not need to
+// reason about on-disk markdown extensions.
+func (s *Service) ListWikiTreeAtRef(ctx context.Context, repoFullName, dirPath, ref string) ([]WikiTreeEntry, error) {
+	if strings.TrimSpace(dirPath) != "" {
+		dirPath = strings.Trim(strings.TrimSpace(dirPath), "/")
+		if err := validateReadableWikiSlug(dirPath); err != nil {
+			return nil, err
+		}
+	}
+	full := wikiRepoFullName(repoFullName)
+	if !s.Git.Exists(ctx, full) || s.Git.IsEmpty(ctx, full) {
+		return []WikiTreeEntry{}, nil
+	}
+
+	rawEntries, err := s.Git.ListDirAtRef(ctx, full, dirPath, ref)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WikiTreeEntry, 0, len(rawEntries))
+	for _, entry := range rawEntries {
+		switch entry.Type {
+		case "tree":
+			out = append(out, WikiTreeEntry{
+				Path: entry.Path,
+				Name: entry.Name,
+				Kind: "directory",
+				SHA:  entry.SHA,
+			})
+		case "blob":
+			slug := wikiPathToSlug(entry.Path)
+			if slug == "" {
+				continue
+			}
+			out = append(out, WikiTreeEntry{
+				Path:  slug,
+				Name:  titleFromSlug(lastWikiSlugSegment(slug)),
+				Kind:  "page",
+				Slug:  slug,
+				Title: titleFromSlug(slug),
+				SHA:   entry.SHA,
+				Size:  entry.Size,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind == out[j].Kind {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Kind < out[j].Kind
+	})
 	return out, nil
 }
 
