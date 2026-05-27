@@ -71,6 +71,15 @@ func (d *Deps) respondWikiReadError(w http.ResponseWriter, r *http.Request, full
 
 // SearchWikiPages handles GET /api/v3/repos/{owner}/{repo}/wiki/search
 func (d *Deps) SearchWikiPages(w http.ResponseWriter, r *http.Request) {
+	d.searchWikiPages(w, r, false)
+}
+
+// SearchWikiV2Pages handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/search
+func (d *Deps) SearchWikiV2Pages(w http.ResponseWriter, r *http.Request) {
+	d.searchWikiPages(w, r, true)
+}
+
+func (d *Deps) searchWikiPages(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	if d.mustGetRepo(w, r) == nil {
 		return
@@ -104,11 +113,24 @@ func (d *Deps) SearchWikiPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	if useV2Transform {
+		respond.JSON(w, http.StatusOK, transform.WikiV2SearchResponse(full, resp))
+		return
+	}
 	respond.JSON(w, http.StatusOK, transform.WikiSearchResponse(full, resp))
 }
 
 // ListWikiPages handles GET /api/v3/repos/{owner}/{repo}/wiki/pages
 func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
+	d.listWikiPages(w, r, false)
+}
+
+// ListWikiV2Pages handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages
+func (d *Deps) ListWikiV2Pages(w http.ResponseWriter, r *http.Request) {
+	d.listWikiPages(w, r, true)
+}
+
+func (d *Deps) listWikiPages(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	if d.mustGetRepo(w, r) == nil {
 		return
@@ -138,7 +160,11 @@ func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 	pages = paginate(w, r, d.Svc.BaseURL, pages, page, perPage)
 	out := make([]any, 0, len(pages))
 	for _, p := range pages {
-		out = append(out, transform.WikiPageSummary(full, p))
+		if useV2Transform {
+			out = append(out, transform.WikiV2PageSummary(full, p))
+		} else {
+			out = append(out, transform.WikiPageSummary(full, p))
+		}
 	}
 	respond.JSON(w, 200, out)
 }
@@ -479,6 +505,15 @@ func (d *Deps) MoveWikiPage(w http.ResponseWriter, r *http.Request) {
 
 // GetWikiPage handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}
 func (d *Deps) GetWikiPage(w http.ResponseWriter, r *http.Request) {
+	d.getWikiPage(w, r, false)
+}
+
+// GetWikiV2Page handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}
+func (d *Deps) GetWikiV2Page(w http.ResponseWriter, r *http.Request) {
+	d.getWikiPage(w, r, true)
+}
+
+func (d *Deps) getWikiPage(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
@@ -491,11 +526,24 @@ func (d *Deps) GetWikiPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	if useV2Transform {
+		respond.JSON(w, 200, transform.WikiV2Page(full, page))
+		return
+	}
 	respond.JSON(w, 200, transform.WikiPage(full, page))
 }
 
 // ListWikiPageHistory handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/history
 func (d *Deps) ListWikiPageHistory(w http.ResponseWriter, r *http.Request) {
+	d.listWikiPageHistoryRoute(w, r, false)
+}
+
+// ListWikiV2PageHistory handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/history
+func (d *Deps) ListWikiV2PageHistory(w http.ResponseWriter, r *http.Request) {
+	d.listWikiPageHistoryRoute(w, r, true)
+}
+
+func (d *Deps) listWikiPageHistoryRoute(w http.ResponseWriter, r *http.Request, _ bool) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	if d.mustGetRepo(w, r) == nil {
@@ -643,6 +691,15 @@ func wikiCompactionJobResponse(job db.WikiCompactionJob, statusURL string) map[s
 
 // ListWikiBacklinks handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks
 func (d *Deps) ListWikiBacklinks(w http.ResponseWriter, r *http.Request) {
+	d.listWikiBacklinks(w, r, false)
+}
+
+// ListWikiV2Backlinks handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/backlinks
+func (d *Deps) ListWikiV2Backlinks(w http.ResponseWriter, r *http.Request) {
+	d.listWikiBacklinks(w, r, true)
+}
+
+func (d *Deps) listWikiBacklinks(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	if d.mustGetRepo(w, r) == nil {
@@ -656,7 +713,11 @@ func (d *Deps) ListWikiBacklinks(w http.ResponseWriter, r *http.Request) {
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
 	out := make([]any, 0, len(backlinks))
 	for _, backlink := range backlinks {
-		out = append(out, transform.WikiBacklink(full, backlink))
+		if useV2Transform {
+			out = append(out, transform.WikiV2Backlink(full, backlink))
+		} else {
+			out = append(out, transform.WikiBacklink(full, backlink))
+		}
 	}
 	respond.JSON(w, 200, out)
 }

@@ -14,13 +14,17 @@ import (
 // (slug, title, body, html_url, sha) so future GitHub-compat work
 // doesn't churn clients.
 func WikiPage(repoFullName string, p service.WikiPage) map[string]any {
+	return wikiPage(repoFullName, "wiki", p)
+}
+
+func wikiPage(repoFullName, routePrefix string, p service.WikiPage) map[string]any {
 	apiSlug := url.PathEscape(p.Slug)
 	out := map[string]any{
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"body":     p.Body,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
 		"sha":      p.SHA,
 		"labels":   WikiLabels(p.Labels),
 	}
@@ -35,14 +39,23 @@ func WikiPage(repoFullName string, p service.WikiPage) map[string]any {
 	return out
 }
 
+// WikiV2Page shapes a service.WikiPage for provisional wiki-v2 reads.
+func WikiV2Page(repoFullName string, p service.WikiPage) map[string]any {
+	return wikiPage(repoFullName, "wiki-v2", p)
+}
+
 // WikiPageSummary shapes a service.WikiPageSummary for list responses.
 func WikiPageSummary(repoFullName string, p service.WikiPageSummary) map[string]any {
+	return wikiPageSummary(repoFullName, "wiki", p)
+}
+
+func wikiPageSummary(repoFullName, routePrefix string, p service.WikiPageSummary) map[string]any {
 	apiSlug := url.PathEscape(p.Slug)
 	out := map[string]any{
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
 		"labels":   WikiLabels(p.Labels),
 	}
 	if p.SHA != "" {
@@ -59,20 +72,38 @@ func WikiPageSummary(repoFullName string, p service.WikiPageSummary) map[string]
 	return out
 }
 
+// WikiV2PageSummary shapes a service.WikiPageSummary for provisional wiki-v2 list responses.
+func WikiV2PageSummary(repoFullName string, p service.WikiPageSummary) map[string]any {
+	return wikiPageSummary(repoFullName, "wiki-v2", p)
+}
+
 // WikiBacklink shapes a service.WikiBacklink for backlink responses.
 func WikiBacklink(repoFullName string, p service.WikiBacklink) map[string]any {
+	return wikiBacklink(repoFullName, "wiki", p)
+}
+
+func wikiBacklink(repoFullName, routePrefix string, p service.WikiBacklink) map[string]any {
 	apiSlug := url.PathEscape(p.Slug)
 	return map[string]any{
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"snippet":  p.Snippet,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
 	}
+}
+
+// WikiV2Backlink shapes a service.WikiBacklink for provisional wiki-v2 backlink responses.
+func WikiV2Backlink(repoFullName string, p service.WikiBacklink) map[string]any {
+	return wikiBacklink(repoFullName, "wiki-v2", p)
 }
 
 // WikiSearchResponse shapes repo-scoped wiki search results and metadata.
 func WikiSearchResponse(repoFullName string, resp service.WikiSearchResponse) map[string]any {
+	return wikiSearchResponse(repoFullName, "wiki", resp)
+}
+
+func wikiSearchResponse(repoFullName, routePrefix string, resp service.WikiSearchResponse) map[string]any {
 	results := make([]any, 0, len(resp.Results))
 	for _, row := range resp.Results {
 		apiSlug := url.PathEscape(row.Slug)
@@ -82,7 +113,7 @@ func WikiSearchResponse(repoFullName string, resp service.WikiSearchResponse) ma
 			"score":    row.Score,
 			"snippet":  row.Snippet,
 			"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, row.Slug),
-			"url":      fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug),
+			"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
 			"labels":   WikiLabels(row.Labels),
 		})
 	}
@@ -92,6 +123,11 @@ func WikiSearchResponse(repoFullName string, resp service.WikiSearchResponse) ma
 		"method":     resp.Method,
 		"elapsed_ms": resp.ElapsedMS,
 	}
+}
+
+// WikiV2SearchResponse shapes provisional wiki-v2 search responses.
+func WikiV2SearchResponse(repoFullName string, resp service.WikiSearchResponse) map[string]any {
+	return wikiSearchResponse(repoFullName, "wiki-v2", resp)
 }
 
 func WikiLabels(labels []db.Label) []any {
