@@ -169,8 +169,11 @@ Wiki path-slug hierarchy rules:
 - page slugs are lowercase canonical paths such as `guides/setup`
 - wiki page routes treat `{slug}` as one percent-encoded path parameter; clients must request nested slugs such as `guides/setup` as `guides%2Fsetup` when the slug is followed by a subresource, for example `/wiki/pages/guides%2Fsetup/history`
 - `GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}` accepts an optional `ref` query parameter to read the page body and blob SHA at a full commit SHA from that page's history; omitted `ref` still reads HEAD
+- `GET /api/v3/repos/{owner}/{repo}/wiki/tree` accepts `path` and optional `ref`, and returns one authoritative directory view from the wiki tree with directory/page URLs under `/wiki/...`
 - `GET /api/v3/repos/{owner}/{repo}/wiki/pages` accepts `path`, `recursive`, `label`/`labels`, and `exclude_label`/`exclude_labels` query parameters for prefix-scoped and label-scoped listing
 - `GET /api/v3/repos/{owner}/{repo}/wiki/search` accepts `q`, `limit`, `offset`, `label`/`labels`, and `exclude_label`/`exclude_labels`, returns `{results, query, method, elapsed_ms}`, and caps `limit` server-side at 50
+- `GET /api/v3/repos/{owner}/{repo}/wiki/state` exposes the current derived-index SHA, timestamps, and page count for the authoritative wiki surface
+- `POST /api/v3/repos/{owner}/{repo}/wiki/reconcile/request` persists an async reconcile request marker; `POST /api/v3/repos/{owner}/{repo}/wiki/reconcile` runs the reconcile synchronously and returns the persisted result
 - `GET/POST/PUT/DELETE /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` attaches repo-scoped labels to wiki pages; labels are metadata, not git-tracked page content
 - `POST /api/v3/repos/{owner}/{repo}/wiki/move` atomically renames every page whose slug equals `from` or starts with `from/`, requires an `if_match` SHA map that covers the full source set, and returns one commit for the entire move
 - `POST /api/v3/repos/{owner}/{repo}/wiki/compact` remains reserved for repo-admin callers, but it is temporarily disabled while the wiki catalog corruption incident is contained and repaired

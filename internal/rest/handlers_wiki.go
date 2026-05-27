@@ -33,8 +33,8 @@ type wikiV2StateResponse struct {
 	PageCount            int        `json:"page_count"`
 }
 
-// ListWikiV2Tree handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/tree
-func (d *Deps) ListWikiV2Tree(w http.ResponseWriter, r *http.Request) {
+// ListWikiTree handles GET /api/v3/repos/{owner}/{repo}/wiki/tree
+func (d *Deps) ListWikiTree(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	if d.mustGetRepo(w, r) == nil {
 		return
@@ -52,7 +52,7 @@ func (d *Deps) ListWikiV2Tree(w http.ResponseWriter, r *http.Request) {
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
 	out := make([]any, 0, len(tree))
 	for _, entry := range tree {
-		out = append(out, transform.WikiV2TreeEntry(full, entry))
+		out = append(out, transform.WikiTreeEntry(full, entry))
 	}
 	respond.JSON(w, http.StatusOK, out)
 }
@@ -95,15 +95,6 @@ func (d *Deps) respondWikiReadError(w http.ResponseWriter, r *http.Request, full
 
 // SearchWikiPages handles GET /api/v3/repos/{owner}/{repo}/wiki/search
 func (d *Deps) SearchWikiPages(w http.ResponseWriter, r *http.Request) {
-	d.searchWikiPages(w, r, false)
-}
-
-// SearchWikiV2Pages handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/search
-func (d *Deps) SearchWikiV2Pages(w http.ResponseWriter, r *http.Request) {
-	d.searchWikiPages(w, r, true)
-}
-
-func (d *Deps) searchWikiPages(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	if d.mustGetRepo(w, r) == nil {
 		return
@@ -137,24 +128,11 @@ func (d *Deps) searchWikiPages(w http.ResponseWriter, r *http.Request, useV2Tran
 		return
 	}
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
-	if useV2Transform {
-		respond.JSON(w, http.StatusOK, transform.WikiV2SearchResponse(full, resp))
-		return
-	}
 	respond.JSON(w, http.StatusOK, transform.WikiSearchResponse(full, resp))
 }
 
 // ListWikiPages handles GET /api/v3/repos/{owner}/{repo}/wiki/pages
 func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
-	d.listWikiPages(w, r, false)
-}
-
-// ListWikiV2Pages handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages
-func (d *Deps) ListWikiV2Pages(w http.ResponseWriter, r *http.Request) {
-	d.listWikiPages(w, r, true)
-}
-
-func (d *Deps) listWikiPages(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	if d.mustGetRepo(w, r) == nil {
 		return
@@ -184,17 +162,13 @@ func (d *Deps) listWikiPages(w http.ResponseWriter, r *http.Request, useV2Transf
 	pages = paginate(w, r, d.Svc.BaseURL, pages, page, perPage)
 	out := make([]any, 0, len(pages))
 	for _, p := range pages {
-		if useV2Transform {
-			out = append(out, transform.WikiV2PageSummary(full, p))
-		} else {
-			out = append(out, transform.WikiPageSummary(full, p))
-		}
+		out = append(out, transform.WikiPageSummary(full, p))
 	}
 	respond.JSON(w, 200, out)
 }
 
-// GetWikiV2State handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/state
-func (d *Deps) GetWikiV2State(w http.ResponseWriter, r *http.Request) {
+// GetWikiState handles GET /api/v3/repos/{owner}/{repo}/wiki/state
+func (d *Deps) GetWikiState(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	if d.mustGetRepo(w, r) == nil {
 		return
@@ -214,8 +188,8 @@ func (d *Deps) GetWikiV2State(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RequestWikiV2Reconcile handles POST /api/v3/repos/{owner}/{repo}/wiki-v2/reconcile/request
-func (d *Deps) RequestWikiV2Reconcile(w http.ResponseWriter, r *http.Request) {
+// RequestWikiReconcile handles POST /api/v3/repos/{owner}/{repo}/wiki/reconcile/request
+func (d *Deps) RequestWikiReconcile(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	repo := d.mustGetRepo(w, r)
 	if repo == nil {
@@ -236,8 +210,8 @@ func (d *Deps) RequestWikiV2Reconcile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ReconcileWikiV2 handles POST /api/v3/repos/{owner}/{repo}/wiki-v2/reconcile
-func (d *Deps) ReconcileWikiV2(w http.ResponseWriter, r *http.Request) {
+// ReconcileWiki handles POST /api/v3/repos/{owner}/{repo}/wiki/reconcile
+func (d *Deps) ReconcileWiki(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	repo := d.mustGetRepo(w, r)
 	if repo == nil {
@@ -266,13 +240,6 @@ func (d *Deps) ListWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 	d.listWikiPageLabels(w, r, full, slug)
 }
 
-// ListWikiV2PageLabels handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
-func (d *Deps) ListWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
-	full := repoFullName(r)
-	slug := wikiSlugParam(r)
-	d.listWikiPageLabels(w, r, full, slug)
-}
-
 // AddWikiPageLabels handles POST /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels
 func (d *Deps) AddWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
@@ -280,22 +247,8 @@ func (d *Deps) AddWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 	d.addWikiPageLabels(w, r, full, slug)
 }
 
-// AddWikiV2PageLabels handles POST /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
-func (d *Deps) AddWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
-	full := repoFullName(r)
-	slug := wikiSlugParam(r)
-	d.addWikiPageLabels(w, r, full, slug)
-}
-
 // SetWikiPageLabels handles PUT /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels
 func (d *Deps) SetWikiPageLabels(w http.ResponseWriter, r *http.Request) {
-	full := repoFullName(r)
-	slug := wikiSlugParam(r)
-	d.setWikiPageLabels(w, r, full, slug)
-}
-
-// SetWikiV2PageLabels handles PUT /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
-func (d *Deps) SetWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	d.setWikiPageLabels(w, r, full, slug)
@@ -309,23 +262,8 @@ func (d *Deps) RemoveWikiPageLabel(w http.ResponseWriter, r *http.Request) {
 	d.removeWikiPageLabel(w, r, full, slug, name)
 }
 
-// RemoveWikiV2PageLabel handles DELETE /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels/{name}
-func (d *Deps) RemoveWikiV2PageLabel(w http.ResponseWriter, r *http.Request) {
-	full := repoFullName(r)
-	slug := wikiSlugParam(r)
-	name := pathParam(r, "name")
-	d.removeWikiPageLabel(w, r, full, slug, name)
-}
-
 // RemoveAllWikiPageLabels handles DELETE /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels
 func (d *Deps) RemoveAllWikiPageLabels(w http.ResponseWriter, r *http.Request) {
-	full := repoFullName(r)
-	slug := wikiSlugParam(r)
-	d.removeAllWikiPageLabels(w, r, full, slug)
-}
-
-// RemoveAllWikiV2PageLabels handles DELETE /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels
-func (d *Deps) RemoveAllWikiV2PageLabels(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	d.removeAllWikiPageLabels(w, r, full, slug)
@@ -565,15 +503,6 @@ func (d *Deps) MoveWikiPage(w http.ResponseWriter, r *http.Request) {
 
 // GetWikiPage handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}
 func (d *Deps) GetWikiPage(w http.ResponseWriter, r *http.Request) {
-	d.getWikiPage(w, r, false)
-}
-
-// GetWikiV2Page handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}
-func (d *Deps) GetWikiV2Page(w http.ResponseWriter, r *http.Request) {
-	d.getWikiPage(w, r, true)
-}
-
-func (d *Deps) getWikiPage(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
@@ -586,24 +515,11 @@ func (d *Deps) getWikiPage(w http.ResponseWriter, r *http.Request, useV2Transfor
 		return
 	}
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
-	if useV2Transform {
-		respond.JSON(w, 200, transform.WikiV2Page(full, page))
-		return
-	}
 	respond.JSON(w, 200, transform.WikiPage(full, page))
 }
 
 // ListWikiPageHistory handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/history
 func (d *Deps) ListWikiPageHistory(w http.ResponseWriter, r *http.Request) {
-	d.listWikiPageHistoryRoute(w, r, false)
-}
-
-// ListWikiV2PageHistory handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/history
-func (d *Deps) ListWikiV2PageHistory(w http.ResponseWriter, r *http.Request) {
-	d.listWikiPageHistoryRoute(w, r, true)
-}
-
-func (d *Deps) listWikiPageHistoryRoute(w http.ResponseWriter, r *http.Request, _ bool) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	if d.mustGetRepo(w, r) == nil {
@@ -751,15 +667,6 @@ func wikiCompactionJobResponse(job db.WikiCompactionJob, statusURL string) map[s
 
 // ListWikiBacklinks handles GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks
 func (d *Deps) ListWikiBacklinks(w http.ResponseWriter, r *http.Request) {
-	d.listWikiBacklinks(w, r, false)
-}
-
-// ListWikiV2Backlinks handles GET /api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/backlinks
-func (d *Deps) ListWikiV2Backlinks(w http.ResponseWriter, r *http.Request) {
-	d.listWikiBacklinks(w, r, true)
-}
-
-func (d *Deps) listWikiBacklinks(w http.ResponseWriter, r *http.Request, useV2Transform bool) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	if d.mustGetRepo(w, r) == nil {
@@ -773,11 +680,7 @@ func (d *Deps) listWikiBacklinks(w http.ResponseWriter, r *http.Request, useV2Tr
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
 	out := make([]any, 0, len(backlinks))
 	for _, backlink := range backlinks {
-		if useV2Transform {
-			out = append(out, transform.WikiV2Backlink(full, backlink))
-		} else {
-			out = append(out, transform.WikiBacklink(full, backlink))
-		}
+		out = append(out, transform.WikiBacklink(full, backlink))
 	}
 	respond.JSON(w, 200, out)
 }
