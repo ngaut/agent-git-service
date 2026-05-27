@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/ngaut/agent-git-service/internal/service"
@@ -107,5 +108,84 @@ func TestWikiV2_ReconcileEndpointsRequireWritePermission(t *testing.T) {
 		if blocked.Code != http.StatusForbidden && blocked.Code != http.StatusNotFound {
 			t.Fatalf("%s expected 403/404, got %d: %s", path, blocked.Code, blocked.Body.String())
 		}
+	}
+}
+
+func TestWikiV2_ReadEndpointsExposeProvisionalURLs(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+	owner, ownerToken := seedHarnessUser(t, h, "wiki-v2-read-owner", false)
+	if _, err := h.Svc.CreateRepo(service.ContextWithUser(ctx, owner), service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "wiki-v2-read",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	full := owner.Login + "/wiki-v2-read"
+
+	home := h.DoRESTJSONWithToken(t, http.MethodPut, "/api/v3/repos/"+full+"/wiki/pages/home", ownerToken, map[string]any{
+		"body":    "# Home\n\nSee [[guides/setup]].\n",
+		"message": "create home",
+	})
+	assertStatusCode(t, home, http.StatusOK)
+	guide := h.DoRESTJSONWithToken(t, http.MethodPut, "/api/v3/repos/"+full+"/wiki/pages/"+url.PathEscape("guides/setup"), ownerToken, map[string]any{
+		"body":    "# Setup\n\nBack to [[home]].\n",
+		"message": "create setup guide",
+	})
+	assertStatusCode(t, guide, http.StatusOK)
+
+	reconcile := h.DoRESTWithToken(t, http.MethodPost, "/api/v3/repos/"+full+"/wiki-v2/reconcile", ownerToken)
+	assertStatusCode(t, reconcile, http.StatusOK)
+
+	list := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/pages", ownerToken)
+	assertStatusCode(t, list, http.StatusOK)
+	listBody := testharness.DecodeJSONArray(t, list)
+	if len(listBody) != 2 {
+		t.Fatalf("wiki-v2 list: got %#v", listBody)
+	}
+	first := listBody[0]
+	if got, _ := first["url"].(string); !strings.Contains(got, "/wiki-v2/pages/") {
+		t.Fatalf("wiki-v2 list url = %q, want wiki-v2 path", got)
+	}
+
+	getPage := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/pages/home", ownerToken)
+	assertStatusCode(t, getPage, http.StatusOK)
+	pageBody := testharness.DecodeJSON(t, getPage)
+	if got, _ := pageBody["url"].(string); !strings.Contains(got, "/wiki-v2/pages/home") {
+		t.Fatalf("wiki-v2 page url = %q, want wiki-v2 path", got)
+	}
+
+	history := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/pages/home/history", ownerToken)
+	assertStatusCode(t, history, http.StatusOK)
+	historyBody := testharness.DecodeJSONArray(t, history)
+	if len(historyBody) == 0 {
+		t.Fatalf("wiki-v2 history: got %#v", historyBody)
+	}
+
+	backlinks := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/pages/home/backlinks", ownerToken)
+	assertStatusCode(t, backlinks, http.StatusOK)
+	backlinkBody := testharness.DecodeJSONArray(t, backlinks)
+	if len(backlinkBody) != 1 {
+		t.Fatalf("wiki-v2 backlinks: got %#v", backlinkBody)
+	}
+	backlink := backlinkBody[0]
+	if got, _ := backlink["url"].(string); !strings.Contains(got, "/wiki-v2/pages/") {
+		t.Fatalf("wiki-v2 backlink url = %q, want wiki-v2 path", got)
+	}
+
+	search := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/search?q=setup", ownerToken)
+	assertStatusCode(t, search, http.StatusOK)
+	searchBody := testharness.DecodeJSON(t, search)
+	results, ok := searchBody["results"].([]any)
+	if !ok || len(results) == 0 {
+		t.Fatalf("wiki-v2 search results: got %#v", searchBody)
+	}
+	result, ok := results[0].(map[string]any)
+	if !ok {
+		t.Fatalf("wiki-v2 search result: expected map, got %T", results[0])
+	}
+	if got, _ := result["url"].(string); !strings.Contains(got, "/wiki-v2/pages/") {
+		t.Fatalf("wiki-v2 search url = %q, want wiki-v2 path", got)
 	}
 }
