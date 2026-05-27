@@ -47,6 +47,7 @@ The main runtime layers are:
 - `gitstore`
 
 Supporting packages such as `config`, `oauth`, `auth0`, `authn`, `githttp`,
+`oidc`,
 `rest/respond`, `rest/transform`, `tenant`, `ratelimit`, `metrics`,
 `logging`, `httputil`, `testharness`,
 `apperrors`, `crypto`, `embedding`, and `randutil` are included where they
@@ -81,6 +82,7 @@ document the relevant contract below in the same change.
 | `metrics` | Prometheus collectors and metric-recording helpers |
 | `mentions` | GitHub-style mention token parsing helpers |
 | `middleware` | auth, logging, rate-limit, and request guards |
+| `oidc` | generic OIDC discovery, device flow, and JWKS-backed ID token verification |
 | `oauth` | OAuth device-flow HTTP endpoints |
 | `randutil` | shared random helper functions |
 | `ratelimit` | GitHub-compatible rate-limit snapshot helpers |
@@ -101,7 +103,7 @@ document the relevant contract below in the same change.
 | `rest` | HTTP request decode, REST response codes, REST JSON shapes | `service`, `controlplane`, `rest/respond`, `rest/transform`, `ratelimit`, `db` model types, `Svc.Git` via `*service.Service` | GORM queries, GraphQL helpers |
 | `graphql` | GraphQL request parse, resolver dispatch, GraphQL response shapes, field filtering | `service`, `db` model types, `rest/respond` for HTTP JSON writeout, selected `Svc.Git` and `Svc.DB` access via `*service.Service` | `rest/transform` |
 | `controlplane` | control-plane schema, token-to-tenant DB routing, tenant-user bootstrap | `db`, `crypto`, GORM, standard library | `router`, `rest`, `graphql`, `gitstore`, transport rendering |
-| `service` | business rules, persistence orchestration, Git orchestration, domain side effects | `db`, `gitstore`, `embedding`, `auth0` | `router`, `middleware`, `rest`, `graphql`, HTTP response helpers |
+| `service` | business rules, persistence orchestration, Git orchestration, domain side effects | `db`, `gitstore`, `embedding`, `auth0`, `oidc` | `router`, `middleware`, `rest`, `graphql`, HTTP response helpers |
 | `db` | schema, migrations, seed data, relational model types, shared state constants | GORM and standard library only | `service`, `rest`, `graphql`, `gitstore` |
 | `gitstore` | Git-native repo lifecycle, refs, merge/rebase/diff/content/archive operations | system `git`, go-git, filesystem, `tenant` | `db`, `rest`, `graphql` |
 
@@ -453,6 +455,27 @@ Current state:
 
 - `main` constructs the client and injects it into `service.Service.Auth0`
 - REST handlers under `/api/v3/auth0/*` call service methods, not the client directly
+- Auth0 compatibility endpoints must not silently fall back to `service.Service.OIDC`
+
+### `oidc`
+
+Ownership:
+
+- generic OIDC discovery document loading
+- generic device-authorization and token exchange helpers
+- JWKS-backed ID token verification and claim decoding for provider-neutral login
+
+Rules:
+
+- may perform outbound HTTP and JWT validation
+- must stay transport-agnostic and must not persist application users or tokens directly
+- may share low-level verification helpers with `auth0`, but provider-to-local-user mapping remains in `service`
+
+Current state:
+
+- `main` constructs the client and injects it into `service.Service.OIDC`
+- REST handlers under `/api/v3/oidc/*` call service methods, not the client directly
+- legacy `/api/v3/auth0/*` handlers remain compatibility aliases for explicit Auth0-compatible wiring only
 
 ### `authn`
 
@@ -619,6 +642,7 @@ Ownership split:
 - `controlplane`: in multi-tenant mode, resolve token -> `CPUser` -> tenant `*gorm.DB`, and ensure the tenant-local `db.User` exists
 - `service`: validate API tokens and resolve user-by-token in single-DB mode; persist application users and tokens for Auth0-backed human login
 - `auth0`: perform outbound device-flow requests and ID token verification
+- `oidc`: perform provider-neutral discovery, device-flow requests, and ID token verification
 - `githttp`: uses the same auth middleware on Git routes, with `TokenAuth` in control-plane mode and `OptionalTokenAuth` in single-DB mode
 - `rest` and `graphql`: consume `GetCurrentUser(ctx)` and assume middleware has prepared the context
 
@@ -626,7 +650,7 @@ Rule:
 
 - surface handlers must not parse auth headers themselves
 - control-plane routing and single-DB validation are both first-class current auth paths
-- outbound identity-provider clients such as `auth0` must not write application state directly
+- outbound identity-provider clients such as `auth0` and `oidc` must not write application state directly
 
 ### Collaboration Authorization
 
@@ -745,7 +769,8 @@ Current state:
 | `oauth -> *service.Service` | OAuth handler | acceptable for now | small package; current direct wiring is simple |
 | `githttp -> *gitstore.Store` | Git transport | intended | transport handler needs direct repo access |
 | `githttp -> *service.Service` | ensure repo exists, post-push follow-up | acceptable but visible debt | transport + follow-up logic are coupled in one package |
-| `service -> Auth0DeviceFlow` | human-login flows | acceptable for now | keeps outbound identity-provider details behind a narrow domain seam |
+| `service -> Auth0DeviceFlow` | human-login compatibility flows | acceptable for now | keeps Auth0-specific compatibility behavior behind a narrow domain seam |
+| `service -> oidc.Client` | generic human-login flows | acceptable for now | keeps provider-neutral OIDC protocol work outside business-state orchestration |
 | `gitstore -> tenant` | per-tenant repo roots and lock keys | intended | physical repo scoping is an infrastructure concern, not a service concern |
 
 ## Refactors Worth Doing

@@ -11,7 +11,11 @@ scripts=()
 if [[ -z "${script_name}" ]]; then
   while IFS= read -r -d '' f; do
     scripts+=("$f")
-  done < <(find "$E2E_DIR" -maxdepth 1 -type f -name "*.sh" ! -name "run.sh" ! -name "lib.sh" -print0 | sort -z)
+  done < <(find "$E2E_DIR" -maxdepth 1 -type f -name "*.sh" \
+    ! -name "run.sh" \
+    ! -name "lib.sh" \
+    ! -name "helpers.sh" \
+    -print0 | sort -z)
 else
   if [[ "$script_name" != *.sh ]]; then
     script_name="${script_name}.sh"

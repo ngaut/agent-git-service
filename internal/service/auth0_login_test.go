@@ -10,6 +10,7 @@ import (
 
 	"github.com/ngaut/agent-git-service/internal/auth0"
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/oidc"
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
@@ -24,6 +25,22 @@ type fakeAuth0DeviceFlow struct {
 	nickname  string
 	preferred string
 }
+
+type fakeOIDCProvider struct{}
+
+func (fakeOIDCProvider) RequestDeviceCode(ctx context.Context, scopes string) (oidc.DeviceCode, error) {
+	return oidc.DeviceCode{DeviceCode: "oidc-device-code"}, nil
+}
+func (fakeOIDCProvider) ExchangeDeviceCode(ctx context.Context, deviceCode string) (oidc.Token, error) {
+	return oidc.Token{}, nil
+}
+func (fakeOIDCProvider) VerifyIDToken(ctx context.Context, idToken string) (oidc.IDTokenClaims, error) {
+	return oidc.IDTokenClaims{}, nil
+}
+func (fakeOIDCProvider) Provider() string { return "casdoor" }
+func (fakeOIDCProvider) Issuer() string   { return "https://casdoor.example.com/" }
+func (fakeOIDCProvider) ClientID() string { return "oidc-client-id" }
+func (fakeOIDCProvider) Scopes() string   { return "openid profile email" }
 
 func (f fakeAuth0DeviceFlow) Issuer() string   { return f.issuer }
 func (f fakeAuth0DeviceFlow) ClientID() string { return f.clientID }
@@ -453,6 +470,16 @@ func TestAuth0LoginWithIDToken(t *testing.T) {
 		}
 	})
 
+	t.Run("DoesNotFallbackToOIDC", func(t *testing.T) {
+		svc.Auth0 = nil
+		svc.OIDC = fakeOIDCProvider{}
+
+		_, err := svc.Auth0LoginWithIDToken(context.Background(), "id-token")
+		if err == nil || err.Error() != "auth0 not configured" {
+			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
+		}
+	})
+
 	t.Run("InvalidIDToken", func(t *testing.T) {
 		svc.Auth0 = fakeAuth0DeviceFlow{
 			issuer:   "https://example.auth0.com/",
@@ -537,8 +564,18 @@ func TestRequestAuth0DeviceCode(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
+	t.Run("DoesNotFallbackToOIDC", func(t *testing.T) {
+		svc.Auth0 = nil
+		svc.OIDC = fakeOIDCProvider{}
+		_, err := svc.RequestAuth0DeviceCode(context.Background())
+		if err == nil || err.Error() != "auth0 not configured" {
+			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
+		}
+	})
+
 	t.Run("Auth0NotConfigured", func(t *testing.T) {
 		svc.Auth0 = nil
+		svc.OIDC = nil
 		_, err := svc.RequestAuth0DeviceCode(context.Background())
 		if err == nil || err.Error() != "auth0 not configured" {
 			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
@@ -572,8 +609,18 @@ func TestExchangeAuth0DeviceCode(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
+	t.Run("DoesNotFallbackToOIDC", func(t *testing.T) {
+		svc.Auth0 = nil
+		svc.OIDC = fakeOIDCProvider{}
+		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
+		if err == nil || err.Error() != "auth0 not configured" {
+			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
+		}
+	})
+
 	t.Run("Auth0NotConfigured", func(t *testing.T) {
 		svc.Auth0 = nil
+		svc.OIDC = nil
 		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
 		if err == nil || err.Error() != "auth0 not configured" {
 			t.Fatalf("expected 'auth0 not configured' error, got %v", err)

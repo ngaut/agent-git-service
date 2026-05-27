@@ -313,7 +313,9 @@ run-bg: build ## Build and run in background (auto-detects sudo, falls back to u
 		echo "✓ passwordless sudo available, starting privileged listeners on :80/:443"; \
 		PID=$$(pgrep -x -n "$(BINARY)" 2>/dev/null) && [ -n "$$PID" ] && ps -p $$PID > /dev/null 2>&1 && sudo -n kill $$PID 2>/dev/null || true; \
 		sleep 1; \
-		setsid sudo -n -E ./$(BINARY) < /dev/null > $(LOG_FILE) 2>&1 & \
+		env_file="$$(mktemp /tmp/gh-server-run-bg-env.XXXXXX)"; \
+		env -0 > "$$env_file"; \
+		setsid sudo -n bash -lc 'set -euo pipefail; set -a; while IFS= read -r -d "" line; do export "$$line"; done < "'"$$env_file"'"; rm -f "'"$$env_file"'"; exec ./$(BINARY)' < /dev/null > $(LOG_FILE) 2>&1 & \
 		health_urls="http://$(TEST_HOST)/readyz http://127.0.0.1/readyz"; \
 	else \
 		echo "⚠ sudo unavailable in this context, falling back to unprivileged mode (port $(UNPRIVILEGED_PORT))"; \
@@ -426,7 +428,7 @@ test-run: test-preflight ## Run a single test suite, e.g. make test-run SUITE=Te
 .PHONY: test-e2e
 test-e2e: ## Run end-to-end tests. Usage: make test-e2e [SCRIPT=repo-rollback-compensation] [E2E_BASE_URL=http://...]
 	@if [ -z "$(SCRIPT)" ]; then \
-		for s in $$(find e2e -maxdepth 1 -type f -name "*.sh" ! -name "run.sh" ! -name "lib.sh" | sort); do \
+		for s in $$(find e2e -maxdepth 1 -type f -name "*.sh" ! -name "run.sh" ! -name "lib.sh" ! -name "helpers.sh" | sort); do \
 			script="$$(basename "$$s" .sh)"; \
 			E2E_BASE_URL="$(E2E_BASE_URL)" SCRIPT="$$script" bash e2e/run.sh || exit $$?; \
 		done; \

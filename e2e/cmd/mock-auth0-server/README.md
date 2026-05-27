@@ -93,6 +93,13 @@ Exchanges device code for tokens. Response depends on configured mode:
   whose `iss` matches the request host and whose `aud` matches the submitted
   `client_id` (or `test-client-id` if omitted)
 
+### GET /.well-known/openid-configuration
+
+Returns an OpenID Connect discovery document that points device authorization,
+token exchange, and JWKS verification back to the mock server. This lets the
+same mock server drive both the legacy Auth0 aliases and the generic
+`/api/v3/oidc/*` endpoints.
+
 ### GET /.well-known/jwks.json
 
 Returns the JWKS that matches the mock server's signing key so `gh-server` can
@@ -109,6 +116,7 @@ verify the signed `id_token`.
    ```bash
    AUTH0_ISSUER=http://localhost:8891/ \
    AUTH0_CLIENT_ID=test-client-id \
+   OIDC_ALLOW_INSECURE_HTTP=1 \
    make run-bg
    ```
 

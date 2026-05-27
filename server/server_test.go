@@ -33,6 +33,55 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
+func TestInitServiceDeps_EnablesAuth0CompatAlongsideGenericOIDC(t *testing.T) {
+	mainDB := openTestDB(t)
+	tmpDir := t.TempDir()
+
+	store, err := gitstore.New(tmpDir)
+	if err != nil {
+		t.Fatalf("gitstore: %v", err)
+	}
+
+	deps, err := initServiceDeps(config.Config{
+		BaseURL:               "http://localhost:8080",
+		DBdsn:                 "ignored-by-test",
+		GitRepoDir:            tmpDir,
+		OIDCProvider:          "casdoor",
+		OIDCIssuer:            "http://localhost:8891/",
+		OIDCClientID:          "oidc-client-id",
+		OIDCAllowInsecureHTTP: true,
+		Auth0Issuer:           "http://localhost:9999/",
+		Auth0ClientID:         "auth0-client-id",
+		Auth0Audience:         "https://api.example",
+		WorkflowExecImage:     "bash:5.2",
+		WorkflowExecTimeout:   2 * time.Minute,
+		WorkflowExecCPUs:      "1.0",
+		WorkflowExecMemory:    "256m",
+		WorkflowExecPidsLimit: 128,
+		WorkflowExecNoFile:    1024,
+		WorkflowExecTmpfsSize: "64m",
+	}, mainDB, store, nil, context.Background())
+	if err != nil {
+		t.Fatalf("initServiceDeps: %v", err)
+	}
+
+	if deps.svc.OIDC == nil {
+		t.Fatal("expected generic OIDC client to be configured")
+	}
+	if got := deps.svc.OIDC.Provider(); got != "casdoor" {
+		t.Fatalf("expected generic OIDC provider casdoor, got %q", got)
+	}
+	if deps.svc.Auth0 == nil {
+		t.Fatal("expected Auth0 compatibility flow to be configured")
+	}
+	if got := deps.svc.Auth0.Issuer(); got != "http://localhost:9999/" {
+		t.Fatalf("expected Auth0 issuer http://localhost:9999/, got %q", got)
+	}
+	if got := deps.svc.Auth0.ClientID(); got != "auth0-client-id" {
+		t.Fatalf("expected Auth0 client id auth0-client-id, got %q", got)
+	}
+}
+
 func TestMain_SignalDrivenShutdown(t *testing.T) {
 	setupBootstrapEnv(t, map[string]string{
 		"BASE_URL": "http://localhost:0",

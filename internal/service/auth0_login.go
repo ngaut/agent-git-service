@@ -51,13 +51,25 @@ func (s *Service) Auth0Login(ctx context.Context, deviceCode string) (Auth0Sessi
 }
 
 func (s *Service) auth0LoginWithProfile(ctx context.Context, profile Auth0Profile) (Auth0SessionResult, error) {
+	return s.oidcLoginWithProfile(ctx, OIDCProfile{
+		Provider:          profile.Provider,
+		Subject:           profile.Subject,
+		Email:             profile.Email,
+		EmailVerified:     profile.EmailVerified,
+		Name:              profile.Name,
+		Nickname:          profile.Nickname,
+		PreferredUsername: profile.PreferredUsername,
+		Picture:           profile.Picture,
+	})
+}
 
+func (s *Service) oidcLoginWithProfile(ctx context.Context, profile OIDCProfile) (Auth0SessionResult, error) {
 	const (
 		maxAttempts      = 5
 		maxLoginAttempts = 10
 	)
 
-	makeLoginCandidates := func(p Auth0Profile) []string {
+	makeLoginCandidates := func(p OIDCProfile) []string {
 		raw := []string{p.PreferredUsername, p.Nickname}
 		if p.Email != "" {
 			if at := strings.IndexByte(p.Email, '@'); at > 0 {

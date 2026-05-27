@@ -18,7 +18,6 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/ngaut/agent-git-service/config"
-	"github.com/ngaut/agent-git-service/internal/auth0"
 	"github.com/ngaut/agent-git-service/internal/controlplane"
 	"github.com/ngaut/agent-git-service/internal/crypto"
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -30,6 +29,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/metrics"
 	srvmiddleware "github.com/ngaut/agent-git-service/internal/middleware"
 	"github.com/ngaut/agent-git-service/internal/oauth"
+	"github.com/ngaut/agent-git-service/internal/oidc"
 	"github.com/ngaut/agent-git-service/internal/rest"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/router"
@@ -370,19 +370,41 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	} else {
 		slog.Warn("workflow execution disabled; set ENABLE_WORKFLOW_EXEC=1 to allow sandboxed workflow steps")
 	}
-	if cfg.Auth0Issuer != "" || cfg.Auth0ClientID != "" || cfg.Auth0Audience != "" {
-		c, err := auth0.New(auth0.Config{
-			Issuer:   cfg.Auth0Issuer,
-			ClientID: cfg.Auth0ClientID,
-			Audience: cfg.Auth0Audience,
+	if cfg.OIDCProvider != "" && cfg.OIDCClientID != "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "") {
+		c, err := oidc.New(oidc.Config{
+			Provider:          cfg.OIDCProvider,
+			Issuer:            cfg.OIDCIssuer,
+			DiscoveryURL:      cfg.OIDCDiscoveryURL,
+			ClientID:          cfg.OIDCClientID,
+			ClientSecret:      cfg.OIDCClientSecret,
+			Audience:          cfg.OIDCAudience,
+			Scopes:            cfg.OIDCScopes,
+			AllowInsecureHTTP: cfg.OIDCAllowInsecureHTTP,
 		})
 		if err != nil {
-			return deps, fmt.Errorf("auth0: %w", err)
+			return deps, fmt.Errorf("oidc: %w", err)
 		}
-		svcDeps.Auth0 = c
-		slog.Info("auth0 enabled", "issuer", cfg.Auth0Issuer)
+		svcDeps.OIDC = c
+		slog.Info("oidc enabled", "provider", cfg.OIDCProvider, "issuer", cfg.OIDCIssuer)
 	} else {
-		slog.Info("auth0 disabled", "reason", "AUTH0_ISSUER/AUTH0_CLIENT_ID not set")
+		slog.Info("oidc disabled", "reason", "OIDC_ISSUER/OIDC_CLIENT_ID not set")
+	}
+	if cfg.Auth0ClientID != "" && cfg.Auth0Issuer != "" {
+		auth0Client, err := oidc.New(oidc.Config{
+			Provider:          "auth0",
+			Issuer:            cfg.Auth0Issuer,
+			ClientID:          cfg.Auth0ClientID,
+			Audience:          cfg.Auth0Audience,
+			Scopes:            cfg.OIDCScopes,
+			AllowInsecureHTTP: cfg.OIDCAllowInsecureHTTP,
+		})
+		if err != nil {
+			return deps, fmt.Errorf("auth0 compat: %w", err)
+		}
+		svcDeps.Auth0 = service.NewAuth0CompatFlow(auth0Client)
+		slog.Info("auth0 compatibility enabled", "issuer", cfg.Auth0Issuer)
+	} else {
+		slog.Info("auth0 compatibility disabled", "reason", "AUTH0_ISSUER/AUTH0_CLIENT_ID not set")
 	}
 	deps.gqlSrv = graphql.NewServer(svcDeps)
 	deps.gitHandler = githttp.New(store, svcDeps)

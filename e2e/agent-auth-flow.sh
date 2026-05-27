@@ -30,7 +30,7 @@ check_mock_auth0_available() {
     echo "To run auth0 login flow, start the mock server:" >&2
     echo "  go run ./e2e/cmd/mock-auth0-server/main.go :8891" >&2
     echo "And configure gh-server with:" >&2
-    echo "  AUTH0_ISSUER=http://localhost:8891/ AUTH0_CLIENT_ID=test-client-id" >&2
+    echo "  AUTH0_ISSUER=http://localhost:8891/ AUTH0_CLIENT_ID=test-client-id OIDC_ALLOW_INSECURE_HTTP=1" >&2
     return 1
   fi
   return 0

@@ -157,6 +157,10 @@ func registerOAuthRoutes(r chi.Router, oauthHandler *oauth.Handler, dbRouter *co
 func registerPublicAuthRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
 		r.Use(rateLimitMw)
+		r.Post("/api/v3/oidc/device/code", handlers.OIDCDeviceCode)
+		r.Post("/api/v3/oidc/session", handlers.OIDCSession)
+		r.Post("/api/v3/oidc/callback", handlers.OIDCCallback)
+		r.Post("/api/v3/oidc/lookup", handlers.OIDCLookup)
 		// Auth0 device flow (no auth required)
 		r.Post("/api/v3/auth0/device/code", handlers.Auth0DeviceCode)
 		r.Post("/api/v3/auth0/session", handlers.Auth0Session)

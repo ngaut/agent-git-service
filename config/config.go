@@ -56,9 +56,17 @@ type Config struct {
 	EmbeddingDimensions int
 
 	// Auth0 configuration (optional; required for human login flows).
-	Auth0Issuer   string
-	Auth0ClientID string
-	Auth0Audience string
+	Auth0Issuer           string
+	Auth0ClientID         string
+	Auth0Audience         string
+	OIDCProvider          string
+	OIDCIssuer            string
+	OIDCDiscoveryURL      string
+	OIDCClientID          string
+	OIDCClientSecret      string
+	OIDCAudience          string
+	OIDCScopes            string
+	OIDCAllowInsecureHTTP bool
 
 	// ConsoleBaseURL is the base URL of the console frontend used for browser redirects.
 	ConsoleBaseURL string
@@ -98,6 +106,14 @@ func New() (Config, error) {
 		Auth0Issuer:           os.Getenv("AUTH0_ISSUER"),
 		Auth0ClientID:         os.Getenv("AUTH0_CLIENT_ID"),
 		Auth0Audience:         os.Getenv("AUTH0_AUDIENCE"),
+		OIDCProvider:          os.Getenv("OIDC_PROVIDER"),
+		OIDCIssuer:            os.Getenv("OIDC_ISSUER"),
+		OIDCDiscoveryURL:      os.Getenv("OIDC_DISCOVERY_URL"),
+		OIDCClientID:          os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:      os.Getenv("OIDC_CLIENT_SECRET"),
+		OIDCAudience:          os.Getenv("OIDC_AUDIENCE"),
+		OIDCScopes:            os.Getenv("OIDC_SCOPES"),
+		OIDCAllowInsecureHTTP: os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "true" || os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "1",
 		EnableWorkflowExec:    os.Getenv("ENABLE_WORKFLOW_EXEC") == "true" || os.Getenv("ENABLE_WORKFLOW_EXEC") == "1",
 		WorkflowExecImage:     os.Getenv("WORKFLOW_EXEC_IMAGE"),
 		WorkflowExecCPUs:      os.Getenv("WORKFLOW_EXEC_CPUS"),
@@ -145,6 +161,7 @@ func Normalize(cfg Config) (Config, error) {
 	cfg.Environment = strings.ToLower(strings.TrimSpace(firstNonEmpty(cfg.Environment, "production")))
 	cfg.EmbeddingBaseURL = firstNonEmpty(cfg.EmbeddingBaseURL, "https://api.openai.com")
 	cfg.EmbeddingModel = firstNonEmpty(cfg.EmbeddingModel, "text-embedding-3-small")
+	cfg.OIDCScopes = firstNonEmpty(strings.TrimSpace(cfg.OIDCScopes), "openid profile email")
 	cfg.WorkflowExecImage = firstNonEmpty(cfg.WorkflowExecImage, "bash:5.2")
 	if cfg.WorkflowExecTimeout == 0 {
 		cfg.WorkflowExecTimeout = 2 * time.Minute
@@ -184,6 +201,21 @@ func Normalize(cfg Config) (Config, error) {
 	}
 	if cfg.WorkflowExecNoFile <= 0 {
 		return Config{}, fmt.Errorf("invalid WORKFLOW_EXEC_NOFILE %d: must be a positive integer", cfg.WorkflowExecNoFile)
+	}
+	if strings.TrimSpace(cfg.OIDCProvider) == "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "" || cfg.OIDCClientID != "") {
+		cfg.OIDCProvider = "oidc"
+	}
+	if cfg.OIDCIssuer == "" {
+		cfg.OIDCIssuer = cfg.Auth0Issuer
+	}
+	if cfg.OIDCClientID == "" {
+		cfg.OIDCClientID = cfg.Auth0ClientID
+	}
+	if cfg.OIDCAudience == "" {
+		cfg.OIDCAudience = cfg.Auth0Audience
+	}
+	if strings.TrimSpace(cfg.OIDCProvider) == "" && (cfg.Auth0Issuer != "" || cfg.Auth0ClientID != "" || cfg.Auth0Audience != "") {
+		cfg.OIDCProvider = "auth0"
 	}
 	return cfg, nil
 }

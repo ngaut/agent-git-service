@@ -109,9 +109,17 @@ func buildRESTOpenAPIPaths() map[string]any {
 		"/api/v3/auth0/device/code": map[string]any{
 			"post": operation("createAuth0DeviceCode", "Start an Auth0 device-code login flow.", nil, nil, nil, response(200, "Device code issued")),
 		},
+		"/api/v3/oidc/device/code": map[string]any{
+			"post": operation("createOIDCDeviceCode", "Start a generic OIDC device-code login flow.", nil, nil, nil, response(200, "Device code issued")),
+		},
 		"/api/v3/auth0/session": map[string]any{
 			"post": operation("exchangeAuth0Session", "Exchange Auth0 session data for a local session.", nil, jsonBody(true, map[string]any{
 				"device_code": stringSchema("Auth0 device code previously issued to the client."),
+			}, []string{"device_code"}), nil, response(200, "Session established")),
+		},
+		"/api/v3/oidc/session": map[string]any{
+			"post": operation("exchangeOIDCSession", "Exchange generic OIDC session data for a local session.", nil, jsonBody(true, map[string]any{
+				"device_code": stringSchema("OIDC device code previously issued to the client."),
 			}, []string{"device_code"}), nil, response(200, "Session established")),
 		},
 		"/api/v3/auth0/callback": map[string]any{
@@ -119,9 +127,19 @@ func buildRESTOpenAPIPaths() map[string]any {
 				"id_token": stringSchema("Auth0 ID token returned from the login redirect flow."),
 			}, []string{"id_token"}), nil, response(200, "Callback processed")),
 		},
+		"/api/v3/oidc/callback": map[string]any{
+			"post": operation("handleOIDCCallback", "Handle the generic OIDC callback payload.", nil, jsonBody(true, map[string]any{
+				"id_token": stringSchema("OIDC ID token returned from the login redirect flow."),
+			}, []string{"id_token"}), nil, response(200, "Callback processed")),
+		},
 		"/api/v3/auth0/lookup": map[string]any{
 			"post": operation("lookupAuth0Identity", "Resolve an Auth0 identity to a local user.", nil, jsonBody(true, map[string]any{
 				"id_token": stringSchema("Auth0 ID token to validate and map to a local user."),
+			}, []string{"id_token"}), nil, response(200, "Identity resolved")),
+		},
+		"/api/v3/oidc/lookup": map[string]any{
+			"post": operation("lookupOIDCIdentity", "Resolve a generic OIDC identity to a local user.", nil, jsonBody(true, map[string]any{
+				"id_token": stringSchema("OIDC ID token to validate and map to a local user."),
 			}, []string{"id_token"}), nil, response(200, "Identity resolved")),
 		},
 		"/api/v3/presence/heartbeat": map[string]any{

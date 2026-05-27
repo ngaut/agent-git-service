@@ -447,6 +447,8 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 		requiredFields []string
 	}{
 		{route: "/api/v3/agent-bindings/confirm", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"invite_token"}},
+		{route: "/api/v3/oidc/session", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"device_code"}},
+		{route: "/api/v3/oidc/callback", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"id_token"}},
 		{route: "/api/v3/auth0/session", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"device_code"}},
 		{route: "/api/v3/auth0/callback", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"id_token"}},
 		{route: "/api/v3/presence/heartbeat", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"issue_id"}},
@@ -493,6 +495,8 @@ func requiresOpenAPIDoc(route string) bool {
 	case strings.HasPrefix(route, "/api/v3/agent-bindings/"):
 		return true
 	case strings.HasPrefix(route, "/api/v3/auth0/"):
+		return true
+	case strings.HasPrefix(route, "/api/v3/oidc/"):
 		return true
 	case route == "/api/v3/presence/heartbeat":
 		return true

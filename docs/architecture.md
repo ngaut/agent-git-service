@@ -16,8 +16,9 @@ It exposes four primary surfaces:
 - Git Smart HTTP
 - OAuth device flow
 
-It also exposes additive repo-specific endpoints such as Auth0-backed human-login
-helpers under `/api/v3/auth0/*` when Auth0 is configured, plus admin-only wiki
+It also exposes additive repo-specific endpoints such as OIDC-backed human-login
+helpers under `/api/v3/oidc/*` plus Auth0 compatibility aliases under
+`/api/v3/auth0/*` when Auth0-compatible configuration is present, plus admin-only wiki
 maintenance endpoints such as `/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks`
 for stale wiki ref-lock recovery.
 
@@ -65,6 +66,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 | `internal/middleware` | Auth and request-size middleware |
 | `internal/oauth` | OAuth device-flow endpoints |
 | `internal/auth0` | Auth0 device-flow/JWKS client for human login |
+| `internal/oidc` | Generic OIDC discovery, device flow, and ID token verification client |
 | `internal/authn` | Shared token-resolver interfaces and auth sentinel errors |
 | `internal/embedding` | Optional embedding-backed search support |
 | `internal/crypto` | NaCl-based encryption primitives for secrets |
@@ -91,7 +93,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 4. Initialize the main application database, run migrations, and seed default records.
 5. Initialize embeddings if `EMBEDDING_API_KEY` is present.
 6. Initialize the Git store rooted at `GIT_REPO_DIR`; when `CONTROL_PLANE_DSN` is set, enable tenant-isolated repo roots with a default-tenant fallback.
-7. Build the shared `service.Service`, wiring DB, Git store, base URL, embeddings, Auth0, and local-dev auth conveniences.
+7. Build the shared `service.Service`, wiring DB, Git store, base URL, embeddings, Auth0 compatibility helpers, generic OIDC, and local-dev auth conveniences.
 8. If `CONTROL_PLANE_DSN` is set, initialize the control-plane database and `controlplane.DBRouter`.
 9. Initialize REST transforms, GraphQL server, REST deps, Git HTTP handler, OAuth handler, metrics, and readiness endpoints.
 10. Register routes and start listeners.
@@ -121,7 +123,8 @@ The REST prefix is fixed at `/api/v3` to remain compatible with GitHub-compatibl
 ### Request Families
 
 - OAuth endpoints are unauthenticated.
-- Auth0 helper endpoints under `/api/v3/auth0/*` are unauthenticated but service-backed.
+- OIDC helper endpoints under `/api/v3/oidc/*` are unauthenticated but service-backed.
+- Auth0 helper endpoints under `/api/v3/auth0/*` remain unauthenticated compatibility aliases, but they only bind to explicit Auth0-compatible provider wiring.
 - Git Smart HTTP endpoints are routed separately from the REST/GraphQL API tree, but they still use the same auth middleware (`TokenAuth` in control-plane mode, `OptionalTokenAuth` in single-DB mode).
 - Discovery endpoints under `/api/v3`, `/api/v3/meta`, and `/api/v3/rate_limit` use optional auth and are the main user-visible discovery/auth bootstrap routes for GitHub-compatible clients, including `gh`.
 - The authenticated API contains REST and GraphQL endpoints, including the current organization-governance surfaces for explicit org creation, org invitations, teams, and outside-collaborator inspection.
@@ -301,18 +304,34 @@ not treated as the authorization decision.
 
 This is the current local/offline behavior, not the planned multi-agent model. The future Git transport auth design is documented in [design/multi-agent.md](design/multi-agent.md).
 
-### Auth0 Human Login
+### OIDC Human Login
 
-When Auth0 is configured, REST exposes these unauthenticated helper endpoints:
+When generic OIDC is configured, REST exposes these unauthenticated helper endpoints:
+
+- `POST /api/v3/oidc/device/code`
+- `POST /api/v3/oidc/session`
+- `POST /api/v3/oidc/callback`
+- `POST /api/v3/oidc/lookup`
+
+These endpoints stay transport-thin: `internal/oidc` owns discovery, optional
+device-authorization exchange, and ID token verification, while `service` owns
+mapping verified external identities onto local application users and tokens.
+
+### Auth0 Compatibility Login
+
+When Auth0-specific configuration is present, REST also exposes these
+unauthenticated compatibility endpoints:
 
 - `POST /api/v3/auth0/device/code`
 - `POST /api/v3/auth0/session`
 - `POST /api/v3/auth0/callback`
 - `POST /api/v3/auth0/lookup`
 
-These endpoints stay transport-thin: `internal/auth0` owns the outbound Auth0
-protocol work, while `service` owns mapping verified Auth0 identities onto local
-application users and tokens.
+These endpoints stay transport-thin compatibility aliases: `internal/auth0`
+continues to own Auth0-specific device-flow behavior, while `internal/service`
+owns local identity mapping and token issuance. Generic OIDC providers must not
+be routed through the Auth0 compatibility endpoints. Existing
+`UserIdentity.Provider = "auth0"` rows remain valid.
 
 ### OAuth Device Flow (Secured)
 
@@ -397,7 +416,8 @@ These flows should stay central in future work:
 
 - server discovery and auth bootstrap through `/api/v3/`, `/api/v3/meta`, `/api/v3/rate_limit`, token login, and `gh auth setup-git` / Git credential setup
 - explicit organization creation and governance through `/api/v3/user/orgs`, org invitations, team membership, and outside-collaborator inspection
-- Auth0-backed human login and identity lookup through `/api/v3/auth0/*`
+- OIDC-backed human login and identity lookup through `/api/v3/oidc/*`
+- Auth0 compatibility login and identity lookup through `/api/v3/auth0/*` when Auth0-compatible provider wiring is configured
 - control-plane token routing when multi-tenant mode is enabled
 - repository creation, fork, transfer, delete
 - repository sharing and effective permission resolution across org base permission, direct collaborators, and team grants
