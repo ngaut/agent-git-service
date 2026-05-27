@@ -256,6 +256,56 @@ func TestWikiV2HeadReadsFallBackWhenIndexStateIsStale(t *testing.T) {
 	}
 }
 
+func TestWikiV2TreeListsDirectoriesAndPagesFromGit(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	setupRepoForTest(t, svc, "v2tree", "wiki-v2-tree")
+	full := "v2tree/wiki-v2-tree"
+
+	for _, tc := range []struct {
+		slug string
+		body string
+	}{
+		{slug: "home", body: "# Home\n"},
+		{slug: "guides/setup", body: "# Setup\n"},
+		{slug: "guides/advanced/install", body: "# Install\n"},
+	} {
+		if _, err := svc.PutWikiPage(ctx, full, tc.slug, tc.body, "seed "+tc.slug, ""); err != nil {
+			t.Fatalf("PutWikiPage(%s): %v", tc.slug, err)
+		}
+	}
+
+	root, err := svc.ListWikiTreeAtRef(ctx, full, "", "")
+	if err != nil {
+		t.Fatalf("ListWikiTreeAtRef(root): %v", err)
+	}
+	if len(root) != 2 {
+		t.Fatalf("root entries = %d, want 2: %+v", len(root), root)
+	}
+	if root[0].Kind != "directory" || root[0].Path != "guides" {
+		t.Fatalf("root[0] = %+v, want guides directory", root[0])
+	}
+	if root[1].Kind != "page" || root[1].Slug != "home" {
+		t.Fatalf("root[1] = %+v, want home page", root[1])
+	}
+
+	guides, err := svc.ListWikiTreeAtRef(ctx, full, "guides", "")
+	if err != nil {
+		t.Fatalf("ListWikiTreeAtRef(guides): %v", err)
+	}
+	if len(guides) != 2 {
+		t.Fatalf("guides entries = %d, want 2: %+v", len(guides), guides)
+	}
+	if guides[0].Kind != "directory" || guides[0].Path != "guides/advanced" {
+		t.Fatalf("guides[0] = %+v, want advanced directory", guides[0])
+	}
+	if guides[1].Kind != "page" || guides[1].Slug != "guides/setup" {
+		t.Fatalf("guides[1] = %+v, want guides/setup page", guides[1])
+	}
+}
+
 func TestWikiV2ReconcileBuildsHistoryAndBacklinkIndexes(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()

@@ -188,4 +188,30 @@ func TestWikiV2_ReadEndpointsExposeProvisionalURLs(t *testing.T) {
 	if got, _ := result["url"].(string); !strings.Contains(got, "/wiki-v2/pages/") {
 		t.Fatalf("wiki-v2 search url = %q, want wiki-v2 path", got)
 	}
+
+	tree := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/tree", ownerToken)
+	assertStatusCode(t, tree, http.StatusOK)
+	treeBody := testharness.DecodeJSONArray(t, tree)
+	if len(treeBody) != 2 {
+		t.Fatalf("wiki-v2 tree root: got %#v", treeBody)
+	}
+	if got, _ := treeBody[0]["kind"].(string); got != "directory" {
+		t.Fatalf("wiki-v2 tree first kind = %q, want directory", got)
+	}
+	if got, _ := treeBody[0]["url"].(string); !strings.Contains(got, "/wiki-v2/tree?path=guides") {
+		t.Fatalf("wiki-v2 tree directory url = %q, want wiki-v2 tree path", got)
+	}
+	if got, _ := treeBody[1]["url"].(string); !strings.Contains(got, "/wiki-v2/pages/home") {
+		t.Fatalf("wiki-v2 tree page url = %q, want wiki-v2 page path", got)
+	}
+
+	subtree := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/tree?path=guides", ownerToken)
+	assertStatusCode(t, subtree, http.StatusOK)
+	subtreeBody := testharness.DecodeJSONArray(t, subtree)
+	if len(subtreeBody) != 1 {
+		t.Fatalf("wiki-v2 tree guides: got %#v", subtreeBody)
+	}
+	if got, _ := subtreeBody[0]["slug"].(string); got != "guides/setup" {
+		t.Fatalf("wiki-v2 subtree slug = %q, want guides/setup", got)
+	}
 }
