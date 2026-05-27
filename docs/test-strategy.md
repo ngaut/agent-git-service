@@ -184,6 +184,7 @@ Today the repository already has useful tests in:
 - `config`
 - `internal/controlplane`
 - `internal/auth0`
+- `internal/oidc`
 - `internal/embedding` (including `embedder_test.go`)
 - `internal/apperrors`
 - `internal/testharness` (reusable HTTP integration test harness with smoke tests)
@@ -286,7 +287,8 @@ Add direct service tests for:
 - valid and invalid token resolution
 - device-code exchange paths
 - user resolution by token
-- Auth0 ID-token verification and local-user/token creation flows
+- Auth0 compatibility ID-token verification and local-user/token creation flows
+- generic OIDC discovery, device-code exchange, and local-user/token creation flows
 
 #### Control Plane
 
@@ -380,8 +382,9 @@ Phase 2 is not complete until each surface has at least one core-path integratio
 11. organization invitation create/list/accept/decline/revoke flows, including pending-membership role rendering for `admin` invitations
 12. outside collaborator listing and collaborator annotations on org-owned repos
 13. team-repo permission alias compatibility, including canonical `read`/`write` decisions for `triage` and `maintain`
-14. Auth0 helper endpoints under `/api/v3/auth0/*`
-15. control-plane-mode token routing through middleware into tenant-scoped service DB access
+14. OIDC helper endpoints under `/api/v3/oidc/*`
+15. Auth0 compatibility helper endpoints under `/api/v3/auth0/*`
+16. control-plane-mode token routing through middleware into tenant-scoped service DB access
 
 #### GraphQL
 
@@ -427,6 +430,11 @@ The high-fidelity end-to-end layer is split across:
 
 - `cli/acceptance/` for vendored gh CLI compatibility coverage
 - `e2e/` shell flows for API and governance regressions that are easier to drive with `curl`, `git`, and `jq`
+
+OIDC-specific end-to-end coverage should stay deterministic. Prefer the existing
+mock-provider pattern used for Auth0 and add Casdoor-shaped discovery and ID
+token fixtures under `e2e/cmd` rather than depending on a live third-party
+identity provider in CI.
 
 ### Role of the End-to-End Layer
 

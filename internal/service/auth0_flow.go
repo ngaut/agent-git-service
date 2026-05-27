@@ -39,6 +39,19 @@ type Auth0Profile struct {
 	Picture           string
 }
 
+func auth0ProfileFromOIDC(profile OIDCProfile) Auth0Profile {
+	return Auth0Profile{
+		Provider:          profile.Provider,
+		Subject:           profile.Subject,
+		Email:             profile.Email,
+		EmailVerified:     profile.EmailVerified,
+		Name:              profile.Name,
+		Nickname:          profile.Nickname,
+		PreferredUsername: profile.PreferredUsername,
+		Picture:           profile.Picture,
+	}
+}
+
 func (p Auth0Profile) DisplayName(fallback string) string {
 	if strings.TrimSpace(p.Name) != "" {
 		return strings.TrimSpace(p.Name)

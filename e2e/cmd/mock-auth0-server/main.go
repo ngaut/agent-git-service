@@ -68,6 +68,7 @@ func main() {
 	mux.HandleFunc("/__admin/state", s.handleAdminState)
 	mux.HandleFunc("/__admin/reset", s.handleAdminReset)
 	mux.HandleFunc("/__admin/mode", s.handleAdminMode)
+	mux.HandleFunc("/.well-known/openid-configuration", s.handleDiscovery)
 	mux.HandleFunc("/oauth/device/code", s.handleDeviceCode)
 	mux.HandleFunc("/oauth/token", s.handleToken)
 	mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)
@@ -198,6 +199,16 @@ func (s *state) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		"verification_uri_complete": "https://mock.auth0.example.com/activate?code=MOCK-123",
 		"expires_in":                900,
 		"interval":                  5,
+	})
+}
+
+func (s *state) handleDiscovery(w http.ResponseWriter, r *http.Request) {
+	issuer := issuerForRequest(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issuer":                        issuer,
+		"token_endpoint":                issuer + "oauth/token",
+		"device_authorization_endpoint": issuer + "oauth/device/code",
+		"jwks_uri":                      issuer + ".well-known/jwks.json",
 	})
 }
 

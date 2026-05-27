@@ -32,6 +32,7 @@ type jwk struct {
 // JWKSClient fetches and caches Auth0's JSON Web Key Set.
 type JWKSClient struct {
 	issuer   string
+	override string
 	http     *http.Client
 	cache    map[string]*rsa.PublicKey
 	mu       sync.RWMutex
@@ -51,7 +52,14 @@ func NewJWKSClient(issuer string) *JWKSClient {
 
 // jwksURL returns the well-known JWKS endpoint for the issuer.
 func (j *JWKSClient) jwksURL() string {
+	if j.override != "" {
+		return j.override
+	}
 	return j.issuer + ".well-known/jwks.json"
+}
+
+func (j *JWKSClient) OverrideURL(raw string) {
+	j.override = raw
 }
 
 // fetchKeys retrieves the JWKS from Auth0 and caches the keys.
