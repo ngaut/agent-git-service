@@ -39,11 +39,6 @@ func wikiPage(repoFullName, routePrefix string, p service.WikiPage) map[string]a
 	return out
 }
 
-// WikiV2Page shapes a service.WikiPage for provisional wiki-v2 reads.
-func WikiV2Page(repoFullName string, p service.WikiPage) map[string]any {
-	return wikiPage(repoFullName, "wiki-v2", p)
-}
-
 // WikiPageSummary shapes a service.WikiPageSummary for list responses.
 func WikiPageSummary(repoFullName string, p service.WikiPageSummary) map[string]any {
 	return wikiPageSummary(repoFullName, "wiki", p)
@@ -72,11 +67,6 @@ func wikiPageSummary(repoFullName, routePrefix string, p service.WikiPageSummary
 	return out
 }
 
-// WikiV2PageSummary shapes a service.WikiPageSummary for provisional wiki-v2 list responses.
-func WikiV2PageSummary(repoFullName string, p service.WikiPageSummary) map[string]any {
-	return wikiPageSummary(repoFullName, "wiki-v2", p)
-}
-
 // WikiBacklink shapes a service.WikiBacklink for backlink responses.
 func WikiBacklink(repoFullName string, p service.WikiBacklink) map[string]any {
 	return wikiBacklink(repoFullName, "wiki", p)
@@ -91,11 +81,6 @@ func wikiBacklink(repoFullName, routePrefix string, p service.WikiBacklink) map[
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
 		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
 	}
-}
-
-// WikiV2Backlink shapes a service.WikiBacklink for provisional wiki-v2 backlink responses.
-func WikiV2Backlink(repoFullName string, p service.WikiBacklink) map[string]any {
-	return wikiBacklink(repoFullName, "wiki-v2", p)
 }
 
 // WikiSearchResponse shapes repo-scoped wiki search results and metadata.
@@ -125,20 +110,15 @@ func wikiSearchResponse(repoFullName, routePrefix string, resp service.WikiSearc
 	}
 }
 
-// WikiV2SearchResponse shapes provisional wiki-v2 search responses.
-func WikiV2SearchResponse(repoFullName string, resp service.WikiSearchResponse) map[string]any {
-	return wikiSearchResponse(repoFullName, "wiki-v2", resp)
-}
-
-// WikiV2TreeEntry shapes one provisional wiki-v2 tree entry.
-func WikiV2TreeEntry(repoFullName string, entry service.WikiTreeEntry) map[string]any {
+// WikiTreeEntry shapes one wiki tree entry.
+func WikiTreeEntry(repoFullName string, entry service.WikiTreeEntry) map[string]any {
 	path := url.QueryEscape(entry.Path)
 	out := map[string]any{
 		"path": entry.Path,
 		"name": entry.Name,
 		"kind": entry.Kind,
 		"sha":  entry.SHA,
-		"url":  fmt.Sprintf("%s/repos/%s/wiki-v2/tree?path=%s", apiBase(), repoFullName, path),
+		"url":  fmt.Sprintf("%s/repos/%s/wiki/tree?path=%s", apiBase(), repoFullName, path),
 	}
 	if entry.Kind == "page" {
 		apiSlug := url.PathEscape(entry.Slug)
@@ -146,7 +126,7 @@ func WikiV2TreeEntry(repoFullName string, entry service.WikiTreeEntry) map[strin
 		out["title"] = entry.Title
 		out["size"] = entry.Size
 		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, entry.Slug)
-		out["url"] = fmt.Sprintf("%s/repos/%s/wiki-v2/pages/%s", apiBase(), repoFullName, apiSlug)
+		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug)
 	}
 	return out
 }

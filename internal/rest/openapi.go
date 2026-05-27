@@ -231,20 +231,29 @@ func buildRESTOpenAPIPaths() map[string]any {
 				param("exclude_labels", "string"),
 			)...), response(200, "Wiki search results returned")),
 		},
-		"/api/v3/repos/{owner}/{repo}/wiki-v2/state": map[string]any{
-			"get": operation("getWikiV2State", "Get the provisional Wiki V2 derived-index state for a repository.", auth(), nil, pathParams(
+		"/api/v3/repos/{owner}/{repo}/wiki/tree": map[string]any{
+			"get": operation("listWikiTree", "List one directory view from the authoritative wiki tree.", nil, nil, append(pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
-			), response(200, "Current Wiki V2 state")),
+			), queryParams(
+				param("path", "string"),
+				param("ref", "string"),
+			)...), response(200, "Wiki tree returned")),
 		},
-		"/api/v3/repos/{owner}/{repo}/wiki-v2/reconcile/request": map[string]any{
-			"post": operation("requestWikiV2Reconcile", "Request a provisional Wiki V2 reconcile without running it synchronously.", auth(), nil, pathParams(
+		"/api/v3/repos/{owner}/{repo}/wiki/state": map[string]any{
+			"get": operation("getWikiState", "Get the authoritative wiki derived-index state for a repository.", auth(), nil, pathParams(
+				param("owner", "string"),
+				param("repo", "string"),
+			), response(200, "Current wiki state")),
+		},
+		"/api/v3/repos/{owner}/{repo}/wiki/reconcile/request": map[string]any{
+			"post": operation("requestWikiReconcile", "Request a wiki reconcile without running it synchronously.", auth(), nil, pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
 			), response(202, "Reconcile request recorded")),
 		},
-		"/api/v3/repos/{owner}/{repo}/wiki-v2/reconcile": map[string]any{
-			"post": operation("reconcileWikiV2", "Run the provisional Wiki V2 reconcile synchronously and return the persisted result.", auth(), nil, pathParams(
+		"/api/v3/repos/{owner}/{repo}/wiki/reconcile": map[string]any{
+			"post": operation("reconcileWiki", "Run the authoritative wiki reconcile synchronously and return the persisted result.", auth(), nil, pathParams(
 				param("owner", "string"),
 				param("repo", "string"),
 			), response(200, "Reconcile completed")),
@@ -334,13 +343,6 @@ func buildRESTOpenAPIPaths() map[string]any {
 				wikiSlugParamSpec(),
 				param("name", "string"),
 			), response(200, "Remaining wiki page labels returned")),
-		},
-		"/api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels": map[string]any{
-			"get": operation("listWikiV2PageLabels", "List labels attached to a provisional Wiki V2 page.", nil, nil, pathParams(
-				param("owner", "string"),
-				param("repo", "string"),
-				wikiSlugParamSpec(),
-			), response(200, "Wiki V2 page labels returned")),
 		},
 		"/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/history": map[string]any{
 			"get": operation("listWikiPageHistory", "List paginated revision history for a wiki page slug.", nil, nil, append(pathParams(
