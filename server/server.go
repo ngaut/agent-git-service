@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	agsauth "github.com/ngaut/agent-git-service/auth"
 	"github.com/ngaut/agent-git-service/config"
 	"github.com/ngaut/agent-git-service/internal/controlplane"
 	"github.com/ngaut/agent-git-service/internal/crypto"
@@ -51,9 +52,31 @@ type Server struct {
 	started   bool
 }
 
+// Authenticator authenticates a request using host-provided identity. ok=false
+// means no embedded identity was present and AGS should continue with its
+// built-in token flow when applicable.
+type Authenticator interface {
+	Authenticate(*http.Request) (agsauth.Identity, bool, error)
+}
+
+type options struct {
+	authenticator Authenticator
+}
+
+// Option configures the embeddable server surface.
+type Option func(*options)
+
+// WithAuthenticator installs a host-provided request authenticator.
+func WithAuthenticator(authenticator Authenticator) Option {
+	return func(opts *options) {
+		opts.authenticator = authenticator
+	}
+}
+
 // bootstrapDeps holds all initialized dependencies for the application.
 type bootstrapDeps struct {
 	Cfg          config.Config
+	Options      options
 	DB           *gorm.DB
 	Embedder     embedding.Embedder
 	Store        *gitstore.Store
@@ -84,6 +107,7 @@ func buildPartialDeps(deps *bootstrapDeps) *bootstrapDeps {
 
 	return &bootstrapDeps{
 		Cfg:          deps.Cfg,
+		Options:      deps.Options,
 		DB:           deps.DB,
 		Embedder:     deps.Embedder,
 		Store:        deps.Store,
@@ -231,6 +255,35 @@ type muxDeps struct {
 type serverDeps struct {
 	servers []*http.Server
 	labels  []string
+}
+
+type embeddedAuthenticatorAdapter struct {
+	authenticator Authenticator
+}
+
+func (a embeddedAuthenticatorAdapter) Authenticate(r *http.Request) (srvmiddleware.EmbeddedIdentity, bool, error) {
+	identity, ok, err := a.authenticator.Authenticate(r)
+	if err != nil || !ok {
+		return srvmiddleware.EmbeddedIdentity{}, ok, err
+	}
+	return srvmiddleware.EmbeddedIdentity{
+		Provider:  identity.Provider,
+		Subject:   identity.Subject,
+		Login:     identity.Login,
+		Name:      identity.Name,
+		Email:     identity.Email,
+		Groups:    append([]string(nil), identity.Groups...),
+		SiteAdmin: identity.SiteAdmin,
+	}, true, nil
+}
+
+func embeddedAuthConfig(opts options) srvmiddleware.EmbeddedAuthConfig {
+	if opts.authenticator == nil {
+		return srvmiddleware.EmbeddedAuthConfig{}
+	}
+	return srvmiddleware.EmbeddedAuthConfig{
+		Authenticator: embeddedAuthenticatorAdapter{authenticator: opts.authenticator},
+	}
 }
 
 func initCoreDeps() (coreDeps, error) {
@@ -446,6 +499,7 @@ type httpMuxConfig struct {
 	OAuthHandler *oauth.Handler
 	DBRouter     *controlplane.DBRouter
 	Version      string
+	EmbeddedAuth srvmiddleware.EmbeddedAuthConfig
 }
 
 func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
@@ -465,7 +519,7 @@ func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 	metricsHandler := metrics.Init()
 	r.Use(srvmiddleware.MetricsInstrumentation())
 
-	hostMux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.DBRouter, cfg.Cfg.ConsoleBaseURL)
+	hostMux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.DBRouter, cfg.Cfg.ConsoleBaseURL, cfg.EmbeddedAuth)
 	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		transform.Wrap(cfg.Cfg.BaseURL, func() {
 			hostMux.ServeHTTP(w, req)
@@ -528,14 +582,15 @@ func bootstrap() bootstrapResult {
 	if err != nil {
 		return bootstrapResult{Deps: &bootstrapDeps{}, Err: fmt.Errorf("config: %w", err)}
 	}
-	return bootstrapWithConfig(cfg)
+	return bootstrapWithConfig(cfg, options{})
 }
 
-func bootstrapWithConfig(cfg config.Config) bootstrapResult {
+func bootstrapWithConfig(cfg config.Config, opts options) bootstrapResult {
 	result := bootstrapResult{
 		Deps: &bootstrapDeps{},
 	}
 	deps := result.Deps
+	deps.Options = opts
 
 	// 1. Core dependencies (config, database, embedding, gitstore).
 	core, err := initCoreDepsFromConfig(cfg)
@@ -597,6 +652,7 @@ func bootstrapWithConfig(cfg config.Config) bootstrapResult {
 		OAuthHandler: svc.oauthHandler,
 		DBRouter:     cp.dbRouter,
 		Version:      gitSHA,
+		EmbeddedAuth: embeddedAuthConfig(opts),
 	})
 	if err != nil {
 		result.Err = err
@@ -767,12 +823,18 @@ func Run(sigCh <-chan struct{}) error {
 }
 
 // New constructs a server from a caller-supplied config.
-func New(cfg config.Config) (*Server, error) {
+func New(cfg config.Config, opts ...Option) (*Server, error) {
 	normalized, err := config.Normalize(cfg)
 	if err != nil {
 		return nil, err
 	}
-	result := bootstrapWithConfig(normalized)
+	parsed := options{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&parsed)
+		}
+	}
+	result := bootstrapWithConfig(normalized, parsed)
 	if result.Err != nil {
 		return nil, result.Err
 	}
@@ -804,7 +866,7 @@ func (s *Server) RESTHandler() http.Handler {
 
 // GraphQLHandler returns a mountable handler for the GraphQL surface.
 func (s *Server) GraphQLHandler() http.Handler {
-	return srvmiddleware.TokenAuth(s.deps.SvcDeps, s.deps.DBRouter)(http.HandlerFunc(s.deps.GqlSrv.Handler))
+	return srvmiddleware.TokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, s.deps.DBRouter, embeddedAuthConfig(s.deps.Options))(http.HandlerFunc(s.deps.GqlSrv.Handler))
 }
 
 // GitHTTPHandler returns the mountable Git Smart HTTP handler.
@@ -812,9 +874,9 @@ func (s *Server) GitHTTPHandler() http.Handler {
 	r := chi.NewRouter()
 	var authMw func(http.Handler) http.Handler
 	if s.deps.DBRouter != nil {
-		authMw = srvmiddleware.TokenAuth(s.deps.SvcDeps, s.deps.DBRouter)
+		authMw = srvmiddleware.TokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, s.deps.DBRouter, embeddedAuthConfig(s.deps.Options))
 	} else {
-		authMw = srvmiddleware.OptionalTokenAuth(s.deps.SvcDeps, s.deps.DBRouter)
+		authMw = srvmiddleware.OptionalTokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, s.deps.DBRouter, embeddedAuthConfig(s.deps.Options))
 	}
 	r.With(authMw).Get("/{owner}/{repo}.git/info/refs", s.deps.GitHandler.InfoRefs)
 	r.With(authMw).Post("/{owner}/{repo}.git/git-upload-pack", s.deps.GitHandler.UploadPack)

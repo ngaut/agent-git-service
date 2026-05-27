@@ -10,12 +10,28 @@ import (
 	"reflect"
 	"strings"
 
+	agsauth "github.com/ngaut/agent-git-service/auth"
 	applog "github.com/ngaut/agent-git-service/internal/logging"
 	"github.com/ngaut/agent-git-service/internal/ratelimit"
 	"github.com/ngaut/agent-git-service/internal/rest/respond"
 	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/tenant"
 )
+
+// EmbeddedIdentity is the shared trusted host-provided identity shape used
+// across the embedding surface, auth middleware, and service resolver.
+type EmbeddedIdentity = agsauth.Identity
+
+// EmbeddedIdentityAuthenticator authenticates a request using host-provided
+// identity instead of AGS-issued tokens. ok=false means no embedded identity
+// was present and token auth should continue if applicable.
+type EmbeddedIdentityAuthenticator interface {
+	Authenticate(*http.Request) (EmbeddedIdentity, bool, error)
+}
+
+type EmbeddedAuthConfig struct {
+	Authenticator EmbeddedIdentityAuthenticator
+}
 
 // TokenAuth returns middleware that validates GitHub-compatible auth headers.
 // Accepts "token <val>" or "Bearer <val>" with any non-empty value.
@@ -24,9 +40,22 @@ import (
 // control plane and both ContextWithDB and ContextWithUser are injected.
 // When router is nil (single-DB mode), the current behavior is preserved.
 func TokenAuth(svc *service.Service, router TokenResolver) func(http.Handler) http.Handler {
+	return TokenAuthWithEmbeddedIdentity(svc, router, EmbeddedAuthConfig{})
+}
+
+// TokenAuthWithEmbeddedIdentity returns middleware that first attempts trusted
+// host-provided identity injection before falling back to token auth.
+func TokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenResolver, embedded EmbeddedAuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			applog.AddAttrs(r.Context(), slog.String("auth_scheme", authScheme(r.Header.Get("Authorization"))))
+			if ctx, handled := resolveEmbeddedIdentityAndInjectContext(w, r, router, svc, embedded, false); handled {
+				if ctx == nil {
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 			token := ExtractToken(r)
 			if token == "" {
 				logAuthFailure(r.Context(), "header_missing_or_empty", "", "", nil)
@@ -54,8 +83,23 @@ func TokenAuth(svc *service.Service, router TokenResolver) func(http.Handler) ht
 // is resolved through the control plane. When router is nil, current behavior
 // is preserved.
 func OptionalTokenAuth(svc *service.Service, router TokenResolver) func(http.Handler) http.Handler {
+	return OptionalTokenAuthWithEmbeddedIdentity(svc, router, EmbeddedAuthConfig{})
+}
+
+// OptionalTokenAuthWithEmbeddedIdentity returns middleware that first attempts
+// trusted host-provided identity injection before falling back to the
+// historical optional token path.
+func OptionalTokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenResolver, embedded EmbeddedAuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if ctx, handled := resolveEmbeddedIdentityAndInjectContext(w, r, router, svc, embedded, true); handled {
+				if ctx == nil {
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			auth := r.Header.Get("Authorization")
 			if auth == "" {
 				r = r.WithContext(service.ContextWithAnonRequest(r.Context()))
@@ -83,6 +127,61 @@ func OptionalTokenAuth(svc *service.Service, router TokenResolver) func(http.Han
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func resolveEmbeddedIdentityAndInjectContext(w http.ResponseWriter, r *http.Request, router TokenResolver, svc *service.Service, embedded EmbeddedAuthConfig, _ bool) (context.Context, bool) {
+	if embedded.Authenticator == nil {
+		return nil, false
+	}
+	identity, ok, err := embedded.Authenticator.Authenticate(r)
+	if err != nil {
+		logAuthFailure(r.Context(), "embedded_identity_auth_failed", "", "embedded", err)
+		respond.Error(w, http.StatusUnauthorized, "Bad credentials")
+		return nil, true
+	}
+	if !ok {
+		return nil, false
+	}
+	if hasTokenResolver(router) {
+		logAuthFailure(r.Context(), "embedded_identity_control_plane_unsupported", "", "embedded", nil)
+		respond.Error(w, http.StatusUnauthorized, "Bad credentials")
+		return nil, true
+	}
+	resolved := service.EmbeddedIdentity{
+		Provider:  identity.Provider,
+		Subject:   identity.Subject,
+		Login:     identity.Login,
+		Name:      identity.Name,
+		Email:     identity.Email,
+		Groups:    append([]string(nil), identity.Groups...),
+		SiteAdmin: identity.SiteAdmin,
+	}
+	user, err := svc.ResolveEmbeddedIdentity(r.Context(), resolved)
+	if err != nil {
+		logAuthFailure(r.Context(), "embedded_identity_user_resolution_failed", "", "embedded", err)
+		respond.Error(w, http.StatusUnauthorized, "Bad credentials")
+		return nil, true
+	}
+	ctx := service.ContextWithUser(r.Context(), user)
+	ctx = service.ContextWithRepoCache(ctx)
+	if actor := embeddedIdentityActor(resolved); actor != "" {
+		ctx = ratelimit.WithActor(ctx, actor)
+	}
+	applog.AddAttrs(ctx,
+		slog.String("auth_mode", "embedded"),
+		slog.String("auth_provider", resolved.Provider),
+		slog.String("user_login", user.Login),
+	)
+	return ctx, true
+}
+
+func embeddedIdentityActor(identity service.EmbeddedIdentity) string {
+	provider := strings.TrimSpace(identity.Provider)
+	subject := strings.TrimSpace(identity.Subject)
+	if provider == "" || subject == "" {
+		return ""
+	}
+	return "embedded:" + provider + ":" + subject
 }
 
 // RequireAuthForWrites returns middleware that rejects unauthenticated

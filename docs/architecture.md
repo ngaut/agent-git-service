@@ -52,6 +52,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 
 | Path | Responsibility |
 |---|---|
+| `auth` | Public embedding identity types for external consumers |
 | `cmd/gh-server` | CLI entrypoint, signal handling, `.env` loading, and logging init |
 | `server` | Public startup/shutdown API, embeddable constructor/handlers, dependency wiring, TLS setup, and listeners |
 | `config` | Environment-backed configuration exposed for external consumers |
@@ -85,7 +86,39 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 
 ## Startup and Runtime
 
-`cmd/gh-server` is the binary entrypoint and `server` is the composition root. External embedders can either keep using `server.Run` or construct a reusable instance with `server.New(config.Config)`, mount `Handler()` or the protocol-specific handler accessors, and manage listeners through `Start()` / `Shutdown(ctx)`. The startup sequence is:
+`cmd/gh-server` is the binary entrypoint and `server` is the composition root. External embedders can either keep using `server.Run` or construct a reusable instance with `server.New(config.Config, ...)`, mount `Handler()` or the protocol-specific handler accessors, and manage listeners through `Start()` / `Shutdown(ctx)`. Embedded hosts may install `server.WithAuthenticator(...)` to inject a trusted request identity without minting AGS tokens first; AGS then owns the full identity-to-user mapping internally. The shared identity shape is exported from the top-level `auth` package. When that hook is absent, the historical token/control-plane auth flow remains unchanged.
+
+The embedded-auth contract is:
+
+- The host authenticator returns a trusted `auth.Identity` with non-empty `Provider`, `Subject`, and `Login`; `Name`, `Email`, `Groups`, and `SiteAdmin` are optional metadata that AGS will persist onto its internal user record.
+- When the authenticator returns `ok=false`, AGS falls back to its historical token flow exactly as before.
+- When the authenticator returns `ok=true`, embedded identity takes precedence over any `Authorization` header on the request. REST, GraphQL, Git Smart HTTP, OAuth device approval, discovery routes such as `/api/v3/rate_limit`, and optional-auth REST lookups such as `/api/v3/users/{username}/starred` all consume the same embedded-aware middleware path in single-DB mode.
+- Control-plane mode stays fail-closed for embedded identities until AGS grows a tenant-aware resolver contract; embedders must not expect `server.WithAuthenticator(...)` to bypass tenant routing.
+
+A minimal host implementation looks like:
+
+```go
+import (
+    "github.com/ngaut/agent-git-service/auth"
+    "github.com/ngaut/agent-git-service/server"
+)
+
+srv, err := server.New(cfg, server.WithAuthenticator(myAuthenticator{}))
+```
+
+where `myAuthenticator.Authenticate(*http.Request)` returns a stable upstream subject such as:
+
+```go
+auth.Identity{
+    Provider: "meshx",
+    Subject:  "user-123",
+    Login:    "alice",
+    Name:     "Alice",
+    Email:    "alice@example.com",
+}
+```
+
+The startup sequence is:
 
 1. Load `.env` for local development via `godotenv`.
 2. Initialize structured logging via `internal/logging`.
