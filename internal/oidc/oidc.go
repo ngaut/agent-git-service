@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/ngaut/agent-git-service/internal/auth0"
 )
 
 type Config struct {
@@ -66,7 +64,19 @@ type Token struct {
 	ExpiresIn   int    `json:"expires_in,omitempty"`
 }
 
-type OAuthError = auth0.OAuthError
+// OAuthError matches standard OAuth error response bodies returned by OIDC
+// token and device authorization endpoints.
+type OAuthError struct {
+	Code        string `json:"error"`
+	Description string `json:"error_description,omitempty"`
+}
+
+func (e OAuthError) Error() string {
+	if e.Description == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Description
+}
 
 type IDTokenClaims struct {
 	Sub               string         `json:"sub"`
@@ -135,7 +145,7 @@ type Client struct {
 	allowInsecureHTTP bool
 	http              *http.Client
 	mu                sync.Mutex
-	jwks              *auth0.JWKSClient
+	jwks              *JWKSClient
 	discovery         DiscoveryDocument
 }
 
@@ -214,7 +224,7 @@ func (c *Client) VerifyIDToken(ctx context.Context, idToken string) (IDTokenClai
 		return IDTokenClaims{}, err
 	}
 	jwks := c.jwksClient(doc)
-	auth0Claims, err := jwks.VerifyIDToken(ctx, idToken, doc.Issuer, c.clientID)
+	verifiedClaims, err := jwks.VerifyIDToken(ctx, idToken, doc.Issuer, c.clientID)
 	if err != nil {
 		return IDTokenClaims{}, err
 	}
@@ -222,16 +232,16 @@ func (c *Client) VerifyIDToken(ctx context.Context, idToken string) (IDTokenClai
 	if err != nil {
 		return IDTokenClaims{}, err
 	}
-	claims.Sub = auth0Claims.Sub
-	claims.Email = firstNonEmpty(strings.TrimSpace(claims.Email), strings.TrimSpace(auth0Claims.Email))
-	claims.EmailVerified = claims.EmailVerified || auth0Claims.EmailVerified
-	claims.Name = firstNonEmpty(strings.TrimSpace(claims.Name), strings.TrimSpace(auth0Claims.Name))
-	claims.Nickname = firstNonEmpty(strings.TrimSpace(claims.Nickname), strings.TrimSpace(auth0Claims.Nickname))
-	claims.PreferredUsername = firstNonEmpty(strings.TrimSpace(claims.PreferredUsername), strings.TrimSpace(auth0Claims.PreferredUsername))
-	claims.Picture = firstNonEmpty(strings.TrimSpace(claims.Picture), strings.TrimSpace(auth0Claims.Picture))
-	claims.Iss = auth0Claims.Iss
-	claims.Aud = auth0Claims.Aud
-	claims.Exp = auth0Claims.Exp
+	claims.Sub = verifiedClaims.Sub
+	claims.Email = firstNonEmpty(strings.TrimSpace(claims.Email), strings.TrimSpace(verifiedClaims.Email))
+	claims.EmailVerified = claims.EmailVerified || verifiedClaims.EmailVerified
+	claims.Name = firstNonEmpty(strings.TrimSpace(claims.Name), strings.TrimSpace(verifiedClaims.Name))
+	claims.Nickname = firstNonEmpty(strings.TrimSpace(claims.Nickname), strings.TrimSpace(verifiedClaims.Nickname))
+	claims.PreferredUsername = firstNonEmpty(strings.TrimSpace(claims.PreferredUsername), strings.TrimSpace(verifiedClaims.PreferredUsername))
+	claims.Picture = firstNonEmpty(strings.TrimSpace(claims.Picture), strings.TrimSpace(verifiedClaims.Picture))
+	claims.Iss = verifiedClaims.Iss
+	claims.Aud = verifiedClaims.Aud
+	claims.Exp = verifiedClaims.Exp
 	return claims, nil
 }
 
@@ -286,11 +296,11 @@ func (c *Client) loadDiscovery(ctx context.Context) (DiscoveryDocument, error) {
 	return doc, nil
 }
 
-func (c *Client) jwksClient(doc DiscoveryDocument) *auth0.JWKSClient {
+func (c *Client) jwksClient(doc DiscoveryDocument) *JWKSClient {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.jwks == nil {
-		c.jwks = auth0.NewJWKSClient(doc.Issuer)
+		c.jwks = NewJWKSClient(doc.Issuer)
 		if strings.TrimSpace(doc.JWKSURI) != "" {
 			c.jwks.OverrideURL(doc.JWKSURI)
 		}

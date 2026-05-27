@@ -1,14 +1,14 @@
-# Mock Auth0 Server for E2E Tests
+# Mock OIDC Server for E2E Tests
 
-This is a mock Auth0 server for testing Auth0 error-state contracts and browser
-`id_token` claim flows in E2E tests.
+This is a mock OIDC server for testing OAuth/OIDC error-state contracts and
+browser `id_token` claim flows in E2E tests.
 
 ## Usage
 
 Start the mock server:
 
 ```bash
-go run ./e2e/cmd/mock-auth0-server/main.go :8891
+go run ./e2e/cmd/mock-oidc-server/main.go :8891
 ```
 
 ## Admin Endpoints
@@ -73,8 +73,8 @@ Response:
 {
   "device_code": "mock-device-code-123",
   "user_code": "MOCK-123",
-  "verification_uri": "https://mock.auth0.example.com/activate",
-  "verification_uri_complete": "https://mock.auth0.example.com/activate?code=MOCK-123",
+  "verification_uri": "https://mock.oidc.example.com/activate",
+  "verification_uri_complete": "https://mock.oidc.example.com/activate?code=MOCK-123",
   "expires_in": 900,
   "interval": 5
 }
@@ -97,25 +97,25 @@ Exchanges device code for tokens. Response depends on configured mode:
 
 Returns an OpenID Connect discovery document that points device authorization,
 token exchange, and JWKS verification back to the mock server. This lets the
-same mock server drive both the legacy Auth0 aliases and the generic
-`/api/v3/oidc/*` endpoints.
+same mock server drive the generic `/api/v3/oidc/*` endpoints.
 
 ### GET /.well-known/jwks.json
 
 Returns the JWKS that matches the mock server's signing key so `gh-server` can
 verify the signed `id_token`.
 
-## Running E2E Tests with Mock Auth0
+## Running E2E Tests with Mock OIDC
 
-1. Start the mock Auth0 server:
+1. Start the mock OIDC server:
    ```bash
-   go run ./e2e/cmd/mock-auth0-server/main.go :8891
+   go run ./e2e/cmd/mock-oidc-server/main.go :8891
    ```
 
-2. Start gh-server with mock Auth0 configuration:
+2. Start gh-server with mock OIDC configuration:
    ```bash
-   AUTH0_ISSUER=http://localhost:8891/ \
-   AUTH0_CLIENT_ID=test-client-id \
+   OIDC_PROVIDER=mock-oidc \
+   OIDC_ISSUER=http://localhost:8891/ \
+   OIDC_CLIENT_ID=test-client-id \
    OIDC_ALLOW_INSECURE_HTTP=1 \
    make run-bg
    ```
@@ -125,4 +125,4 @@ verify the signed `id_token`.
    make test-e2e
    ```
 
-Use this mock server for Auth0-related manual validation as needed.
+Use this mock server for OIDC-related manual validation as needed.

@@ -191,12 +191,12 @@ jobs:
       - name: Prepare e2e test environment
         run: make test-setup
 
-      - name: Start mock OIDC/Auth0 issuer
+      - name: Start mock OIDC issuer
         shell: bash
         run: |
           set -euo pipefail
-          go run ./e2e/cmd/mock-auth0-server/main.go :8891 >/tmp/mock-auth0.log 2>&1 &
-          echo $! >/tmp/mock-auth0.pid
+          go run ./e2e/cmd/mock-oidc-server/main.go :8891 >/tmp/mock-oidc.log 2>&1 &
+          echo $! >/tmp/mock-oidc.pid
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:8891/.well-known/openid-configuration >/dev/null; then
               exit 0
@@ -204,7 +204,7 @@ jobs:
             sleep 1
           done
           echo "mock issuer failed to start" >&2
-          cat /tmp/mock-auth0.log >&2 || true
+          cat /tmp/mock-oidc.log >&2 || true
           exit 1
 
       - name: Start e2e server
@@ -214,8 +214,6 @@ jobs:
           PORT: '80'
           ADMIN_LOGIN: testadmin
           ADMIN_TOKEN: mytoken
-          AUTH0_ISSUER: http://localhost:8891/
-          AUTH0_CLIENT_ID: test-client-id
           OIDC_PROVIDER: casdoor
           OIDC_ISSUER: http://localhost:8891/
           OIDC_CLIENT_ID: test-client-id
@@ -230,8 +228,6 @@ jobs:
           PORT: '80'
           ADMIN_LOGIN: testadmin
           ADMIN_TOKEN: mytoken
-          AUTH0_ISSUER: http://localhost:8891/
-          AUTH0_CLIENT_ID: test-client-id
           OIDC_PROVIDER: casdoor
           OIDC_ISSUER: http://localhost:8891/
           OIDC_CLIENT_ID: test-client-id
@@ -245,9 +241,9 @@ jobs:
         run: |
           set -euo pipefail
           make test-clean-all
-          if [[ -f /tmp/mock-auth0.pid ]]; then
-            kill "$(cat /tmp/mock-auth0.pid)" 2>/dev/null || true
-            rm -f /tmp/mock-auth0.pid
+          if [[ -f /tmp/mock-oidc.pid ]]; then
+            kill "$(cat /tmp/mock-oidc.pid)" 2>/dev/null || true
+            rm -f /tmp/mock-oidc.pid
           fi
 
   backend-smoke:

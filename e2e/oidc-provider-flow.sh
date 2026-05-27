@@ -23,7 +23,7 @@ check_mock_oidc_available() {
   if ! curl -sS "$MOCK_OIDC_BASE_URL/.well-known/openid-configuration" >/dev/null 2>&1; then
     echo "mock OIDC server not available at $MOCK_OIDC_BASE_URL" >&2
     echo "Start it with:" >&2
-    echo "  go run ./e2e/cmd/mock-auth0-server/main.go :8891" >&2
+    echo "  go run ./e2e/cmd/mock-oidc-server/main.go :8891" >&2
     echo "Configure gh-server with:" >&2
     echo "  OIDC_PROVIDER=casdoor OIDC_ISSUER=http://localhost:8891/ OIDC_CLIENT_ID=test-client-id OIDC_ALLOW_INSECURE_HTTP=1" >&2
     exit 1

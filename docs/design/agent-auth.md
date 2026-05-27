@@ -75,7 +75,7 @@ Notes:
 
 ### Human login
 
-Human users continue to authenticate via Auth0. Token issuance remains standard.
+Human users authenticate through the configured OIDC provider. Token issuance remains standard.
 
 ### Agent binding
 
@@ -125,7 +125,7 @@ without rotating the agent's long-lived token.
 ### Removed endpoints
 
 - `/api/v3/anonymous/*` (session/claim/merge)
-- Claim-specific Auth0 device flow endpoints if only used by anonymous flow
+- Claim-specific device-flow endpoints if only used by anonymous flow
 
 ## Org Creation and Admin Rule
 

@@ -137,46 +137,33 @@ func TestNewOverrides(t *testing.T) {
 	}
 }
 
-func TestNormalizeMapsLegacyAuth0ToOIDC(t *testing.T) {
-	cfg, err := Normalize(Config{
-		DBdsn:         "dsn",
-		Auth0Issuer:   "https://tenant.auth0.example/",
-		Auth0ClientID: "legacy-client",
-		Auth0Audience: "https://api.example",
-	})
+func TestOIDCProviderDefaultsToAuth0ForAuth0Issuer(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+	t.Setenv("OIDC_PROVIDER", "")
+	t.Setenv("OIDC_ISSUER", "https://tenant.us.auth0.com/")
+	t.Setenv("OIDC_CLIENT_ID", "oidc-client")
+
+	cfg, err := New()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.OIDCProvider != "auth0" {
-		t.Fatalf("expected auth0 provider mapping, got %q", cfg.OIDCProvider)
-	}
-	if cfg.OIDCIssuer != cfg.Auth0Issuer || cfg.OIDCClientID != cfg.Auth0ClientID || cfg.OIDCAudience != cfg.Auth0Audience {
-		t.Fatalf("expected legacy auth0 fields to map into oidc fields, got %+v", cfg)
+		t.Fatalf("expected OIDCProvider=auth0 for Auth0 issuer, got %q", cfg.OIDCProvider)
 	}
 }
 
-func TestNormalizeBackfillsMissingOIDCFieldsFromLegacyAuth0Aliases(t *testing.T) {
-	cfg, err := Normalize(Config{
-		DBdsn:         "dsn",
-		OIDCProvider:  "casdoor",
-		Auth0Issuer:   "https://tenant.auth0.example/",
-		Auth0ClientID: "legacy-client",
-		Auth0Audience: "https://api.example",
-	})
+func TestOIDCProviderDefaultsToOIDCForNonAuth0Issuer(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+	t.Setenv("OIDC_PROVIDER", "")
+	t.Setenv("OIDC_ISSUER", "https://issuer.example.com")
+	t.Setenv("OIDC_CLIENT_ID", "oidc-client")
+
+	cfg, err := New()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.OIDCProvider != "casdoor" {
-		t.Fatalf("expected explicit oidc provider to be preserved, got %q", cfg.OIDCProvider)
-	}
-	if cfg.OIDCIssuer != cfg.Auth0Issuer {
-		t.Fatalf("expected missing oidc issuer to backfill from auth0 alias, got %q", cfg.OIDCIssuer)
-	}
-	if cfg.OIDCClientID != cfg.Auth0ClientID {
-		t.Fatalf("expected missing oidc client id to backfill from auth0 alias, got %q", cfg.OIDCClientID)
-	}
-	if cfg.OIDCAudience != cfg.Auth0Audience {
-		t.Fatalf("expected missing oidc audience to backfill from auth0 alias, got %q", cfg.OIDCAudience)
+	if cfg.OIDCProvider != "oidc" {
+		t.Fatalf("expected OIDCProvider=oidc for generic issuer, got %q", cfg.OIDCProvider)
 	}
 }
 

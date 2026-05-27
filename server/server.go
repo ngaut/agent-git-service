@@ -442,23 +442,6 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	} else {
 		slog.Info("oidc disabled", "reason", "OIDC_ISSUER/OIDC_CLIENT_ID not set")
 	}
-	if cfg.Auth0ClientID != "" && cfg.Auth0Issuer != "" {
-		auth0Client, err := oidc.New(oidc.Config{
-			Provider:          "auth0",
-			Issuer:            cfg.Auth0Issuer,
-			ClientID:          cfg.Auth0ClientID,
-			Audience:          cfg.Auth0Audience,
-			Scopes:            cfg.OIDCScopes,
-			AllowInsecureHTTP: cfg.OIDCAllowInsecureHTTP,
-		})
-		if err != nil {
-			return deps, fmt.Errorf("auth0 compat: %w", err)
-		}
-		svcDeps.Auth0 = service.NewAuth0CompatFlow(auth0Client)
-		slog.Info("auth0 compatibility enabled", "issuer", cfg.Auth0Issuer)
-	} else {
-		slog.Info("auth0 compatibility disabled", "reason", "AUTH0_ISSUER/AUTH0_CLIENT_ID not set")
-	}
 	deps.gqlSrv = graphql.NewServer(svcDeps)
 	deps.gitHandler = githttp.New(store, svcDeps)
 	deps.oauthHandler = oauth.New(svcDeps)
@@ -621,7 +604,7 @@ func bootstrapWithConfig(cfg config.Config, opts options) bootstrapResult {
 	deps.SrvCtx = srvCtx
 	deps.SrvCancel = srvCancel
 
-	// 3. Service dependencies, auth0, and handlers.
+	// 3. Service dependencies, OIDC, and handlers.
 	svc, err := initServiceDeps(core.cfg, core.db, core.store, core.embedder, srvCtx)
 	if err != nil {
 		result.Err = err

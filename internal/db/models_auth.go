@@ -37,7 +37,7 @@ type Token struct {
 	ExpiresAt  *time.Time `gorm:"index"`
 }
 
-// UserIdentity links an external identity provider subject (e.g. Auth0 sub)
+// UserIdentity links an external identity provider subject (for example, an OIDC sub).
 // to a local user.
 type UserIdentity struct {
 	ID        uint   `gorm:"primaryKey;autoIncrement"`

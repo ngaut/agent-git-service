@@ -10,8 +10,8 @@ require_cmd jq
 require_cmd openssl
 
 BASE_URL="$(strip_trailing_slash "${E2E_BASE_URL:-http://github.localhost}")"
-MOCK_AUTH0_BASE_URL="$(strip_trailing_slash "${MOCK_AUTH0_BASE_URL:-http://localhost:8891}")"
-MOCK_AUTH0_CLIENT_ID="${MOCK_AUTH0_CLIENT_ID:-test-client-id}"
+MOCK_OIDC_BASE_URL="$(strip_trailing_slash "${MOCK_OIDC_BASE_URL:-http://localhost:8891}")"
+MOCK_OIDC_CLIENT_ID="${MOCK_OIDC_CLIENT_ID:-test-client-id}"
 
 HUMAN_TOKEN="${HUMAN_TOKEN:-}"
 AGENT_PREFIX="${AGENT_PREFIX:-e2e-agent}"
@@ -24,28 +24,28 @@ code="$(http_code "$BASE_URL/api/v3/")"
 assert_eq "$code" "200"
 ok "Server is responding"
 
-check_mock_auth0_available() {
-  if ! curl -sS "$MOCK_AUTH0_BASE_URL/__admin/state" >/dev/null 2>&1; then
-    echo "WARNING: Mock Auth0 server not available at $MOCK_AUTH0_BASE_URL" >&2
-    echo "To run auth0 login flow, start the mock server:" >&2
-    echo "  go run ./e2e/cmd/mock-auth0-server/main.go :8891" >&2
+check_mock_oidc_available() {
+  if ! curl -sS "$MOCK_OIDC_BASE_URL/__admin/state" >/dev/null 2>&1; then
+    echo "WARNING: Mock OIDC server not available at $MOCK_OIDC_BASE_URL" >&2
+    echo "To run OIDC login flow, start the mock server:" >&2
+    echo "  go run ./e2e/cmd/mock-oidc-server/main.go :8891" >&2
     echo "And configure gh-server with:" >&2
-    echo "  AUTH0_ISSUER=http://localhost:8891/ AUTH0_CLIENT_ID=test-client-id OIDC_ALLOW_INSECURE_HTTP=1" >&2
+    echo "  OIDC_PROVIDER=mock-oidc OIDC_ISSUER=http://localhost:8891/ OIDC_CLIENT_ID=test-client-id OIDC_ALLOW_INSECURE_HTTP=1" >&2
     return 1
   fi
   return 0
 }
 
-set_auth0_mode() {
+set_oidc_mode() {
   local mode="$1"
   local fail_count="${2:-0}"
   local success_once="${3:-false}"
 
-  curl -sS -X POST "$MOCK_AUTH0_BASE_URL/__admin/mode?mode=$mode&fail_count=$fail_count&success_once=$success_once" >/dev/null
+  curl -sS -X POST "$MOCK_OIDC_BASE_URL/__admin/mode?mode=$mode&fail_count=$fail_count&success_once=$success_once" >/dev/null
 }
 
-reset_auth0_mock() {
-  curl -sS -X POST "$MOCK_AUTH0_BASE_URL/__admin/reset" >/dev/null
+reset_oidc_mock() {
+  curl -sS -X POST "$MOCK_OIDC_BASE_URL/__admin/reset" >/dev/null
 }
 
 mint_mock_id_token() {
@@ -55,9 +55,9 @@ mint_mock_id_token() {
 
   subject_uri="$(jq -nr --arg v "$subject" '$v|@uri')"
   token_response="$(curl_json 200 \
-    -X POST "$MOCK_AUTH0_BASE_URL/oauth/token" \
+    -X POST "$MOCK_OIDC_BASE_URL/oauth/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=authorization_code&code=mock-browser-code&client_id=$MOCK_AUTH0_CLIENT_ID&subject=$subject_uri&redirect_uri=http://localhost/mock-callback")"
+    -d "grant_type=authorization_code&code=mock-browser-code&client_id=$MOCK_OIDC_CLIENT_ID&subject=$subject_uri&redirect_uri=http://localhost/mock-callback")"
   json_get id_token <<<"$token_response"
 }
 
@@ -127,7 +127,7 @@ login_human() {
     return 0
   fi
 
-  if ! check_mock_auth0_available; then
+  if ! check_mock_oidc_available; then
     note "use seeded human token fallback"
     human_token="${ADMIN_TOKEN:-${GH_TOKEN:-mytoken}}"
     local me
@@ -137,20 +137,20 @@ login_human() {
     return 0
   fi
 
-  reset_auth0_mock
-  set_auth0_mode "success"
+  reset_oidc_mock
+  set_oidc_mode "success"
 
   local subject
-  subject="auth0|human-$(openssl rand -hex 4)"
+  subject="oidc|human-$(openssl rand -hex 4)"
 
   local id_token
   id_token="$(mint_mock_id_token "$subject")"
   assert_re "$id_token" '^.+$'
 
-  note "login human via Auth0 id_token"
+  note "login human via OIDC id_token"
   local resp
   resp="$(curl_json 200 \
-    -X POST "$BASE_URL/api/v3/auth0/callback" \
+    -X POST "$BASE_URL/api/v3/oidc/callback" \
     -H "Content-Type: application/json" \
     -d "{\"id_token\":\"$id_token\"}")"
   human_token="$(json_get token <<<"$resp")"

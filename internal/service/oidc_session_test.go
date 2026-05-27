@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ngaut/agent-git-service/internal/auth0"
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/oidc"
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
-// fakeAuth0DeviceFlow implements service.Auth0DeviceFlow for testing.
-type fakeAuth0DeviceFlow struct {
+// fakeOIDCProvider implements service.OIDCProvider for testing.
+type fakeOIDCProvider struct {
+	provider  string
 	issuer    string
 	clientID  string
 	idToken   string
@@ -26,27 +26,18 @@ type fakeAuth0DeviceFlow struct {
 	preferred string
 }
 
-type fakeOIDCProvider struct{}
-
-func (fakeOIDCProvider) RequestDeviceCode(ctx context.Context, scopes string) (oidc.DeviceCode, error) {
-	return oidc.DeviceCode{DeviceCode: "oidc-device-code"}, nil
+func (f fakeOIDCProvider) Issuer() string   { return f.issuer }
+func (f fakeOIDCProvider) ClientID() string { return f.clientID }
+func (f fakeOIDCProvider) Scopes() string   { return "openid profile email" }
+func (f fakeOIDCProvider) Provider() string {
+	if f.provider != "" {
+		return f.provider
+	}
+	return "test-oidc"
 }
-func (fakeOIDCProvider) ExchangeDeviceCode(ctx context.Context, deviceCode string) (oidc.Token, error) {
-	return oidc.Token{}, nil
-}
-func (fakeOIDCProvider) VerifyIDToken(ctx context.Context, idToken string) (oidc.IDTokenClaims, error) {
-	return oidc.IDTokenClaims{}, nil
-}
-func (fakeOIDCProvider) Provider() string { return "casdoor" }
-func (fakeOIDCProvider) Issuer() string   { return "https://casdoor.example.com/" }
-func (fakeOIDCProvider) ClientID() string { return "oidc-client-id" }
-func (fakeOIDCProvider) Scopes() string   { return "openid profile email" }
 
-func (f fakeAuth0DeviceFlow) Issuer() string   { return f.issuer }
-func (f fakeAuth0DeviceFlow) ClientID() string { return f.clientID }
-
-func (f fakeAuth0DeviceFlow) RequestDeviceCode(ctx context.Context, scopes string) (auth0.DeviceCode, error) {
-	return auth0.DeviceCode{
+func (f fakeOIDCProvider) RequestDeviceCode(ctx context.Context, scopes string) (oidc.DeviceCode, error) {
+	return oidc.DeviceCode{
 		DeviceCode:              "device-code-123",
 		UserCode:                "USER-123",
 		VerificationURI:         "https://example.invalid/activate",
@@ -56,13 +47,13 @@ func (f fakeAuth0DeviceFlow) RequestDeviceCode(ctx context.Context, scopes strin
 	}, nil
 }
 
-func (f fakeAuth0DeviceFlow) ExchangeDeviceCode(ctx context.Context, deviceCode string) (auth0.Token, error) {
-	return auth0.Token{IDToken: f.idToken}, nil
+func (f fakeOIDCProvider) ExchangeDeviceCode(ctx context.Context, deviceCode string) (oidc.Token, error) {
+	return oidc.Token{IDToken: f.idToken}, nil
 }
 
-func (f fakeAuth0DeviceFlow) VerifyIDToken(ctx context.Context, idToken string) (auth0.IDTokenClaims, error) {
+func (f fakeOIDCProvider) VerifyIDToken(ctx context.Context, idToken string) (oidc.IDTokenClaims, error) {
 	// For testing, skip signature verification.
-	return auth0.DecodeIDTokenClaims(idToken)
+	return oidc.DecodeIDTokenClaims(idToken)
 }
 
 // mustJWT creates a fake JWT token for testing (no signature verification in tests).
@@ -77,15 +68,15 @@ func mustJWT(t *testing.T, claims map[string]any) string {
 	return header + "." + payload + ".sig"
 }
 
-// TestAuth0Login_NewUser tests that Auth0Login with a new user creates the user,
+// TestOIDCLogin_NewUser tests that OIDCLogin with a new user creates the user,
 // links identity, and returns a token.
-func TestAuth0Login_NewUser(t *testing.T) {
+func TestOIDCLogin_NewUser(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
-	// Setup mock Auth0 with a new user profile
+	// Setup mock OIDC with a new user profile
 	claims := map[string]any{
-		"sub":                "auth0|123456",
+		"sub":                "oidc|123456",
 		"email":              "newuser@example.com",
 		"email_verified":     true,
 		"name":               "New User",
@@ -94,20 +85,20 @@ func TestAuth0Login_NewUser(t *testing.T) {
 	}
 	idToken := mustJWT(t, claims)
 
-	svc.Auth0 = fakeAuth0DeviceFlow{
-		issuer:    "https://example.auth0.com/",
+	svc.OIDC = fakeOIDCProvider{
+		issuer:    "https://example.oidc.com/",
 		clientID:  "test-client-id",
 		idToken:   idToken,
-		subject:   "auth0|123456",
+		subject:   "oidc|123456",
 		email:     "newuser@example.com",
 		name:      "New User",
 		nickname:  "newbie",
 		preferred: "newuser",
 	}
 
-	result, err := svc.Auth0Login(context.Background(), "device-code-123")
+	result, err := svc.OIDCLogin(context.Background(), "device-code-123")
 	if err != nil {
-		t.Fatalf("Auth0Login failed: %v", err)
+		t.Fatalf("OIDCLogin failed: %v", err)
 	}
 
 	// Verify result contains expected data
@@ -141,7 +132,7 @@ func TestAuth0Login_NewUser(t *testing.T) {
 
 	// Verify identity was linked
 	var identity db.UserIdentity
-	if err := svc.DB.First(&identity, "user_id = ? AND provider = ? AND subject = ?", result.UserID, "auth0", "auth0|123456").Error; err != nil {
+	if err := svc.DB.First(&identity, "user_id = ? AND provider = ? AND subject = ?", result.UserID, "test-oidc", "oidc|123456").Error; err != nil {
 		t.Fatalf("failed to load user identity from DB: %v", err)
 	}
 	if identity.UserID != result.UserID {
@@ -158,9 +149,9 @@ func TestAuth0Login_NewUser(t *testing.T) {
 	}
 }
 
-// TestAuth0Login_ExistingUser tests that Auth0Login with an existing user
+// TestOIDCLogin_ExistingUser tests that OIDCLogin with an existing user
 // returns the same user with a new token.
-func TestAuth0Login_ExistingUser(t *testing.T) {
+func TestOIDCLogin_ExistingUser(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -177,8 +168,8 @@ func TestAuth0Login_ExistingUser(t *testing.T) {
 
 	existingIdentity := db.UserIdentity{
 		UserID:   existingUser.ID,
-		Provider: "auth0",
-		Subject:  "auth0|existing-sub",
+		Provider: "test-oidc",
+		Subject:  "oidc|existing-sub",
 	}
 	if err := svc.DB.Create(&existingIdentity).Error; err != nil {
 		t.Fatalf("failed to create existing identity: %v", err)
@@ -193,9 +184,9 @@ func TestAuth0Login_ExistingUser(t *testing.T) {
 		t.Fatalf("failed to create old token: %v", err)
 	}
 
-	// Setup mock Auth0 with the same subject
+	// Setup mock OIDC with the same subject
 	claims := map[string]any{
-		"sub":                "auth0|existing-sub",
+		"sub":                "oidc|existing-sub",
 		"email":              "updated@example.com",
 		"email_verified":     true,
 		"name":               "Updated Name",
@@ -204,20 +195,20 @@ func TestAuth0Login_ExistingUser(t *testing.T) {
 	}
 	idToken := mustJWT(t, claims)
 
-	svc.Auth0 = fakeAuth0DeviceFlow{
-		issuer:    "https://example.auth0.com/",
+	svc.OIDC = fakeOIDCProvider{
+		issuer:    "https://example.oidc.com/",
 		clientID:  "test-client-id",
 		idToken:   idToken,
-		subject:   "auth0|existing-sub",
+		subject:   "oidc|existing-sub",
 		email:     "updated@example.com",
 		name:      "Updated Name",
 		nickname:  "updatednick",
 		preferred: "updateduser",
 	}
 
-	result, err := svc.Auth0Login(context.Background(), "device-code-123")
+	result, err := svc.OIDCLogin(context.Background(), "device-code-123")
 	if err != nil {
-		t.Fatalf("Auth0Login failed: %v", err)
+		t.Fatalf("OIDCLogin failed: %v", err)
 	}
 
 	// Verify result returns the same user
@@ -267,8 +258,8 @@ func TestAuth0Login_ExistingUser(t *testing.T) {
 	}
 }
 
-// TestAuth0Login_DisplayNameFallback tests the DisplayName fallback logic.
-func TestAuth0Login_DisplayNameFallback(t *testing.T) {
+// TestOIDCLogin_DisplayNameFallback tests the DisplayName fallback logic.
+func TestOIDCLogin_DisplayNameFallback(t *testing.T) {
 	tests := []struct {
 		name         string
 		claims       map[string]any
@@ -277,7 +268,7 @@ func TestAuth0Login_DisplayNameFallback(t *testing.T) {
 		{
 			name: "uses name when available",
 			claims: map[string]any{
-				"sub":      "auth0|1",
+				"sub":      "oidc|1",
 				"email":    "user@example.com",
 				"name":     "Full Name",
 				"nickname": "nick",
@@ -287,7 +278,7 @@ func TestAuth0Login_DisplayNameFallback(t *testing.T) {
 		{
 			name: "falls back to nickname when name empty",
 			claims: map[string]any{
-				"sub":      "auth0|2",
+				"sub":      "oidc|2",
 				"email":    "user@example.com",
 				"name":     "",
 				"nickname": "nick",
@@ -297,7 +288,7 @@ func TestAuth0Login_DisplayNameFallback(t *testing.T) {
 		{
 			name: "falls back to login when name and nickname empty",
 			claims: map[string]any{
-				"sub":      "auth0|3",
+				"sub":      "oidc|3",
 				"email":    "user@example.com",
 				"name":     "",
 				"nickname": "",
@@ -312,15 +303,15 @@ func TestAuth0Login_DisplayNameFallback(t *testing.T) {
 			defer cleanup()
 
 			idToken := mustJWT(t, tt.claims)
-			svc.Auth0 = fakeAuth0DeviceFlow{
-				issuer:   "https://example.auth0.com/",
+			svc.OIDC = fakeOIDCProvider{
+				issuer:   "https://example.oidc.com/",
 				clientID: "test-client-id",
 				idToken:  idToken,
 			}
 
-			result, err := svc.Auth0Login(context.Background(), "device-code-123")
+			result, err := svc.OIDCLogin(context.Background(), "device-code-123")
 			if err != nil {
-				t.Fatalf("Auth0Login failed: %v", err)
+				t.Fatalf("OIDCLogin failed: %v", err)
 			}
 
 			var user db.User
@@ -335,17 +326,17 @@ func TestAuth0Login_DisplayNameFallback(t *testing.T) {
 	}
 }
 
-// TestAuth0Profile_DisplayName tests the Auth0Profile.DisplayName method directly.
-func TestAuth0Profile_DisplayName(t *testing.T) {
+// TestOIDCProfile_DisplayName tests the OIDCProfile.DisplayName method directly.
+func TestOIDCProfile_DisplayName(t *testing.T) {
 	tests := []struct {
 		name     string
-		profile  service.Auth0Profile
+		profile  service.OIDCProfile
 		fallback string
 		expected string
 	}{
 		{
 			name: "returns name when available",
-			profile: service.Auth0Profile{
+			profile: service.OIDCProfile{
 				Name:     "Full Name",
 				Nickname: "nick",
 			},
@@ -354,7 +345,7 @@ func TestAuth0Profile_DisplayName(t *testing.T) {
 		},
 		{
 			name: "returns nickname when name empty",
-			profile: service.Auth0Profile{
+			profile: service.OIDCProfile{
 				Name:     "",
 				Nickname: "nick",
 			},
@@ -363,7 +354,7 @@ func TestAuth0Profile_DisplayName(t *testing.T) {
 		},
 		{
 			name: "returns fallback when name and nickname empty",
-			profile: service.Auth0Profile{
+			profile: service.OIDCProfile{
 				Name:     "",
 				Nickname: "",
 			},
@@ -372,7 +363,7 @@ func TestAuth0Profile_DisplayName(t *testing.T) {
 		},
 		{
 			name: "trims whitespace",
-			profile: service.Auth0Profile{
+			profile: service.OIDCProfile{
 				Name:     "  ",
 				Nickname: "  nick  ",
 			},
@@ -391,7 +382,7 @@ func TestAuth0Profile_DisplayName(t *testing.T) {
 	}
 }
 
-func TestAuth0Login_DoesNotCapExistingTokens(t *testing.T) {
+func TestOIDCLogin_DoesNotCapExistingTokens(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -400,7 +391,7 @@ func TestAuth0Login_DoesNotCapExistingTokens(t *testing.T) {
 	if err := svc.DB.Create(&u).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	if err := svc.DB.Create(&db.UserIdentity{UserID: u.ID, Provider: "auth0", Subject: "auth0|existing-sub"}).Error; err != nil {
+	if err := svc.DB.Create(&db.UserIdentity{UserID: u.ID, Provider: "test-oidc", Subject: "oidc|existing-sub"}).Error; err != nil {
 		t.Fatalf("create identity: %v", err)
 	}
 
@@ -414,20 +405,20 @@ func TestAuth0Login_DoesNotCapExistingTokens(t *testing.T) {
 		}
 	}
 
-	// Auth0 login issues one new token and no longer enforces a per-user token cap.
+	// OIDC login issues one new token and no longer enforces a per-user token cap.
 	claims := map[string]any{
-		"sub":   "auth0|existing-sub",
+		"sub":   "oidc|existing-sub",
 		"email": "updated@example.com",
 		"name":  "Updated Name",
 	}
-	svc.Auth0 = fakeAuth0DeviceFlow{
-		issuer:   "https://example.auth0.com/",
+	svc.OIDC = fakeOIDCProvider{
+		issuer:   "https://example.oidc.com/",
 		clientID: "test-client-id",
 		idToken:  mustJWT(t, claims),
 	}
 
-	if _, err := svc.Auth0Login(context.Background(), "device-code-123"); err != nil {
-		t.Fatalf("Auth0Login: %v", err)
+	if _, err := svc.OIDCLogin(context.Background(), "device-code-123"); err != nil {
+		t.Fatalf("OIDCLogin: %v", err)
 	}
 
 	var count int64
@@ -451,41 +442,31 @@ func TestAuth0Login_DoesNotCapExistingTokens(t *testing.T) {
 	}
 }
 
-// TestAuth0LoginWithIDToken tests the Auth0LoginWithIDToken service method.
-func TestAuth0LoginWithIDToken(t *testing.T) {
+// TestOIDCLoginWithIDToken tests the OIDCLoginWithIDToken service method.
+func TestOIDCLoginWithIDToken(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
 	t.Run("EmptyIDToken", func(t *testing.T) {
-		_, err := svc.Auth0LoginWithIDToken(context.Background(), "")
+		_, err := svc.OIDCLoginWithIDToken(context.Background(), "")
 		if err == nil {
 			t.Fatalf("expected error, got nil")
 		}
 	})
 
 	t.Run("WhitespaceIDToken", func(t *testing.T) {
-		_, err := svc.Auth0LoginWithIDToken(context.Background(), "   ")
+		_, err := svc.OIDCLoginWithIDToken(context.Background(), "   ")
 		if err == nil {
 			t.Fatalf("expected error, got nil")
 		}
 	})
 
-	t.Run("DoesNotFallbackToOIDC", func(t *testing.T) {
-		svc.Auth0 = nil
-		svc.OIDC = fakeOIDCProvider{}
-
-		_, err := svc.Auth0LoginWithIDToken(context.Background(), "id-token")
-		if err == nil || err.Error() != "auth0 not configured" {
-			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
-		}
-	})
-
 	t.Run("InvalidIDToken", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlow{
-			issuer:   "https://example.auth0.com/",
+		svc.OIDC = fakeOIDCProvider{
+			issuer:   "https://example.oidc.com/",
 			clientID: "test-client-id",
 		}
-		_, err := svc.Auth0LoginWithIDToken(context.Background(), "invalid-token")
+		_, err := svc.OIDCLoginWithIDToken(context.Background(), "invalid-token")
 		if err == nil {
 			t.Fatalf("expected error, got nil")
 		}
@@ -493,7 +474,7 @@ func TestAuth0LoginWithIDToken(t *testing.T) {
 
 	t.Run("NewUser", func(t *testing.T) {
 		claims := map[string]any{
-			"sub":                "auth0|newuser123",
+			"sub":                "oidc|newuser123",
 			"email":              "newuser@example.com",
 			"email_verified":     true,
 			"name":               "New User",
@@ -502,15 +483,15 @@ func TestAuth0LoginWithIDToken(t *testing.T) {
 		}
 		idToken := mustJWT(t, claims)
 
-		svc.Auth0 = fakeAuth0DeviceFlow{
-			issuer:   "https://example.auth0.com/",
+		svc.OIDC = fakeOIDCProvider{
+			issuer:   "https://example.oidc.com/",
 			clientID: "test-client-id",
 			idToken:  idToken,
 		}
 
-		result, err := svc.Auth0LoginWithIDToken(context.Background(), idToken)
+		result, err := svc.OIDCLoginWithIDToken(context.Background(), idToken)
 		if err != nil {
-			t.Fatalf("Auth0LoginWithIDToken failed: %v", err)
+			t.Fatalf("OIDCLoginWithIDToken failed: %v", err)
 		}
 		if result.Token == "" {
 			t.Fatal("expected token to be returned")
@@ -529,12 +510,12 @@ func TestAuth0LoginWithIDToken(t *testing.T) {
 		if err := svc.DB.Create(&u).Error; err != nil {
 			t.Fatalf("create user: %v", err)
 		}
-		if err := svc.DB.Create(&db.UserIdentity{UserID: u.ID, Provider: "auth0", Subject: "auth0|existing-sub"}).Error; err != nil {
+		if err := svc.DB.Create(&db.UserIdentity{UserID: u.ID, Provider: "test-oidc", Subject: "oidc|existing-sub"}).Error; err != nil {
 			t.Fatalf("create identity: %v", err)
 		}
 
 		claims := map[string]any{
-			"sub":                "auth0|existing-sub",
+			"sub":                "oidc|existing-sub",
 			"email":              "existing@example.com",
 			"email_verified":     true,
 			"name":               "Updated Name",
@@ -543,15 +524,15 @@ func TestAuth0LoginWithIDToken(t *testing.T) {
 		}
 		idToken := mustJWT(t, claims)
 
-		svc.Auth0 = fakeAuth0DeviceFlow{
-			issuer:   "https://example.auth0.com/",
+		svc.OIDC = fakeOIDCProvider{
+			issuer:   "https://example.oidc.com/",
 			clientID: "test-client-id",
 			idToken:  idToken,
 		}
 
-		result, err := svc.Auth0LoginWithIDToken(context.Background(), idToken)
+		result, err := svc.OIDCLoginWithIDToken(context.Background(), idToken)
 		if err != nil {
-			t.Fatalf("Auth0LoginWithIDToken failed: %v", err)
+			t.Fatalf("OIDCLoginWithIDToken failed: %v", err)
 		}
 		if result.UserID != u.ID {
 			t.Fatalf("expected user ID %d, got %d", u.ID, result.UserID)
@@ -559,38 +540,29 @@ func TestAuth0LoginWithIDToken(t *testing.T) {
 	})
 }
 
-// TestRequestAuth0DeviceCode tests the RequestAuth0DeviceCode service method.
-func TestRequestAuth0DeviceCode(t *testing.T) {
+// TestRequestOIDCDeviceCode tests the RequestOIDCDeviceCode service method.
+func TestRequestOIDCDeviceCode(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
-	t.Run("DoesNotFallbackToOIDC", func(t *testing.T) {
-		svc.Auth0 = nil
-		svc.OIDC = fakeOIDCProvider{}
-		_, err := svc.RequestAuth0DeviceCode(context.Background())
-		if err == nil || err.Error() != "auth0 not configured" {
-			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
-		}
-	})
-
-	t.Run("Auth0NotConfigured", func(t *testing.T) {
-		svc.Auth0 = nil
+	t.Run("OIDCNotConfigured", func(t *testing.T) {
 		svc.OIDC = nil
-		_, err := svc.RequestAuth0DeviceCode(context.Background())
-		if err == nil || err.Error() != "auth0 not configured" {
-			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
+		svc.OIDC = nil
+		_, err := svc.RequestOIDCDeviceCode(context.Background())
+		if err == nil || err.Error() != "oidc not configured" {
+			t.Fatalf("expected 'oidc not configured' error, got %v", err)
 		}
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlow{
-			issuer:   "https://example.auth0.com/",
+		svc.OIDC = fakeOIDCProvider{
+			issuer:   "https://example.oidc.com/",
 			clientID: "test-client-id",
 		}
 
-		dc, err := svc.RequestAuth0DeviceCode(context.Background())
+		dc, err := svc.RequestOIDCDeviceCode(context.Background())
 		if err != nil {
-			t.Fatalf("RequestAuth0DeviceCode failed: %v", err)
+			t.Fatalf("RequestOIDCDeviceCode failed: %v", err)
 		}
 		if dc.DeviceCode == "" {
 			t.Fatal("expected device code to be returned")
@@ -604,96 +576,87 @@ func TestRequestAuth0DeviceCode(t *testing.T) {
 	})
 }
 
-// TestExchangeAuth0DeviceCode tests the ExchangeAuth0DeviceCode service method.
-func TestExchangeAuth0DeviceCode(t *testing.T) {
+// TestExchangeOIDCDeviceCode tests the ExchangeOIDCDeviceCode service method.
+func TestExchangeOIDCDeviceCode(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
-	t.Run("DoesNotFallbackToOIDC", func(t *testing.T) {
-		svc.Auth0 = nil
-		svc.OIDC = fakeOIDCProvider{}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
-		if err == nil || err.Error() != "auth0 not configured" {
-			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
-		}
-	})
-
-	t.Run("Auth0NotConfigured", func(t *testing.T) {
-		svc.Auth0 = nil
+	t.Run("OIDCNotConfigured", func(t *testing.T) {
 		svc.OIDC = nil
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
-		if err == nil || err.Error() != "auth0 not configured" {
-			t.Fatalf("expected 'auth0 not configured' error, got %v", err)
+		svc.OIDC = nil
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "device-code")
+		if err == nil || err.Error() != "oidc not configured" {
+			t.Fatalf("expected 'oidc not configured' error, got %v", err)
 		}
 	})
 
 	t.Run("EmptyDeviceCode", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlow{
-			issuer:   "https://example.auth0.com/",
+		svc.OIDC = fakeOIDCProvider{
+			issuer:   "https://example.oidc.com/",
 			clientID: "test-client-id",
 		}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "")
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "")
 		if err == nil {
 			t.Fatalf("expected error, got nil")
 		}
 	})
 
 	t.Run("WhitespaceDeviceCode", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlow{
-			issuer:   "https://example.auth0.com/",
+		svc.OIDC = fakeOIDCProvider{
+			issuer:   "https://example.oidc.com/",
 			clientID: "test-client-id",
 		}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "   ")
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "   ")
 		if err == nil {
 			t.Fatalf("expected error, got nil")
 		}
 	})
 
 	t.Run("AuthorizationPending", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlowWithError{
-			exchangeErr: auth0.OAuthError{Code: "authorization_pending"},
+		svc.OIDC = fakeOIDCProviderWithError{
+			exchangeErr: oidc.OAuthError{Code: "authorization_pending"},
 		}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
-		if err == nil || err.Error() != "auth0 authorization pending" {
-			t.Fatalf("expected 'auth0 authorization pending' error, got %v", err)
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "device-code")
+		if err == nil || err.Error() != "oidc authorization pending" {
+			t.Fatalf("expected 'oidc authorization pending' error, got %v", err)
 		}
 	})
 
 	t.Run("SlowDown", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlowWithError{
-			exchangeErr: auth0.OAuthError{Code: "slow_down"},
+		svc.OIDC = fakeOIDCProviderWithError{
+			exchangeErr: oidc.OAuthError{Code: "slow_down"},
 		}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
-		if err == nil || err.Error() != "auth0 slow down" {
-			t.Fatalf("expected 'auth0 slow down' error, got %v", err)
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "device-code")
+		if err == nil || err.Error() != "oidc slow down" {
+			t.Fatalf("expected 'oidc slow down' error, got %v", err)
 		}
 	})
 
 	t.Run("ExpiredToken", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlowWithError{
-			exchangeErr: auth0.OAuthError{Code: "expired_token"},
+		svc.OIDC = fakeOIDCProviderWithError{
+			exchangeErr: oidc.OAuthError{Code: "expired_token"},
 		}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
-		if err == nil || err.Error() != "auth0 device code expired" {
-			t.Fatalf("expected 'auth0 device code expired' error, got %v", err)
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "device-code")
+		if err == nil || err.Error() != "oidc device code expired" {
+			t.Fatalf("expected 'oidc device code expired' error, got %v", err)
 		}
 	})
 
 	t.Run("AccessDenied", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlowWithError{
-			exchangeErr: auth0.OAuthError{Code: "access_denied"},
+		svc.OIDC = fakeOIDCProviderWithError{
+			exchangeErr: oidc.OAuthError{Code: "access_denied"},
 		}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
-		if err == nil || err.Error() != "auth0 access denied" {
-			t.Fatalf("expected 'auth0 access denied' error, got %v", err)
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "device-code")
+		if err == nil || err.Error() != "oidc access denied" {
+			t.Fatalf("expected 'oidc access denied' error, got %v", err)
 		}
 	})
 
 	t.Run("UnknownOAuthError", func(t *testing.T) {
-		svc.Auth0 = fakeAuth0DeviceFlowWithError{
-			exchangeErr: auth0.OAuthError{Code: "unknown_error"},
+		svc.OIDC = fakeOIDCProviderWithError{
+			exchangeErr: oidc.OAuthError{Code: "unknown_error"},
 		}
-		_, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
+		_, err := svc.ExchangeOIDCDeviceCode(context.Background(), "device-code")
 		if err == nil {
 			t.Fatal("expected error for unknown OAuth error")
 		}
@@ -701,7 +664,7 @@ func TestExchangeAuth0DeviceCode(t *testing.T) {
 
 	t.Run("Success", func(t *testing.T) {
 		claims := map[string]any{
-			"sub":                "auth0|user123",
+			"sub":                "oidc|user123",
 			"email":              "user@example.com",
 			"email_verified":     true,
 			"name":               "Test User",
@@ -710,18 +673,18 @@ func TestExchangeAuth0DeviceCode(t *testing.T) {
 		}
 		idToken := mustJWT(t, claims)
 
-		svc.Auth0 = fakeAuth0DeviceFlow{
-			issuer:   "https://example.auth0.com/",
+		svc.OIDC = fakeOIDCProvider{
+			issuer:   "https://example.oidc.com/",
 			clientID: "test-client-id",
 			idToken:  idToken,
 		}
 
-		profile, err := svc.ExchangeAuth0DeviceCode(context.Background(), "device-code")
+		profile, err := svc.ExchangeOIDCDeviceCode(context.Background(), "device-code")
 		if err != nil {
-			t.Fatalf("ExchangeAuth0DeviceCode failed: %v", err)
+			t.Fatalf("ExchangeOIDCDeviceCode failed: %v", err)
 		}
-		if profile.Subject != "auth0|user123" {
-			t.Fatalf("expected subject 'auth0|user123', got %q", profile.Subject)
+		if profile.Subject != "oidc|user123" {
+			t.Fatalf("expected subject 'oidc|user123', got %q", profile.Subject)
 		}
 		if profile.Email != "user@example.com" {
 			t.Fatalf("expected email 'user@example.com', got %q", profile.Email)
@@ -729,19 +692,21 @@ func TestExchangeAuth0DeviceCode(t *testing.T) {
 	})
 }
 
-// fakeAuth0DeviceFlowWithError implements Auth0DeviceFlow for error testing.
-type fakeAuth0DeviceFlowWithError struct {
+// fakeOIDCProviderWithError implements OIDCDeviceFlow for error testing.
+type fakeOIDCProviderWithError struct {
 	exchangeErr error
 }
 
-func (f fakeAuth0DeviceFlowWithError) Issuer() string   { return "https://example.auth0.com/" }
-func (f fakeAuth0DeviceFlowWithError) ClientID() string { return "test-client-id" }
-func (f fakeAuth0DeviceFlowWithError) RequestDeviceCode(ctx context.Context, scopes string) (auth0.DeviceCode, error) {
-	return auth0.DeviceCode{DeviceCode: "device-code-123"}, nil
+func (f fakeOIDCProviderWithError) Issuer() string   { return "https://example.oidc.com/" }
+func (f fakeOIDCProviderWithError) ClientID() string { return "test-client-id" }
+func (f fakeOIDCProviderWithError) Provider() string { return "test-oidc" }
+func (f fakeOIDCProviderWithError) Scopes() string   { return "openid profile email" }
+func (f fakeOIDCProviderWithError) RequestDeviceCode(ctx context.Context, scopes string) (oidc.DeviceCode, error) {
+	return oidc.DeviceCode{DeviceCode: "device-code-123"}, nil
 }
-func (f fakeAuth0DeviceFlowWithError) ExchangeDeviceCode(ctx context.Context, deviceCode string) (auth0.Token, error) {
-	return auth0.Token{}, f.exchangeErr
+func (f fakeOIDCProviderWithError) ExchangeDeviceCode(ctx context.Context, deviceCode string) (oidc.Token, error) {
+	return oidc.Token{}, f.exchangeErr
 }
-func (f fakeAuth0DeviceFlowWithError) VerifyIDToken(ctx context.Context, idToken string) (auth0.IDTokenClaims, error) {
-	return auth0.IDTokenClaims{}, nil
+func (f fakeOIDCProviderWithError) VerifyIDToken(ctx context.Context, idToken string) (oidc.IDTokenClaims, error) {
+	return oidc.IDTokenClaims{}, nil
 }

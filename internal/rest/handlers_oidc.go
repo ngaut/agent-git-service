@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ngaut/agent-git-service/internal/auth0"
+	"github.com/ngaut/agent-git-service/internal/oidc"
 	"github.com/ngaut/agent-git-service/internal/rest/respond"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/service"
@@ -14,11 +14,11 @@ import (
 func (d *Deps) OIDCDeviceCode(w http.ResponseWriter, r *http.Request) {
 	dc, err := d.Svc.RequestOIDCDeviceCode(r.Context())
 	if err != nil {
-		if errors.Is(err, service.ErrAuth0NotConfigured) {
+		if errors.Is(err, service.ErrOIDCNotConfigured) {
 			respond.Error(w, http.StatusNotImplemented, "OIDC is not configured")
 			return
 		}
-		var oe auth0.OAuthError
+		var oe oidc.OAuthError
 		if errors.As(err, &oe) {
 			respond.Error(w, http.StatusBadGateway, "OIDC error: "+oe.Error())
 			return
@@ -47,15 +47,15 @@ func (d *Deps) OIDCSession(w http.ResponseWriter, r *http.Request) {
 	res, err := d.Svc.OIDCLogin(r.Context(), body.DeviceCode)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrAuth0NotConfigured):
+		case errors.Is(err, service.ErrOIDCNotConfigured):
 			respond.Error(w, http.StatusNotImplemented, "OIDC is not configured")
-		case errors.Is(err, service.ErrAuth0Pending):
+		case errors.Is(err, service.ErrOIDCPending):
 			respond.JSON(w, http.StatusAccepted, map[string]any{"status": "authorization_pending"})
-		case errors.Is(err, service.ErrAuth0SlowDown):
+		case errors.Is(err, service.ErrOIDCSlowDown):
 			respond.JSON(w, http.StatusAccepted, map[string]any{"status": "slow_down"})
-		case errors.Is(err, service.ErrAuth0Expired):
+		case errors.Is(err, service.ErrOIDCExpired):
 			respond.ValidationFailed(w, "device_code expired")
-		case errors.Is(err, service.ErrAuth0AccessDenied):
+		case errors.Is(err, service.ErrOIDCAccessDenied):
 			respond.Forbidden(w, "access denied")
 		default:
 			respond.ServiceErrorRequest(r, w, err)
@@ -76,7 +76,7 @@ func (d *Deps) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	res, err := d.Svc.OIDCLoginWithIDToken(r.Context(), body.IDToken)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrAuth0NotConfigured):
+		case errors.Is(err, service.ErrOIDCNotConfigured):
 			respond.Error(w, http.StatusNotImplemented, "OIDC is not configured")
 		case errors.Is(err, service.ErrValidation):
 			respond.Unauthorized(w, "invalid id_token")
@@ -104,7 +104,7 @@ func (d *Deps) OIDCLookup(w http.ResponseWriter, r *http.Request) {
 	res, err := d.Svc.LookupOIDCIdentityWithIDToken(r.Context(), body.IDToken)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrAuth0NotConfigured):
+		case errors.Is(err, service.ErrOIDCNotConfigured):
 			respond.Error(w, http.StatusNotImplemented, "OIDC is not configured")
 		case errors.Is(err, service.ErrValidation):
 			respond.Unauthorized(w, "invalid id_token")

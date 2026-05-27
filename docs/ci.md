@@ -65,6 +65,7 @@ Jobs:
    - cleans up with `make test-clean-all`
 6. `e2e-tests`
    - provisions the test-only TiDB playground with `make test-setup`
+   - starts the deterministic mock OIDC issuer used by the OIDC-backed login E2E flows
    - starts `gh-server` against TiDB
    - runs the shell E2E inventory with `make test-e2e`
    - cleans up with `make test-clean-all`

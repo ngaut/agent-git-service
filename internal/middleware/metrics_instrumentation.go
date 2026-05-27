@@ -87,7 +87,7 @@ func deriveOperation(method, route string, state *operationState) (string, strin
 		return "git", "git_push"
 	case route == "/api/graphql" || route == "/graphql":
 		return "graphql", "graphql"
-	case strings.HasPrefix(route, "/login/") || strings.HasPrefix(route, "/api/v3/auth0/") || strings.HasPrefix(route, "/api/v3/oidc/"):
+	case strings.HasPrefix(route, "/login/") || strings.HasPrefix(route, "/api/v3/oidc/"):
 		return "rest", "auth"
 	case route == "/api/v3" || route == "/api/v3/" || route == "/api/v3/meta" || route == "/api/v3/rate_limit":
 		return "rest", "api_discovery"
