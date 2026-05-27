@@ -189,6 +189,47 @@ func TestWikiV2_ReadEndpointsExposeProvisionalURLs(t *testing.T) {
 		t.Fatalf("wiki-v2 search url = %q, want wiki-v2 path", got)
 	}
 
+	if _, err := h.Svc.CreateLabel(service.ContextWithUser(ctx, owner), full, "runbook", "0e8a16", ""); err != nil {
+		t.Fatalf("create label: %v", err)
+	}
+	listLabels := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/pages/home/labels", ownerToken)
+	assertStatusCode(t, listLabels, http.StatusOK)
+	listLabelsBody := testharness.DecodeJSONArray(t, listLabels)
+	if len(listLabelsBody) != 0 {
+		t.Fatalf("wiki-v2 list labels: got %#v", listLabelsBody)
+	}
+
+	addLabels := h.DoRESTJSONWithToken(t, http.MethodPost, "/api/v3/repos/"+full+"/wiki-v2/pages/home/labels", ownerToken, map[string]any{
+		"labels": []string{"runbook"},
+	})
+	assertStatusCode(t, addLabels, http.StatusMethodNotAllowed)
+
+	setLabels := h.DoRESTJSONWithToken(t, http.MethodPut, "/api/v3/repos/"+full+"/wiki-v2/pages/home/labels", ownerToken, map[string]any{
+		"labels": []string{"runbook"},
+	})
+	assertStatusCode(t, setLabels, http.StatusMethodNotAllowed)
+
+	removeLabel := h.DoRESTWithToken(t, http.MethodDelete, "/api/v3/repos/"+full+"/wiki-v2/pages/home/labels/runbook", ownerToken)
+	assertStatusCode(t, removeLabel, http.StatusNotFound)
+
+	removeAllLabels := h.DoRESTWithToken(t, http.MethodDelete, "/api/v3/repos/"+full+"/wiki-v2/pages/home/labels", ownerToken)
+	assertStatusCode(t, removeAllLabels, http.StatusMethodNotAllowed)
+
+	legacyAddLabels := h.DoRESTJSONWithToken(t, http.MethodPost, "/api/v3/repos/"+full+"/wiki/pages/home/labels", ownerToken, map[string]any{
+		"labels": []string{"runbook"},
+	})
+	assertStatusCode(t, legacyAddLabels, http.StatusOK)
+
+	listLabels = h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/pages/home/labels", ownerToken)
+	assertStatusCode(t, listLabels, http.StatusOK)
+	listLabelsBody = testharness.DecodeJSONArray(t, listLabels)
+	if len(listLabelsBody) != 1 {
+		t.Fatalf("wiki-v2 list labels after legacy add: got %#v", listLabelsBody)
+	}
+	if got, _ := listLabelsBody[0]["name"].(string); got != "runbook" {
+		t.Fatalf("wiki-v2 label name = %q, want runbook", got)
+	}
+
 	tree := h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/"+full+"/wiki-v2/tree", ownerToken)
 	assertStatusCode(t, tree, http.StatusOK)
 	treeBody := testharness.DecodeJSONArray(t, tree)

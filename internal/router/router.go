@@ -471,6 +471,7 @@ func registerRepoWikiRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/pages", handlers.ListWikiV2Pages)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/search", handlers.SearchWikiV2Pages)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}", handlers.GetWikiV2Page)
+	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/labels", handlers.ListWikiV2PageLabels)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/history", handlers.ListWikiV2PageHistory)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki-v2/pages/{slug}/backlinks", handlers.ListWikiV2Backlinks)
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki-v2/reconcile/request", handlers.RequestWikiV2Reconcile)
