@@ -78,6 +78,8 @@ func TestSlockLoginWithCodeCreatesSession(t *testing.T) {
 					ServerSlug:        "workspace",
 					PreferredUsername: "Dev Assistant",
 					Name:              "Dev Assistant",
+					Picture:           stringPtr("https://cdn.slock.ai/avatar.png"),
+					AvatarURL:         stringPtr("pixel:random:42"),
 				},
 			}
 			svc.SlockOAuth = provider
@@ -112,7 +114,6 @@ func TestSlockLoginWithCodeCreatesSession(t *testing.T) {
 			if user.Name != "Dev Assistant" {
 				t.Fatalf("Name: got %q", user.Name)
 			}
-
 			var ident db.UserIdentity
 			if err := svc.DB.First(&ident, "user_id = ? AND provider = ? AND subject = ?", result.UserID, "slock", "srv-1:"+tt.slockType+"-sub").Error; err != nil {
 				t.Fatalf("load identity: %v", err)
@@ -127,6 +128,10 @@ func TestSlockLoginWithCodeCreatesSession(t *testing.T) {
 			}
 		})
 	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func TestSlockLoginWithCodeReusesExistingIdentity(t *testing.T) {

@@ -43,12 +43,16 @@ func (d *Deps) SlockCallback(w http.ResponseWriter, r *http.Request) {
 
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	cookie, err := r.Cookie(slockOAuthStateCookieName)
-	if state == "" || err != nil || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookie.Value)), []byte(state)) != 1 {
+	stateValidated := false
+	if err == nil {
+		if state == "" || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookie.Value)), []byte(state)) != 1 {
+			clearStateCookie()
+			respond.ValidationFailed(w, "invalid or missing state")
+			return
+		}
+		stateValidated = true
 		clearStateCookie()
-		respond.ValidationFailed(w, "invalid or missing state")
-		return
 	}
-	clearStateCookie()
 
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	if code == "" {
@@ -78,6 +82,18 @@ func (d *Deps) SlockCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !stateValidated || slockCallbackWantsTokenJSON(r) {
+		respond.JSON(w, http.StatusOK, map[string]any{
+			"token":     res.Token,
+			"user_id":   res.UserID,
+			"login":     res.Login,
+			"type":      res.Type,
+			"sub":       res.Sub,
+			"server_id": res.ServerID,
+		})
+		return
+	}
+
 	authCode, codeVerifier, err := d.createSlockConsoleAuthorizationCode(r, res)
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -103,6 +119,20 @@ func (d *Deps) SlockCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, slockOAuthVerifierCookie(codeVerifier, r, false))
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+func slockCallbackWantsTokenJSON(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("format")), "json") {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("response")), "token") {
+		return true
+	}
+	accept := strings.ToLower(r.Header.Get("Accept"))
+	return strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/html")
 }
 
 func slockOAuthStateCookie(value string, r *http.Request, expire bool) *http.Cookie {

@@ -120,6 +120,7 @@ type Userinfo struct {
 	ServerRole        *string `json:"server_role,omitempty"`
 	PreferredUsername string  `json:"preferred_username,omitempty"`
 	Name              string  `json:"name,omitempty"`
+	Picture           *string `json:"picture,omitempty"`
 	AvatarURL         *string `json:"avatar_url,omitempty"`
 	Description       *string `json:"description,omitempty"`
 }

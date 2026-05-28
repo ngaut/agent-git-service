@@ -132,7 +132,7 @@ func buildRESTOpenAPIPaths() map[string]any {
 				param("code", "string"),
 				param("error", "string"),
 				param("state", "string"),
-			), response(302, "Redirect the browser to the console with a one-time AGS authorization code while keeping the PKCE verifier in an AGS-only cookie")),
+			), response(302, "Browser callback redirects to the console with a one-time AGS authorization code and PKCE verifier cookie; direct agent callback without browser state returns durable token JSON")),
 		},
 		"/api/v3/presence/heartbeat": map[string]any{
 			"post": operation("postPresenceHeartbeat", "Publish a presence heartbeat for the authenticated user.", auth(), jsonBody(true, map[string]any{
