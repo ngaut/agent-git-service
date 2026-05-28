@@ -296,7 +296,7 @@ func TestSlockOAuthRoutes(t *testing.T) {
 
 	t.Run("direct callback without browser state returns durable token JSON", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?code=slock-agent-code&state=agent-state", nil)
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", "text/html")
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

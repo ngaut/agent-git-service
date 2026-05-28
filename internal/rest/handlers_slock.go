@@ -82,7 +82,7 @@ func (d *Deps) SlockCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !stateValidated || slockCallbackWantsTokenJSON(r) {
+	if !stateValidated {
 		respond.JSON(w, http.StatusOK, map[string]any{
 			"token":     res.Token,
 			"user_id":   res.UserID,
@@ -119,20 +119,6 @@ func (d *Deps) SlockCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, slockOAuthVerifierCookie(codeVerifier, r, false))
 	http.Redirect(w, r, target, http.StatusFound)
-}
-
-func slockCallbackWantsTokenJSON(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("format")), "json") {
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("response")), "token") {
-		return true
-	}
-	accept := strings.ToLower(r.Header.Get("Accept"))
-	return strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/html")
 }
 
 func slockOAuthStateCookie(value string, r *http.Request, expire bool) *http.Cookie {

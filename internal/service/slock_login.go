@@ -67,7 +67,7 @@ func (s *Service) SlockLoginWithCode(ctx context.Context, code string) (SlockSes
 		Name:              strings.TrimSpace(ui.Name),
 		Nickname:          strings.TrimSpace(ui.PreferredUsername),
 		PreferredUsername: strings.TrimSpace(ui.PreferredUsername),
-		Picture:           firstNonEmptySlock(slockOptionalString(ui.Picture), slockOptionalString(ui.AvatarURL)),
+		Picture:           slockOptionalString(ui.Picture),
 		UserKind:          userKind,
 		LoginCandidates:   slockLoginCandidates(ui),
 		RawClaims:         slockRawClaims(ui),
