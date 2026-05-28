@@ -35,6 +35,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/slockoauth"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
@@ -422,6 +423,26 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 		)
 	} else {
 		slog.Warn("workflow execution disabled; set ENABLE_WORKFLOW_EXEC=1 to allow sandboxed workflow steps")
+	}
+	if cfg.SlockOAuthEnabled() {
+		c, err := slockoauth.New(slockoauth.Config{
+			Origin:          cfg.SlockOrigin,
+			APIOrigin:       cfg.SlockAPIOrigin,
+			ClientID:        cfg.SlockClientID,
+			ClientSecret:    cfg.SlockClientSecret,
+			CallbackBaseURL: cfg.BaseURL,
+		})
+		if err != nil {
+			return deps, fmt.Errorf("slockoauth: %w", err)
+		}
+		svcDeps.SlockOAuth = c
+		slog.Info("login-with-slock enabled",
+			"client_id", cfg.SlockClientID,
+			"slock_origin", cfg.SlockOrigin,
+			"callback", c.CallbackURL(),
+		)
+	} else {
+		slog.Info("login-with-slock disabled", "reason", "SLOCK_* OAuth configuration not set")
 	}
 	if cfg.OIDCProvider != "" && cfg.OIDCClientID != "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "") {
 		c, err := oidc.New(oidc.Config{

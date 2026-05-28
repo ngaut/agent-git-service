@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,6 +135,51 @@ func TestNewOverrides(t *testing.T) {
 	}
 	if cfg.OIDCScopes != "openid profile email groups" {
 		t.Fatalf("expected explicit oidc scopes, got %q", cfg.OIDCScopes)
+	}
+}
+
+func TestNewLoadsSlockOAuthConfig(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+	t.Setenv("SLOCK_ORIGIN", " https://app.slock.ai ")
+	t.Setenv("SLOCK_API_ORIGIN", " https://api.slock.ai ")
+	t.Setenv("SLOCK_CLIENT_ID", "slock-client")
+	t.Setenv("SLOCK_CLIENT_SECRET", "slock-secret")
+
+	cfg, err := New()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.SlockOAuthEnabled() {
+		t.Fatal("expected Slock OAuth to be enabled")
+	}
+	if cfg.SlockOrigin != "https://app.slock.ai" {
+		t.Fatalf("SlockOrigin: got %q", cfg.SlockOrigin)
+	}
+	if cfg.SlockAPIOrigin != "https://api.slock.ai" {
+		t.Fatalf("SlockAPIOrigin: got %q", cfg.SlockAPIOrigin)
+	}
+	if cfg.SlockClientID != "slock-client" {
+		t.Fatalf("SlockClientID: got %q", cfg.SlockClientID)
+	}
+	if cfg.SlockClientSecret != "slock-secret" {
+		t.Fatalf("SlockClientSecret: got %q", cfg.SlockClientSecret)
+	}
+}
+
+func TestNewRejectsPartialSlockOAuthConfig(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+	t.Setenv("SLOCK_ORIGIN", "https://app.slock.ai")
+	t.Setenv("SLOCK_API_ORIGIN", "")
+	t.Setenv("SLOCK_CLIENT_ID", "slock-client")
+	t.Setenv("SLOCK_CLIENT_SECRET", "")
+
+	_, err := New()
+	if err == nil {
+		t.Fatal("expected partial Slock config to fail")
+	}
+	if !strings.Contains(err.Error(), "login-with-slock: partial configuration") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

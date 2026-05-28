@@ -30,6 +30,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest"
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/slockoauth"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
@@ -56,6 +57,7 @@ func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps,
 		t.Fatalf("open db: %v", err)
 	}
 	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}, &db.DeviceCodeAuditLog{}, &db.AuthorizationCode{}, &db.Repository{}, &db.RepoRedirect{}, &db.Label{}, &db.WikiPageLabel{}, &db.WikiSearchDocument{},
+		&db.UserIdentity{},
 		&db.WikiPage{}, &db.WikiPageRevision{}, &db.WikiChangeset{}, &db.WikiRepoHead{}, &db.WikiDirIndex{}, &db.WikiPageLink{}, &db.WikiBlobRef{}, &db.WikiPendingBlob{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -91,7 +93,7 @@ func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps,
 	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
 
 	gqlSrv := graphql.NewServer(svc)
-	restDeps := &rest.Deps{Svc: svc}
+	restDeps := &rest.Deps{Svc: svc, ConsoleBaseURL: "http://console.localhost"}
 	gitHandler := githttp.New(gs, svc)
 	oauthHandler := &oauth.Handler{Svc: svc}
 
@@ -129,6 +131,188 @@ func oauthAuthorizeRequestPath(t *testing.T, redirectURI string) string {
 		"code_challenge_method": []string{"S256"},
 	}
 	return "/login/oauth/authorize?" + query.Encode()
+}
+
+type routerFakeSlockOAuthProvider struct {
+	loginURL string
+}
+
+func (f routerFakeSlockOAuthProvider) ExchangeCode(ctx context.Context, code string) (slockoauth.Token, error) {
+	return slockoauth.Token{AccessToken: "slock-access-token"}, nil
+}
+
+func (f routerFakeSlockOAuthProvider) Userinfo(ctx context.Context, accessToken string) (slockoauth.Userinfo, error) {
+	return slockoauth.Userinfo{
+		Sub:               "agent-sub",
+		Type:              "agent",
+		ClientID:          "slock-client",
+		ServerID:          "srv-1",
+		ServerSlug:        "workspace",
+		PreferredUsername: "agent",
+		Name:              "Slock Agent",
+	}, nil
+}
+
+func (f routerFakeSlockOAuthProvider) LoginURL(state string) string {
+	if state == "" {
+		return f.loginURL
+	}
+	sep := "?"
+	if strings.Contains(f.loginURL, "?") {
+		sep = "&"
+	}
+	return f.loginURL + sep + "state=" + state
+}
+
+func TestSlockOAuthRoutes(t *testing.T) {
+	svc, mux := setupRouterTest(t)
+
+	t.Run("not configured", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/slock/login", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotImplemented {
+			t.Fatalf("expected 501, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	svc.SlockOAuth = routerFakeSlockOAuthProvider{
+		loginURL: "https://app.slock.ai/login-with-slock/setup?client_id=slock-client",
+	}
+
+	t.Run("login redirects", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/slock/login", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
+		}
+		got := rec.Header().Get("Location")
+		loc, err := url.Parse(got)
+		if err != nil {
+			t.Fatalf("parse Location: %v", err)
+		}
+		if loc.Scheme != "https" || loc.Host != "app.slock.ai" || loc.Path != "/login-with-slock/setup" {
+			t.Fatalf("unexpected redirect target: %q", got)
+		}
+		if loc.Query().Get("client_id") != "slock-client" {
+			t.Fatalf("client_id: got %q", loc.Query().Get("client_id"))
+		}
+		state := loc.Query().Get("state")
+		if len(state) != 32 {
+			t.Fatalf("expected 32-char state, got %q", state)
+		}
+		cookie := rec.Result().Cookies()
+		if len(cookie) != 1 {
+			t.Fatalf("expected one cookie, got %d", len(cookie))
+		}
+		if cookie[0].Name != "slock_oauth_state" || cookie[0].Value != state {
+			t.Fatalf("cookie/state mismatch: cookie=%#v state=%q", cookie[0], state)
+		}
+		if !cookie[0].HttpOnly || cookie[0].SameSite != http.SameSiteLaxMode {
+			t.Fatalf("unexpected cookie flags: %#v", cookie[0])
+		}
+	})
+
+	t.Run("callback creates session", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?code=slock-code&state=expected-state", nil)
+		req.AddCookie(&http.Cookie{Name: "slock_oauth_state", Value: "expected-state"})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
+		}
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		if err != nil {
+			t.Fatalf("parse redirect target: %v", err)
+		}
+		if loc.Scheme != "http" || loc.Host != "console.localhost" || loc.Path != "" {
+			t.Fatalf("unexpected console redirect: %q", loc.String())
+		}
+		if loc.Query().Get("code") == "" || loc.Query().Get("login") == "" {
+			t.Fatalf("expected auth code and login in redirect query, got %q", loc.String())
+		}
+		if loc.Query().Get("type") != "agent" || loc.Query().Get("sub") != "agent-sub" || loc.Query().Get("server_id") != "srv-1" {
+			t.Fatalf("unexpected callback redirect query: %q", loc.String())
+		}
+		var codeVerifier string
+		for _, cookie := range rec.Result().Cookies() {
+			if cookie.Name == "slock_oauth_verifier" {
+				codeVerifier = cookie.Value
+				if !cookie.HttpOnly {
+					t.Fatalf("expected verifier cookie to be HttpOnly: %#v", cookie)
+				}
+				if cookie.Path != "/login/oauth/access_token" {
+					t.Fatalf("unexpected verifier cookie path: %#v", cookie)
+				}
+			}
+		}
+		if codeVerifier == "" {
+			t.Fatal("expected callback response to emit slock_oauth_verifier cookie")
+		}
+		var authCode db.AuthorizationCode
+		if err := svc.DB.First(&authCode, "code = ?", loc.Query().Get("code")).Error; err != nil {
+			t.Fatalf("load auth code: %v", err)
+		}
+		if authCode.UserID == nil || *authCode.UserID == 0 {
+			t.Fatalf("expected auth code to be bound to a user, got %#v", authCode)
+		}
+		if authCode.CodeChallengeMethod != "S256" {
+			t.Fatalf("expected PKCE S256 auth code, got %#v", authCode)
+		}
+		sum := sha256.Sum256([]byte(codeVerifier))
+		if authCode.CodeChallenge != base64.RawURLEncoding.EncodeToString(sum[:]) {
+			t.Fatalf("code challenge mismatch: got %q", authCode.CodeChallenge)
+		}
+		var tokenCount int64
+		if err := svc.DB.Model(&db.Token{}).Where("user_id = ?", *authCode.UserID).Count(&tokenCount).Error; err != nil {
+			t.Fatalf("count transient tokens: %v", err)
+		}
+		if tokenCount != 0 {
+			t.Fatalf("expected no durable tokens left after callback handoff, found %d", tokenCount)
+		}
+
+		exchangeBody, _ := json.Marshal(map[string]string{
+			"code": authCode.Code,
+		})
+		exchangeReq := httptest.NewRequest(http.MethodPost, "/login/oauth/access_token", bytes.NewReader(exchangeBody))
+		exchangeReq.Header.Set("Content-Type", "application/json")
+		exchangeReq.AddCookie(&http.Cookie{Name: "slock_oauth_verifier", Value: codeVerifier})
+		exchangeRec := httptest.NewRecorder()
+		mux.ServeHTTP(exchangeRec, exchangeReq)
+		if exchangeRec.Code != http.StatusOK {
+			t.Fatalf("exchange auth code: expected 200, got %d: %s", exchangeRec.Code, exchangeRec.Body.String())
+		}
+		cleared := false
+		for _, cookie := range exchangeRec.Result().Cookies() {
+			if cookie.Name == "slock_oauth_verifier" && cookie.MaxAge < 0 {
+				cleared = true
+			}
+		}
+		if !cleared {
+			t.Fatal("expected access token exchange to clear slock_oauth_verifier cookie")
+		}
+	})
+
+	t.Run("callback requires code", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?state=expected-state", nil)
+		req.AddCookie(&http.Cookie{Name: "slock_oauth_state", Value: "expected-state"})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("callback requires matching state", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?code=slock-code&state=wrong-state", nil)
+		req.AddCookie(&http.Cookie{Name: "slock_oauth_state", Value: "expected-state"})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

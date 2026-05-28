@@ -29,6 +29,8 @@ type OIDCProfile struct {
 	Nickname          string
 	PreferredUsername string
 	Picture           string
+	UserKind          string
+	LoginCandidates   []string
 	RawClaims         map[string]any
 }
 

@@ -287,6 +287,8 @@ Add direct service tests for:
 - device-code exchange paths
 - user resolution by token
 - generic OIDC discovery, device-code exchange, and local-user/token creation flows
+- Login-with-Slock code exchange, userinfo validation, local identity linking,
+  and human versus agent user-kind mapping
 
 #### Control Plane
 
@@ -381,7 +383,8 @@ Phase 2 is not complete until each surface has at least one core-path integratio
 12. outside collaborator listing and collaborator annotations on org-owned repos
 13. team-repo permission alias compatibility, including canonical `read`/`write` decisions for `triage` and `maintain`
 14. OIDC helper endpoints under `/api/v3/oidc/*`
-15. control-plane-mode token routing through middleware into tenant-scoped service DB access
+15. Login-with-Slock helper endpoints under `/auth/slock/*`
+16. control-plane-mode token routing through middleware into tenant-scoped service DB access
 
 #### GraphQL
 
