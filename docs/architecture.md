@@ -17,9 +17,10 @@ It exposes four primary surfaces:
 - OAuth device flow
 
 It also exposes additive repo-specific endpoints such as OIDC-backed human-login
-helpers under `/api/v3/oidc/*`, plus admin-only wiki maintenance endpoints such
-as `/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks` for stale wiki
-ref-lock recovery.
+helpers under `/api/v3/oidc/*`, Login-with-Slock browser helpers under
+`/auth/slock/*`, plus admin-only wiki maintenance endpoints such as
+`/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks` for stale wiki ref-lock
+recovery.
 
 From a user-facing perspective, the main entry points are GitHub-compatible clients, including `gh` CLI, plus the REST discovery/auth endpoints `/api/v3/`, `/api/v3/meta`, and `/api/v3/rate_limit`. Git Smart HTTP is typically exercised after that setup path, when a Git client or credential helper crosses into clone, fetch, or push.
 
@@ -66,6 +67,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 | `internal/middleware` | Auth and request-size middleware |
 | `internal/oauth` | OAuth device-flow endpoints |
 | `internal/oidc` | Generic OIDC discovery, device flow, and ID token verification client |
+| `internal/slockoauth` | Login-with-Slock OAuth-style client for code exchange and userinfo |
 | `internal/authn` | Shared token-resolver interfaces and auth sentinel errors |
 | `internal/embedding` | Optional embedding-backed search support |
 | `internal/crypto` | NaCl-based encryption primitives for secrets |
@@ -124,7 +126,7 @@ The startup sequence is:
 4. Initialize the main application database, run migrations, and seed default records.
 5. Initialize embeddings if `EMBEDDING_API_KEY` is present.
 6. Initialize the Git store rooted at `GIT_REPO_DIR`; when `CONTROL_PLANE_DSN` is set, enable tenant-isolated repo roots with a default-tenant fallback.
-7. Build the shared `service.Service`, wiring DB, Git store, base URL, embeddings, generic OIDC, and local-dev auth conveniences.
+7. Build the shared `service.Service`, wiring DB, Git store, base URL, embeddings, generic OIDC, optional Login-with-Slock, and local-dev auth conveniences.
 8. If `CONTROL_PLANE_DSN` is set, initialize the control-plane database and `controlplane.DBRouter`.
 9. Initialize REST transforms, GraphQL server, REST deps, Git HTTP handler, OAuth handler, metrics, and readiness endpoints.
 10. Register routes and start listeners.
@@ -155,6 +157,9 @@ The REST prefix is fixed at `/api/v3` to remain compatible with GitHub-compatibl
 
 - OAuth endpoints are unauthenticated.
 - OIDC helper endpoints under `/api/v3/oidc/*` are unauthenticated but service-backed.
+- Login-with-Slock helper endpoints under `/auth/slock/*` are unauthenticated
+  but service-backed; they implement an external login flow that mints a local
+  AGS token after Slock userinfo validation.
 - Git Smart HTTP endpoints are routed separately from the REST/GraphQL API tree, but they still use the same auth middleware (`TokenAuth` in control-plane mode, `OptionalTokenAuth` in single-DB mode).
 - Discovery endpoints under `/api/v3`, `/api/v3/meta`, and `/api/v3/rate_limit` use optional auth and are the main user-visible discovery/auth bootstrap routes for GitHub-compatible clients, including `gh`.
 - The authenticated API contains REST and GraphQL endpoints, including the current organization-governance surfaces for explicit org creation, org invitations, teams, and outside-collaborator inspection.
@@ -334,7 +339,7 @@ not treated as the authorization decision.
 
 This is the current local/offline behavior, not the planned multi-agent model. The future Git transport auth design is documented in [design/multi-agent.md](design/multi-agent.md).
 
-### OIDC Human Login
+### OIDC and Slock Login
 
 When generic OIDC is configured, REST exposes these unauthenticated helper endpoints:
 
@@ -346,6 +351,26 @@ When generic OIDC is configured, REST exposes these unauthenticated helper endpo
 These endpoints stay transport-thin: `internal/oidc` owns discovery, optional
 device-authorization exchange, and ID token verification, while `service` owns
 mapping verified external identities onto local application users and tokens.
+
+When Login-with-Slock is configured, REST also exposes:
+
+- `GET /auth/slock/login`
+- `GET /auth/slock/callback`
+
+Slock does not expose a standard OIDC discovery document, so `internal/slockoauth`
+owns the provider-specific browser login URL, `/api/oauth/token` code exchange,
+and `/api/oauth/userinfo` lookup. `service` maps verified Slock userinfo into the
+same local identity/session path as OIDC with provider `slock` and subject
+`<server_id>:<sub>`. Slock `type=human` maps to a human user; `type=agent` maps
+to an agent user. The callback URL is derived from `BASE_URL`, so there is no
+separate `APP_ORIGIN` setting. On success, the browser callback mints a
+short-lived one-time AGS authorization code plus a PKCE verifier. AGS stores
+the verifier in an AGS-scoped `HttpOnly` cookie on `/login/oauth/access_token`
+and then redirects the browser to `CONSOLE_BASE_URL` with the code plus
+non-secret identity metadata in the query string. The console completes sign-in
+by exchanging the code through the existing `/login/oauth/access_token` path
+with browser credentials included, so a copied redirect URL is not sufficient
+to mint a durable AGS bearer token.
 
 ### OAuth Device Flow (Secured)
 

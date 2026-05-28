@@ -19,6 +19,8 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
+const slockOAuthVerifierCookieName = "slock_oauth_verifier"
+
 // Handler holds the service dependency for OAuth endpoints.
 type Handler struct {
 	Svc *service.Service
@@ -123,6 +125,20 @@ func (h *Handler) AccessToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case req.Code != "":
+		if strings.TrimSpace(req.CodeVerifier) == "" {
+			if cookie, cookieErr := r.Cookie(slockOAuthVerifierCookieName); cookieErr == nil {
+				req.CodeVerifier = strings.TrimSpace(cookie.Value)
+			}
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     slockOAuthVerifierCookieName,
+			Value:    "",
+			Path:     "/login/oauth/access_token",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteNoneMode,
+			Secure:   r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https"),
+		})
 		accessToken, err = h.Svc.ExchangeAuthorizationCode(r.Context(), req.Code, req.CodeVerifier)
 		if err != nil {
 			if errors.Is(err, service.ErrNotFound) ||

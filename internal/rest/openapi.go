@@ -124,6 +124,16 @@ func buildRESTOpenAPIPaths() map[string]any {
 				"id_token": stringSchema("OIDC ID token to validate and map to a local user."),
 			}, []string{"id_token"}), nil, response(200, "Identity resolved")),
 		},
+		"/auth/slock/login": map[string]any{
+			"get": operation("startSlockLogin", "Redirect the browser to Login-with-Slock.", nil, nil, nil, response(302, "Redirect to Slock login")),
+		},
+		"/auth/slock/callback": map[string]any{
+			"get": operation("handleSlockCallback", "Exchange a Login-with-Slock authorization code for a local session.", nil, nil, queryParams(
+				param("code", "string"),
+				param("error", "string"),
+				param("state", "string"),
+			), response(302, "Redirect the browser to the console with a one-time AGS authorization code while keeping the PKCE verifier in an AGS-only cookie")),
+		},
 		"/api/v3/presence/heartbeat": map[string]any{
 			"post": operation("postPresenceHeartbeat", "Publish a presence heartbeat for the authenticated user.", auth(), jsonBody(true, map[string]any{
 				"issue_id": map[string]any{"type": "integer", "minimum": 1},

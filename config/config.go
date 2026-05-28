@@ -65,6 +65,14 @@ type Config struct {
 	OIDCScopes            string
 	OIDCAllowInsecureHTTP bool
 
+	// Login-with-Slock OAuth configuration. All four must be set together to
+	// enable /auth/slock/login and /auth/slock/callback. The callback URL is
+	// derived from BaseURL, so no separate app origin is required.
+	SlockOrigin       string
+	SlockAPIOrigin    string
+	SlockClientID     string
+	SlockClientSecret string
+
 	// ConsoleBaseURL is the base URL of the console frontend used for browser redirects.
 	ConsoleBaseURL string
 
@@ -108,6 +116,10 @@ func New() (Config, error) {
 		OIDCAudience:          os.Getenv("OIDC_AUDIENCE"),
 		OIDCScopes:            os.Getenv("OIDC_SCOPES"),
 		OIDCAllowInsecureHTTP: os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "true" || os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "1",
+		SlockOrigin:           os.Getenv("SLOCK_ORIGIN"),
+		SlockAPIOrigin:        os.Getenv("SLOCK_API_ORIGIN"),
+		SlockClientID:         os.Getenv("SLOCK_CLIENT_ID"),
+		SlockClientSecret:     os.Getenv("SLOCK_CLIENT_SECRET"),
 		EnableWorkflowExec:    os.Getenv("ENABLE_WORKFLOW_EXEC") == "true" || os.Getenv("ENABLE_WORKFLOW_EXEC") == "1",
 		WorkflowExecImage:     os.Getenv("WORKFLOW_EXEC_IMAGE"),
 		WorkflowExecCPUs:      os.Getenv("WORKFLOW_EXEC_CPUS"),
@@ -199,7 +211,22 @@ func Normalize(cfg Config) (Config, error) {
 	if strings.TrimSpace(cfg.OIDCProvider) == "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "" || cfg.OIDCClientID != "") {
 		cfg.OIDCProvider = defaultOIDCProvider(cfg.OIDCIssuer, cfg.OIDCDiscoveryURL)
 	}
+	cfg.SlockOrigin = strings.TrimSpace(cfg.SlockOrigin)
+	cfg.SlockAPIOrigin = strings.TrimSpace(cfg.SlockAPIOrigin)
+	cfg.SlockClientID = strings.TrimSpace(cfg.SlockClientID)
+	cfg.SlockClientSecret = strings.TrimSpace(cfg.SlockClientSecret)
+	if err := validateSlockOAuthConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// SlockOAuthEnabled reports whether Login-with-Slock is configured.
+func (c Config) SlockOAuthEnabled() bool {
+	return strings.TrimSpace(c.SlockOrigin) != "" &&
+		strings.TrimSpace(c.SlockAPIOrigin) != "" &&
+		strings.TrimSpace(c.SlockClientID) != "" &&
+		strings.TrimSpace(c.SlockClientSecret) != ""
 }
 
 func getEnv(key, fallback string) string {
@@ -234,4 +261,29 @@ func looksLikeAuth0Issuer(raw string) bool {
 	}
 	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
 	return host == "auth0.com" || strings.HasSuffix(host, ".auth0.com")
+}
+
+func validateSlockOAuthConfig(cfg Config) error {
+	type envValue struct {
+		name  string
+		value string
+	}
+	required := []envValue{
+		{name: "SLOCK_ORIGIN", value: cfg.SlockOrigin},
+		{name: "SLOCK_API_ORIGIN", value: cfg.SlockAPIOrigin},
+		{name: "SLOCK_CLIENT_ID", value: cfg.SlockClientID},
+		{name: "SLOCK_CLIENT_SECRET", value: cfg.SlockClientSecret},
+	}
+	var set, missing []string
+	for _, item := range required {
+		if strings.TrimSpace(item.value) == "" {
+			missing = append(missing, item.name)
+			continue
+		}
+		set = append(set, item.name)
+	}
+	if len(set) > 0 && len(missing) > 0 {
+		return fmt.Errorf("login-with-slock: partial configuration; set %v, missing %v", set, missing)
+	}
+	return nil
 }

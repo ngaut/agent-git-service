@@ -47,8 +47,8 @@ The main runtime layers are:
 - `gitstore`
 
 Supporting packages such as `config`, `oauth`, `authn`, `githttp`, `oidc`,
-`rest/respond`, `rest/transform`, `tenant`, `ratelimit`, `metrics`,
-`logging`, `httputil`, `testharness`,
+`slockoauth`, `rest/respond`, `rest/transform`, `tenant`, `ratelimit`,
+`metrics`, `logging`, `httputil`, `testharness`,
 `apperrors`, `crypto`, `embedding`, and `randutil` are included where they
 materially affect the contracts.
 
@@ -87,6 +87,7 @@ document the relevant contract below in the same change.
 | `rest` | GitHub REST API surface |
 | `router` | route registration and host rewrite |
 | `service` | business logic and cross-store orchestration |
+| `slockoauth` | Login-with-Slock OAuth-style code exchange and userinfo client |
 | `tenant` | gitstore tenant context helpers for physical repo scoping |
 | `testharness` | production-wired service and router test fixtures |
 | `wikicatalog` | legacy wiki catalog primitives, slug canonicalization, and transitional blob/CAS helpers |
@@ -101,7 +102,7 @@ document the relevant contract below in the same change.
 | `rest` | HTTP request decode, REST response codes, REST JSON shapes | `service`, `controlplane`, `rest/respond`, `rest/transform`, `ratelimit`, `db` model types, `Svc.Git` via `*service.Service` | GORM queries, GraphQL helpers |
 | `graphql` | GraphQL request parse, resolver dispatch, GraphQL response shapes, field filtering | `service`, `db` model types, `rest/respond` for HTTP JSON writeout, selected `Svc.Git` and `Svc.DB` access via `*service.Service` | `rest/transform` |
 | `controlplane` | control-plane schema, token-to-tenant DB routing, tenant-user bootstrap | `db`, `crypto`, GORM, standard library | `router`, `rest`, `graphql`, `gitstore`, transport rendering |
-| `service` | business rules, persistence orchestration, Git orchestration, domain side effects | `db`, `gitstore`, `embedding`, `oidc` | `router`, `middleware`, `rest`, `graphql`, HTTP response helpers |
+| `service` | business rules, persistence orchestration, Git orchestration, domain side effects | `db`, `gitstore`, `embedding`, `oidc`, `slockoauth` | `router`, `middleware`, `rest`, `graphql`, HTTP response helpers |
 | `db` | schema, migrations, seed data, relational model types, shared state constants | GORM and standard library only | `service`, `rest`, `graphql`, `gitstore` |
 | `gitstore` | Git-native repo lifecycle, refs, merge/rebase/diff/content/archive operations | system `git`, go-git, filesystem, `tenant` | `db`, `rest`, `graphql` |
 

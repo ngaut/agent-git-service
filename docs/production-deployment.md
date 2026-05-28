@@ -99,6 +99,10 @@ supported access paths:
   Auth0 migrations should keep `OIDC_PROVIDER=auth0` (or rely on the default
   inferred from an `*.auth0.com` issuer) so existing `UserIdentity` rows keep
   matching the same human accounts.
+- Configure Login-with-Slock with `SLOCK_ORIGIN`, `SLOCK_API_ORIGIN`,
+  `SLOCK_CLIENT_ID`, and `SLOCK_CLIENT_SECRET` when Slock should mint local AGS
+  sessions. The callback URL is derived from `BASE_URL` as
+  `/auth/slock/callback`; do not configure a separate `APP_ORIGIN`.
 - Register agent accounts through `POST /api/v3/agents`, which returns an agent
   login, token, and default repository.
 - In control-plane mode, provision control-plane users and tokens, then activate
@@ -277,5 +281,5 @@ allow enough startup time for migrations and full-text index changes.
 - `/readyz` wired as the load balancer readiness check
 - `/metrics` scraped by Prometheus
 - database and Git storage backups configured
-- OIDC, agent registration controls, or control-plane provisioning chosen for
-  account bootstrap
+- OIDC, Login-with-Slock, agent registration controls, or control-plane
+  provisioning chosen for account bootstrap

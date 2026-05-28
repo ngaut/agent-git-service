@@ -27,9 +27,19 @@ func (s *Service) oidcLoginWithProfile(ctx context.Context, profile OIDCProfile)
 		maxAttempts      = 5
 		maxLoginAttempts = 10
 	)
+	userKind := strings.TrimSpace(profile.UserKind)
+	explicitUserKind := userKind != ""
+	switch userKind {
+	case "":
+		userKind = db.UserKindHuman
+	case db.UserKindHuman, db.UserKindAgent:
+	default:
+		return OIDCSessionResult{}, fmt.Errorf("%w: invalid user_kind", ErrValidation)
+	}
 
 	makeLoginCandidates := func(p OIDCProfile) []string {
-		raw := []string{p.PreferredUsername, p.Nickname}
+		raw := append([]string{}, p.LoginCandidates...)
+		raw = append(raw, p.PreferredUsername, p.Nickname)
 		if p.Email != "" {
 			if at := strings.IndexByte(p.Email, '@'); at > 0 {
 				raw = append(raw, p.Email[:at])
@@ -112,7 +122,7 @@ attemptLoop:
 						Name:        profile.DisplayName(login),
 						Email:       profile.Email,
 						Type:        db.TypeUser,
-						UserKind:    db.UserKindHuman,
+						UserKind:    userKind,
 						IsAnonymous: false,
 					}
 					if err := tx.Create(&created).Error; err != nil {
@@ -146,7 +156,9 @@ attemptLoop:
 			if dn := profile.DisplayName(""); dn != "" {
 				updates["name"] = dn
 			}
-			if u.UserKind == "" {
+			if explicitUserKind && u.UserKind != userKind {
+				updates["user_kind"] = userKind
+			} else if u.UserKind == "" {
 				updates["user_kind"] = db.UserKindHuman
 			}
 			if len(updates) > 0 {
