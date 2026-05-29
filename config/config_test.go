@@ -138,47 +138,59 @@ func TestNewOverrides(t *testing.T) {
 	}
 }
 
-func TestNewLoadsSlockOAuthConfig(t *testing.T) {
+func TestNewLoadsConnectedLoginConfig(t *testing.T) {
 	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
-	t.Setenv("SLOCK_ORIGIN", " https://app.slock.ai ")
-	t.Setenv("SLOCK_API_ORIGIN", " https://api.slock.ai ")
-	t.Setenv("SLOCK_CLIENT_ID", "slock-client")
-	t.Setenv("SLOCK_CLIENT_SECRET", "slock-secret")
+	t.Setenv("CONNECTED_LOGIN_PROVIDER", " provider ")
+	t.Setenv("CONNECTED_LOGIN_ORIGIN", " https://app.provider.example ")
+	t.Setenv("CONNECTED_LOGIN_API_ORIGIN", " https://api.provider.example ")
+	t.Setenv("CONNECTED_LOGIN_CLIENT_ID", "connected-client")
+	t.Setenv("CONNECTED_LOGIN_CLIENT_SECRET", "connected-secret")
+	t.Setenv("CONNECTED_LOGIN_LOGIN_PATH", "/custom/login")
+	t.Setenv("CONNECTED_LOGIN_SUBJECT_NAMESPACE_CLAIM", "workspace_id")
 
 	cfg, err := New()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !cfg.SlockOAuthEnabled() {
-		t.Fatal("expected Slock OAuth to be enabled")
+	if !cfg.ConnectedLoginEnabled() {
+		t.Fatal("expected connected login to be enabled")
 	}
-	if cfg.SlockOrigin != "https://app.slock.ai" {
-		t.Fatalf("SlockOrigin: got %q", cfg.SlockOrigin)
+	if cfg.ConnectedLoginProvider != "provider" {
+		t.Fatalf("ConnectedLoginProvider: got %q", cfg.ConnectedLoginProvider)
 	}
-	if cfg.SlockAPIOrigin != "https://api.slock.ai" {
-		t.Fatalf("SlockAPIOrigin: got %q", cfg.SlockAPIOrigin)
+	if cfg.ConnectedLoginOrigin != "https://app.provider.example" {
+		t.Fatalf("ConnectedLoginOrigin: got %q", cfg.ConnectedLoginOrigin)
 	}
-	if cfg.SlockClientID != "slock-client" {
-		t.Fatalf("SlockClientID: got %q", cfg.SlockClientID)
+	if cfg.ConnectedLoginAPIOrigin != "https://api.provider.example" {
+		t.Fatalf("ConnectedLoginAPIOrigin: got %q", cfg.ConnectedLoginAPIOrigin)
 	}
-	if cfg.SlockClientSecret != "slock-secret" {
-		t.Fatalf("SlockClientSecret: got %q", cfg.SlockClientSecret)
+	if cfg.ConnectedLoginClientID != "connected-client" {
+		t.Fatalf("ConnectedLoginClientID: got %q", cfg.ConnectedLoginClientID)
+	}
+	if cfg.ConnectedLoginClientSecret != "connected-secret" {
+		t.Fatalf("ConnectedLoginClientSecret: got %q", cfg.ConnectedLoginClientSecret)
+	}
+	if cfg.ConnectedLoginLoginPath != "/custom/login" {
+		t.Fatalf("ConnectedLoginLoginPath: got %q", cfg.ConnectedLoginLoginPath)
+	}
+	if cfg.ConnectedLoginSubjectNamespaceClaim != "workspace_id" {
+		t.Fatalf("ConnectedLoginSubjectNamespaceClaim: got %q", cfg.ConnectedLoginSubjectNamespaceClaim)
 	}
 }
 
-func TestNewRejectsPartialSlockOAuthConfig(t *testing.T) {
+func TestNewRejectsPartialConnectedLoginConfig(t *testing.T) {
 	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
-	t.Setenv("SLOCK_ORIGIN", "https://app.slock.ai")
-	t.Setenv("SLOCK_API_ORIGIN", "")
-	t.Setenv("SLOCK_CLIENT_ID", "slock-client")
-	t.Setenv("SLOCK_CLIENT_SECRET", "")
+	t.Setenv("CONNECTED_LOGIN_ORIGIN", "https://app.provider.example")
+	t.Setenv("CONNECTED_LOGIN_API_ORIGIN", "")
+	t.Setenv("CONNECTED_LOGIN_CLIENT_ID", "connected-client")
+	t.Setenv("CONNECTED_LOGIN_CLIENT_SECRET", "")
 
 	_, err := New()
 	if err == nil {
-		t.Fatal("expected partial Slock config to fail")
+		t.Fatal("expected partial connected login config to fail")
 	}
-	if !strings.Contains(err.Error(), "login-with-slock: partial configuration") {
+	if !strings.Contains(err.Error(), "connected login: partial configuration") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

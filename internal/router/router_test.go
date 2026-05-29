@@ -21,6 +21,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/ngaut/agent-git-service/internal/connectedlogin"
 	"github.com/ngaut/agent-git-service/internal/controlplane"
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/githttp"
@@ -30,7 +31,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest"
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
-	"github.com/ngaut/agent-git-service/internal/slockoauth"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
@@ -133,27 +133,30 @@ func oauthAuthorizeRequestPath(t *testing.T, redirectURI string) string {
 	return "/login/oauth/authorize?" + query.Encode()
 }
 
-type routerFakeSlockOAuthProvider struct {
+type routerFakeConnectedLoginProvider struct {
 	loginURL string
 }
 
-func (f routerFakeSlockOAuthProvider) ExchangeCode(ctx context.Context, code string) (slockoauth.Token, error) {
-	return slockoauth.Token{AccessToken: "slock-access-token"}, nil
+func (f routerFakeConnectedLoginProvider) Provider() string {
+	return "provider"
 }
 
-func (f routerFakeSlockOAuthProvider) Userinfo(ctx context.Context, accessToken string) (slockoauth.Userinfo, error) {
-	return slockoauth.Userinfo{
+func (f routerFakeConnectedLoginProvider) ExchangeCode(ctx context.Context, code string) (connectedlogin.Token, error) {
+	return connectedlogin.Token{AccessToken: "connected-access-token"}, nil
+}
+
+func (f routerFakeConnectedLoginProvider) Userinfo(ctx context.Context, accessToken string) (connectedlogin.Userinfo, error) {
+	return connectedlogin.Userinfo{
 		Sub:               "agent-sub",
 		Type:              "agent",
-		ClientID:          "slock-client",
-		ServerID:          "srv-1",
-		ServerSlug:        "workspace",
+		ClientID:          "connected-client",
+		SubjectNamespace:  "workspace-1",
 		PreferredUsername: "agent",
-		Name:              "Slock Agent",
+		Name:              "Connected Agent",
 	}, nil
 }
 
-func (f routerFakeSlockOAuthProvider) LoginURL(state string) string {
+func (f routerFakeConnectedLoginProvider) LoginURL(state string) string {
 	if state == "" {
 		return f.loginURL
 	}
@@ -164,11 +167,11 @@ func (f routerFakeSlockOAuthProvider) LoginURL(state string) string {
 	return f.loginURL + sep + "state=" + state
 }
 
-func TestSlockOAuthRoutes(t *testing.T) {
+func TestConnectedLoginRoutes(t *testing.T) {
 	svc, mux := setupRouterTest(t)
 
 	t.Run("not configured", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/auth/slock/login", nil)
+		req := httptest.NewRequest(http.MethodGet, "/auth/connected/login", nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotImplemented {
@@ -176,12 +179,12 @@ func TestSlockOAuthRoutes(t *testing.T) {
 		}
 	})
 
-	svc.SlockOAuth = routerFakeSlockOAuthProvider{
-		loginURL: "https://app.slock.ai/login-with-slock/setup?client_id=slock-client",
+	svc.ConnectedLogin = routerFakeConnectedLoginProvider{
+		loginURL: "https://app.provider.example/oauth/login?client_id=connected-client",
 	}
 
 	t.Run("login redirects", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/auth/slock/login", nil)
+		req := httptest.NewRequest(http.MethodGet, "/auth/connected/login", nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusFound {
@@ -192,10 +195,10 @@ func TestSlockOAuthRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse Location: %v", err)
 		}
-		if loc.Scheme != "https" || loc.Host != "app.slock.ai" || loc.Path != "/login-with-slock/setup" {
+		if loc.Scheme != "https" || loc.Host != "app.provider.example" || loc.Path != "/oauth/login" {
 			t.Fatalf("unexpected redirect target: %q", got)
 		}
-		if loc.Query().Get("client_id") != "slock-client" {
+		if loc.Query().Get("client_id") != "connected-client" {
 			t.Fatalf("client_id: got %q", loc.Query().Get("client_id"))
 		}
 		state := loc.Query().Get("state")
@@ -206,7 +209,7 @@ func TestSlockOAuthRoutes(t *testing.T) {
 		if len(cookie) != 1 {
 			t.Fatalf("expected one cookie, got %d", len(cookie))
 		}
-		if cookie[0].Name != "slock_oauth_state" || cookie[0].Value != state {
+		if cookie[0].Name != "connected_login_state" || cookie[0].Value != state {
 			t.Fatalf("cookie/state mismatch: cookie=%#v state=%q", cookie[0], state)
 		}
 		if !cookie[0].HttpOnly || cookie[0].SameSite != http.SameSiteLaxMode {
@@ -215,8 +218,8 @@ func TestSlockOAuthRoutes(t *testing.T) {
 	})
 
 	t.Run("callback creates session", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?code=slock-code&state=expected-state", nil)
-		req.AddCookie(&http.Cookie{Name: "slock_oauth_state", Value: "expected-state"})
+		req := httptest.NewRequest(http.MethodGet, "/auth/connected/callback?code=connected-code&state=expected-state", nil)
+		req.AddCookie(&http.Cookie{Name: "connected_login_state", Value: "expected-state"})
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusFound {
@@ -232,12 +235,12 @@ func TestSlockOAuthRoutes(t *testing.T) {
 		if loc.Query().Get("code") == "" || loc.Query().Get("login") == "" {
 			t.Fatalf("expected auth code and login in redirect query, got %q", loc.String())
 		}
-		if loc.Query().Get("type") != "agent" || loc.Query().Get("sub") != "agent-sub" || loc.Query().Get("server_id") != "srv-1" {
+		if loc.Query().Get("type") != "agent" || loc.Query().Get("sub") != "agent-sub" || loc.Query().Get("subject_namespace") != "workspace-1" {
 			t.Fatalf("unexpected callback redirect query: %q", loc.String())
 		}
 		var codeVerifier string
 		for _, cookie := range rec.Result().Cookies() {
-			if cookie.Name == "slock_oauth_verifier" {
+			if cookie.Name == "connected_login_verifier" {
 				codeVerifier = cookie.Value
 				if !cookie.HttpOnly {
 					t.Fatalf("expected verifier cookie to be HttpOnly: %#v", cookie)
@@ -248,7 +251,7 @@ func TestSlockOAuthRoutes(t *testing.T) {
 			}
 		}
 		if codeVerifier == "" {
-			t.Fatal("expected callback response to emit slock_oauth_verifier cookie")
+			t.Fatal("expected callback response to emit connected_login_verifier cookie")
 		}
 		var authCode db.AuthorizationCode
 		if err := svc.DB.First(&authCode, "code = ?", loc.Query().Get("code")).Error; err != nil {
@@ -277,7 +280,7 @@ func TestSlockOAuthRoutes(t *testing.T) {
 		})
 		exchangeReq := httptest.NewRequest(http.MethodPost, "/login/oauth/access_token", bytes.NewReader(exchangeBody))
 		exchangeReq.Header.Set("Content-Type", "application/json")
-		exchangeReq.AddCookie(&http.Cookie{Name: "slock_oauth_verifier", Value: codeVerifier})
+		exchangeReq.AddCookie(&http.Cookie{Name: "connected_login_verifier", Value: codeVerifier})
 		exchangeRec := httptest.NewRecorder()
 		mux.ServeHTTP(exchangeRec, exchangeReq)
 		if exchangeRec.Code != http.StatusOK {
@@ -285,17 +288,17 @@ func TestSlockOAuthRoutes(t *testing.T) {
 		}
 		cleared := false
 		for _, cookie := range exchangeRec.Result().Cookies() {
-			if cookie.Name == "slock_oauth_verifier" && cookie.MaxAge < 0 {
+			if cookie.Name == "connected_login_verifier" && cookie.MaxAge < 0 {
 				cleared = true
 			}
 		}
 		if !cleared {
-			t.Fatal("expected access token exchange to clear slock_oauth_verifier cookie")
+			t.Fatal("expected access token exchange to clear connected_login_verifier cookie")
 		}
 	})
 
 	t.Run("direct callback without browser state returns durable token JSON", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?code=slock-agent-code&state=agent-state", nil)
+		req := httptest.NewRequest(http.MethodGet, "/auth/connected/callback?code=connected-agent-code&state=agent-state", nil)
 		req.Header.Set("Accept", "text/html")
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -310,7 +313,7 @@ func TestSlockOAuthRoutes(t *testing.T) {
 		if token == "" {
 			t.Fatalf("expected durable token in callback JSON, got %#v", body)
 		}
-		if body["type"] != "agent" || body["sub"] != "agent-sub" || body["server_id"] != "srv-1" {
+		if body["type"] != "agent" || body["sub"] != "agent-sub" || body["subject_namespace"] != "workspace-1" {
 			t.Fatalf("unexpected callback JSON metadata: %#v", body)
 		}
 		var dbToken db.Token
@@ -320,8 +323,8 @@ func TestSlockOAuthRoutes(t *testing.T) {
 	})
 
 	t.Run("callback requires code", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?state=expected-state", nil)
-		req.AddCookie(&http.Cookie{Name: "slock_oauth_state", Value: "expected-state"})
+		req := httptest.NewRequest(http.MethodGet, "/auth/connected/callback?state=expected-state", nil)
+		req.AddCookie(&http.Cookie{Name: "connected_login_state", Value: "expected-state"})
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnprocessableEntity {
@@ -330,8 +333,8 @@ func TestSlockOAuthRoutes(t *testing.T) {
 	})
 
 	t.Run("callback requires matching state", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/auth/slock/callback?code=slock-code&state=wrong-state", nil)
-		req.AddCookie(&http.Cookie{Name: "slock_oauth_state", Value: "expected-state"})
+		req := httptest.NewRequest(http.MethodGet, "/auth/connected/callback?code=connected-code&state=wrong-state", nil)
+		req.AddCookie(&http.Cookie{Name: "connected_login_state", Value: "expected-state"})
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnprocessableEntity {

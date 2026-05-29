@@ -17,8 +17,8 @@ It exposes four primary surfaces:
 - OAuth device flow
 
 It also exposes additive repo-specific endpoints such as OIDC-backed human-login
-helpers under `/api/v3/oidc/*`, Login-with-Slock browser helpers under
-`/auth/slock/*`, plus admin-only wiki maintenance endpoints such as
+helpers under `/api/v3/oidc/*`, connected-login browser helpers under
+`/auth/connected/*`, plus admin-only wiki maintenance endpoints such as
 `/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks` for stale wiki ref-lock
 recovery.
 
@@ -67,7 +67,7 @@ The vendored `cli/` module is the gh CLI compatibility harness, not the product 
 | `internal/middleware` | Auth and request-size middleware |
 | `internal/oauth` | OAuth device-flow endpoints |
 | `internal/oidc` | Generic OIDC discovery, device flow, and ID token verification client |
-| `internal/slockoauth` | Login-with-Slock OAuth-style client for code exchange and userinfo |
+| `internal/connectedlogin` | Configurable OAuth-style browser-login client for code exchange and userinfo |
 | `internal/authn` | Shared token-resolver interfaces and auth sentinel errors |
 | `internal/embedding` | Optional embedding-backed search support |
 | `internal/crypto` | NaCl-based encryption primitives for secrets |
@@ -126,7 +126,7 @@ The startup sequence is:
 4. Initialize the main application database, run migrations, and seed default records.
 5. Initialize embeddings if `EMBEDDING_API_KEY` is present.
 6. Initialize the Git store rooted at `GIT_REPO_DIR`; when `CONTROL_PLANE_DSN` is set, enable tenant-isolated repo roots with a default-tenant fallback.
-7. Build the shared `service.Service`, wiring DB, Git store, base URL, embeddings, generic OIDC, optional Login-with-Slock, and local-dev auth conveniences.
+7. Build the shared `service.Service`, wiring DB, Git store, base URL, embeddings, generic OIDC, optional connected login, and local-dev auth conveniences.
 8. If `CONTROL_PLANE_DSN` is set, initialize the control-plane database and `controlplane.DBRouter`.
 9. Initialize REST transforms, GraphQL server, REST deps, Git HTTP handler, OAuth handler, metrics, and readiness endpoints.
 10. Register routes and start listeners.
@@ -157,9 +157,9 @@ The REST prefix is fixed at `/api/v3` to remain compatible with GitHub-compatibl
 
 - OAuth endpoints are unauthenticated.
 - OIDC helper endpoints under `/api/v3/oidc/*` are unauthenticated but service-backed.
-- Login-with-Slock helper endpoints under `/auth/slock/*` are unauthenticated
-  but service-backed; they implement an external login flow that mints a local
-  AGS token after Slock userinfo validation.
+- Connected login helper endpoints under `/auth/connected/*` are
+  unauthenticated but service-backed; they implement a connected login flow
+  that mints a local AGS token after provider userinfo validation.
 - Git Smart HTTP endpoints are routed separately from the REST/GraphQL API tree, but they still use the same auth middleware (`TokenAuth` in control-plane mode, `OptionalTokenAuth` in single-DB mode).
 - Discovery endpoints under `/api/v3`, `/api/v3/meta`, and `/api/v3/rate_limit` use optional auth and are the main user-visible discovery/auth bootstrap routes for GitHub-compatible clients, including `gh`.
 - The authenticated API contains REST and GraphQL endpoints, including the current organization-governance surfaces for explicit org creation, org invitations, teams, and outside-collaborator inspection.
@@ -339,7 +339,7 @@ not treated as the authorization decision.
 
 This is the current local/offline behavior, not the planned multi-agent model. The future Git transport auth design is documented in [design/multi-agent.md](design/multi-agent.md).
 
-### OIDC and Slock Login
+### OIDC and Connected Login
 
 When generic OIDC is configured, REST exposes these unauthenticated helper endpoints:
 
@@ -352,25 +352,54 @@ These endpoints stay transport-thin: `internal/oidc` owns discovery, optional
 device-authorization exchange, and ID token verification, while `service` owns
 mapping verified external identities onto local application users and tokens.
 
-When Login-with-Slock is configured, REST also exposes:
+When connected login is configured, REST also exposes:
 
-- `GET /auth/slock/login`
-- `GET /auth/slock/callback`
+- `GET /auth/connected/login`
+- `GET /auth/connected/callback`
 
-Slock does not expose a standard OIDC discovery document, so `internal/slockoauth`
-owns the provider-specific browser login URL, `/api/oauth/token` code exchange,
-and `/api/oauth/userinfo` lookup. `service` maps verified Slock userinfo into the
-same local identity/session path as OIDC with provider `slock` and subject
-`<server_id>:<sub>`. Slock `type=human` maps to a human user; `type=agent` maps
-to an agent user. The callback URL is derived from `BASE_URL`, so there is no
-separate `APP_ORIGIN` setting. On success, the browser callback mints a
-short-lived one-time AGS authorization code plus a PKCE verifier. AGS stores
-the verifier in an AGS-scoped `HttpOnly` cookie on `/login/oauth/access_token`
-and then redirects the browser to `CONSOLE_BASE_URL` with the code plus
-non-secret identity metadata in the query string. The console completes sign-in
+Some providers expose OAuth-like code exchange and userinfo endpoints without a
+standard OIDC discovery document. `internal/connectedlogin` owns the configurable
+browser login URL, token exchange path, userinfo path, and claim extraction.
+`service` maps verified external userinfo into the same local identity/session
+path as OIDC using the configured provider name and subject
+`<subject_namespace>:<sub>` when a namespace claim is configured, otherwise
+`<sub>`. The configured human and agent actor-type values map to human and agent
+users. The callback URL is derived from `BASE_URL`, so there is no separate
+`APP_ORIGIN` setting. On success, the browser callback mints a short-lived
+one-time AGS authorization code plus a PKCE verifier. AGS stores the verifier in
+an AGS-scoped `HttpOnly` cookie on `/login/oauth/access_token` and then redirects
+the browser to `CONSOLE_BASE_URL` with the code plus non-secret identity metadata
+in the query string. The console completes sign-in
 by exchanging the code through the existing `/login/oauth/access_token` path
 with browser credentials included, so a copied redirect URL is not sufficient
 to mint a durable AGS bearer token.
+
+The connected-login browser workflow is:
+
+1. The browser requests `GET /auth/connected/login`.
+2. AGS generates a CSRF `state`, stores it in the `connected_login_state`
+   `HttpOnly` cookie, and redirects to
+   `{CONNECTED_LOGIN_ORIGIN}{CONNECTED_LOGIN_LOGIN_PATH}` with `client_id`,
+   the configured callback parameter (default `return_to`), and `state`.
+3. The provider redirects back to
+   `{BASE_URL}/auth/connected/callback?code=...&state=...`.
+4. AGS validates `state`, exchanges `code` at
+   `{CONNECTED_LOGIN_API_ORIGIN}{CONNECTED_LOGIN_TOKEN_PATH}` using client
+   credentials, and receives an `access_token`.
+5. AGS calls `{CONNECTED_LOGIN_API_ORIGIN}{CONNECTED_LOGIN_USERINFO_PATH}` with
+   `Authorization: Bearer <access_token>`.
+6. `internal/connectedlogin` extracts configured userinfo claims into subject,
+   display-name, avatar, and actor-kind fields.
+7. `service` converts the result into an `OIDCProfile` and reuses
+   `oidcLoginWithProfile(...)` for local `UserIdentity`, `User`, and AGS token
+   creation.
+
+`CONNECTED_LOGIN_PROVIDER` controls the local identity provider key. The subject
+is the configured subject claim (default `sub`), optionally prefixed with the
+configured subject namespace claim. When a namespace claim is configured, the
+provider must return it. The actor type claim (default `type`) is mapped by
+`CONNECTED_LOGIN_HUMAN_TYPE_VALUE` and
+`CONNECTED_LOGIN_AGENT_TYPE_VALUE` into local human and agent user kinds.
 
 ### OAuth Device Flow (Secured)
 

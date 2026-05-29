@@ -65,13 +65,33 @@ type Config struct {
 	OIDCScopes            string
 	OIDCAllowInsecureHTTP bool
 
-	// Login-with-Slock OAuth configuration. All four must be set together to
-	// enable /auth/slock/login and /auth/slock/callback. The callback URL is
-	// derived from BaseURL, so no separate app origin is required.
-	SlockOrigin       string
-	SlockAPIOrigin    string
-	SlockClientID     string
-	SlockClientSecret string
+	// ConnectedLogin configures an OAuth-style browser login provider that does
+	// not expose enough standard OIDC surface for the generic OIDC client.
+	// Origin, APIOrigin, ClientID, and ClientSecret must be set together to
+	// enable /auth/connected/login and /auth/connected/callback.
+	ConnectedLoginProvider                  string
+	ConnectedLoginOrigin                    string
+	ConnectedLoginAPIOrigin                 string
+	ConnectedLoginClientID                  string
+	ConnectedLoginClientSecret              string
+	ConnectedLoginLoginPath                 string
+	ConnectedLoginTokenPath                 string
+	ConnectedLoginUserinfoPath              string
+	ConnectedLoginReturnToParam             string
+	ConnectedLoginSubjectClaim              string
+	ConnectedLoginSubjectNamespaceClaim     string
+	ConnectedLoginSubjectNamespaceSlugClaim string
+	ConnectedLoginActorTypeClaim            string
+	ConnectedLoginHumanTypeValue            string
+	ConnectedLoginAgentTypeValue            string
+	ConnectedLoginClientIDClaim             string
+	ConnectedLoginClientNameClaim           string
+	ConnectedLoginPreferredUsernameClaim    string
+	ConnectedLoginNameClaim                 string
+	ConnectedLoginPictureClaim              string
+	ConnectedLoginAvatarURLClaim            string
+	ConnectedLoginDescriptionClaim          string
+	ConnectedLoginScopeClaim                string
 
 	// ConsoleBaseURL is the base URL of the console frontend used for browser redirects.
 	ConsoleBaseURL string
@@ -101,30 +121,49 @@ func New() (Config, error) {
 		AllowAnyToken:  os.Getenv("ALLOW_ANY_TOKEN") == "true" || os.Getenv("ALLOW_ANY_TOKEN") == "1",
 		OAuthPreapproveDeviceCodes: os.Getenv("OAUTH_PREAPPROVE_DEVICE_CODES") == "true" ||
 			os.Getenv("OAUTH_PREAPPROVE_DEVICE_CODES") == "1",
-		AdminLogin:            os.Getenv("ADMIN_LOGIN"),
-		AdminToken:            os.Getenv("ADMIN_TOKEN"),
-		Environment:           os.Getenv("ENVIRONMENT"),
-		ControlPlaneDSN:       os.Getenv("CONTROL_PLANE_DSN"),
-		EmbeddingAPIKey:       os.Getenv("EMBEDDING_API_KEY"),
-		EmbeddingBaseURL:      os.Getenv("EMBEDDING_BASE_URL"),
-		EmbeddingModel:        os.Getenv("EMBEDDING_MODEL"),
-		OIDCProvider:          os.Getenv("OIDC_PROVIDER"),
-		OIDCIssuer:            os.Getenv("OIDC_ISSUER"),
-		OIDCDiscoveryURL:      os.Getenv("OIDC_DISCOVERY_URL"),
-		OIDCClientID:          os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret:      os.Getenv("OIDC_CLIENT_SECRET"),
-		OIDCAudience:          os.Getenv("OIDC_AUDIENCE"),
-		OIDCScopes:            os.Getenv("OIDC_SCOPES"),
-		OIDCAllowInsecureHTTP: os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "true" || os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "1",
-		SlockOrigin:           os.Getenv("SLOCK_ORIGIN"),
-		SlockAPIOrigin:        os.Getenv("SLOCK_API_ORIGIN"),
-		SlockClientID:         os.Getenv("SLOCK_CLIENT_ID"),
-		SlockClientSecret:     os.Getenv("SLOCK_CLIENT_SECRET"),
-		EnableWorkflowExec:    os.Getenv("ENABLE_WORKFLOW_EXEC") == "true" || os.Getenv("ENABLE_WORKFLOW_EXEC") == "1",
-		WorkflowExecImage:     os.Getenv("WORKFLOW_EXEC_IMAGE"),
-		WorkflowExecCPUs:      os.Getenv("WORKFLOW_EXEC_CPUS"),
-		WorkflowExecMemory:    os.Getenv("WORKFLOW_EXEC_MEMORY"),
-		WorkflowExecTmpfsSize: os.Getenv("WORKFLOW_EXEC_TMPFS_SIZE"),
+		AdminLogin:                              os.Getenv("ADMIN_LOGIN"),
+		AdminToken:                              os.Getenv("ADMIN_TOKEN"),
+		Environment:                             os.Getenv("ENVIRONMENT"),
+		ControlPlaneDSN:                         os.Getenv("CONTROL_PLANE_DSN"),
+		EmbeddingAPIKey:                         os.Getenv("EMBEDDING_API_KEY"),
+		EmbeddingBaseURL:                        os.Getenv("EMBEDDING_BASE_URL"),
+		EmbeddingModel:                          os.Getenv("EMBEDDING_MODEL"),
+		OIDCProvider:                            os.Getenv("OIDC_PROVIDER"),
+		OIDCIssuer:                              os.Getenv("OIDC_ISSUER"),
+		OIDCDiscoveryURL:                        os.Getenv("OIDC_DISCOVERY_URL"),
+		OIDCClientID:                            os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:                        os.Getenv("OIDC_CLIENT_SECRET"),
+		OIDCAudience:                            os.Getenv("OIDC_AUDIENCE"),
+		OIDCScopes:                              os.Getenv("OIDC_SCOPES"),
+		OIDCAllowInsecureHTTP:                   os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "true" || os.Getenv("OIDC_ALLOW_INSECURE_HTTP") == "1",
+		ConnectedLoginProvider:                  os.Getenv("CONNECTED_LOGIN_PROVIDER"),
+		ConnectedLoginOrigin:                    os.Getenv("CONNECTED_LOGIN_ORIGIN"),
+		ConnectedLoginAPIOrigin:                 os.Getenv("CONNECTED_LOGIN_API_ORIGIN"),
+		ConnectedLoginClientID:                  os.Getenv("CONNECTED_LOGIN_CLIENT_ID"),
+		ConnectedLoginClientSecret:              os.Getenv("CONNECTED_LOGIN_CLIENT_SECRET"),
+		ConnectedLoginLoginPath:                 os.Getenv("CONNECTED_LOGIN_LOGIN_PATH"),
+		ConnectedLoginTokenPath:                 os.Getenv("CONNECTED_LOGIN_TOKEN_PATH"),
+		ConnectedLoginUserinfoPath:              os.Getenv("CONNECTED_LOGIN_USERINFO_PATH"),
+		ConnectedLoginReturnToParam:             os.Getenv("CONNECTED_LOGIN_RETURN_TO_PARAM"),
+		ConnectedLoginSubjectClaim:              os.Getenv("CONNECTED_LOGIN_SUBJECT_CLAIM"),
+		ConnectedLoginSubjectNamespaceClaim:     os.Getenv("CONNECTED_LOGIN_SUBJECT_NAMESPACE_CLAIM"),
+		ConnectedLoginSubjectNamespaceSlugClaim: os.Getenv("CONNECTED_LOGIN_SUBJECT_NAMESPACE_SLUG_CLAIM"),
+		ConnectedLoginActorTypeClaim:            os.Getenv("CONNECTED_LOGIN_ACTOR_TYPE_CLAIM"),
+		ConnectedLoginHumanTypeValue:            os.Getenv("CONNECTED_LOGIN_HUMAN_TYPE_VALUE"),
+		ConnectedLoginAgentTypeValue:            os.Getenv("CONNECTED_LOGIN_AGENT_TYPE_VALUE"),
+		ConnectedLoginClientIDClaim:             os.Getenv("CONNECTED_LOGIN_CLIENT_ID_CLAIM"),
+		ConnectedLoginClientNameClaim:           os.Getenv("CONNECTED_LOGIN_CLIENT_NAME_CLAIM"),
+		ConnectedLoginPreferredUsernameClaim:    os.Getenv("CONNECTED_LOGIN_PREFERRED_USERNAME_CLAIM"),
+		ConnectedLoginNameClaim:                 os.Getenv("CONNECTED_LOGIN_NAME_CLAIM"),
+		ConnectedLoginPictureClaim:              os.Getenv("CONNECTED_LOGIN_PICTURE_CLAIM"),
+		ConnectedLoginAvatarURLClaim:            os.Getenv("CONNECTED_LOGIN_AVATAR_URL_CLAIM"),
+		ConnectedLoginDescriptionClaim:          os.Getenv("CONNECTED_LOGIN_DESCRIPTION_CLAIM"),
+		ConnectedLoginScopeClaim:                os.Getenv("CONNECTED_LOGIN_SCOPE_CLAIM"),
+		EnableWorkflowExec:                      os.Getenv("ENABLE_WORKFLOW_EXEC") == "true" || os.Getenv("ENABLE_WORKFLOW_EXEC") == "1",
+		WorkflowExecImage:                       os.Getenv("WORKFLOW_EXEC_IMAGE"),
+		WorkflowExecCPUs:                        os.Getenv("WORKFLOW_EXEC_CPUS"),
+		WorkflowExecMemory:                      os.Getenv("WORKFLOW_EXEC_MEMORY"),
+		WorkflowExecTmpfsSize:                   os.Getenv("WORKFLOW_EXEC_TMPFS_SIZE"),
 	}
 	if v := os.Getenv("EMBEDDING_DIMENSIONS"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -211,22 +250,60 @@ func Normalize(cfg Config) (Config, error) {
 	if strings.TrimSpace(cfg.OIDCProvider) == "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "" || cfg.OIDCClientID != "") {
 		cfg.OIDCProvider = defaultOIDCProvider(cfg.OIDCIssuer, cfg.OIDCDiscoveryURL)
 	}
-	cfg.SlockOrigin = strings.TrimSpace(cfg.SlockOrigin)
-	cfg.SlockAPIOrigin = strings.TrimSpace(cfg.SlockAPIOrigin)
-	cfg.SlockClientID = strings.TrimSpace(cfg.SlockClientID)
-	cfg.SlockClientSecret = strings.TrimSpace(cfg.SlockClientSecret)
-	if err := validateSlockOAuthConfig(cfg); err != nil {
+	cfg.ConnectedLoginProvider = strings.TrimSpace(cfg.ConnectedLoginProvider)
+	cfg.ConnectedLoginOrigin = strings.TrimSpace(cfg.ConnectedLoginOrigin)
+	cfg.ConnectedLoginAPIOrigin = strings.TrimSpace(cfg.ConnectedLoginAPIOrigin)
+	cfg.ConnectedLoginClientID = strings.TrimSpace(cfg.ConnectedLoginClientID)
+	cfg.ConnectedLoginClientSecret = strings.TrimSpace(cfg.ConnectedLoginClientSecret)
+	cfg.ConnectedLoginLoginPath = strings.TrimSpace(cfg.ConnectedLoginLoginPath)
+	cfg.ConnectedLoginTokenPath = strings.TrimSpace(cfg.ConnectedLoginTokenPath)
+	cfg.ConnectedLoginUserinfoPath = strings.TrimSpace(cfg.ConnectedLoginUserinfoPath)
+	cfg.ConnectedLoginReturnToParam = strings.TrimSpace(cfg.ConnectedLoginReturnToParam)
+	cfg.ConnectedLoginSubjectClaim = strings.TrimSpace(cfg.ConnectedLoginSubjectClaim)
+	cfg.ConnectedLoginSubjectNamespaceClaim = strings.TrimSpace(cfg.ConnectedLoginSubjectNamespaceClaim)
+	cfg.ConnectedLoginSubjectNamespaceSlugClaim = strings.TrimSpace(cfg.ConnectedLoginSubjectNamespaceSlugClaim)
+	cfg.ConnectedLoginActorTypeClaim = strings.TrimSpace(cfg.ConnectedLoginActorTypeClaim)
+	cfg.ConnectedLoginHumanTypeValue = strings.TrimSpace(cfg.ConnectedLoginHumanTypeValue)
+	cfg.ConnectedLoginAgentTypeValue = strings.TrimSpace(cfg.ConnectedLoginAgentTypeValue)
+	cfg.ConnectedLoginClientIDClaim = strings.TrimSpace(cfg.ConnectedLoginClientIDClaim)
+	cfg.ConnectedLoginClientNameClaim = strings.TrimSpace(cfg.ConnectedLoginClientNameClaim)
+	cfg.ConnectedLoginPreferredUsernameClaim = strings.TrimSpace(cfg.ConnectedLoginPreferredUsernameClaim)
+	cfg.ConnectedLoginNameClaim = strings.TrimSpace(cfg.ConnectedLoginNameClaim)
+	cfg.ConnectedLoginPictureClaim = strings.TrimSpace(cfg.ConnectedLoginPictureClaim)
+	cfg.ConnectedLoginAvatarURLClaim = strings.TrimSpace(cfg.ConnectedLoginAvatarURLClaim)
+	cfg.ConnectedLoginDescriptionClaim = strings.TrimSpace(cfg.ConnectedLoginDescriptionClaim)
+	cfg.ConnectedLoginScopeClaim = strings.TrimSpace(cfg.ConnectedLoginScopeClaim)
+	if err := validateConnectedLoginConfig(cfg); err != nil {
 		return Config{}, err
+	}
+	if cfg.ConnectedLoginEnabled() {
+		cfg.ConnectedLoginProvider = firstNonEmpty(cfg.ConnectedLoginProvider, "connected")
+		cfg.ConnectedLoginLoginPath = firstNonEmpty(cfg.ConnectedLoginLoginPath, "/oauth/login")
+		cfg.ConnectedLoginTokenPath = firstNonEmpty(cfg.ConnectedLoginTokenPath, "/api/oauth/token")
+		cfg.ConnectedLoginUserinfoPath = firstNonEmpty(cfg.ConnectedLoginUserinfoPath, "/api/oauth/userinfo")
+		cfg.ConnectedLoginReturnToParam = firstNonEmpty(cfg.ConnectedLoginReturnToParam, "return_to")
+		cfg.ConnectedLoginSubjectClaim = firstNonEmpty(cfg.ConnectedLoginSubjectClaim, "sub")
+		cfg.ConnectedLoginActorTypeClaim = firstNonEmpty(cfg.ConnectedLoginActorTypeClaim, "type")
+		cfg.ConnectedLoginHumanTypeValue = firstNonEmpty(cfg.ConnectedLoginHumanTypeValue, "human")
+		cfg.ConnectedLoginAgentTypeValue = firstNonEmpty(cfg.ConnectedLoginAgentTypeValue, "agent")
+		cfg.ConnectedLoginClientIDClaim = firstNonEmpty(cfg.ConnectedLoginClientIDClaim, "client_id")
+		cfg.ConnectedLoginClientNameClaim = firstNonEmpty(cfg.ConnectedLoginClientNameClaim, "client_name")
+		cfg.ConnectedLoginPreferredUsernameClaim = firstNonEmpty(cfg.ConnectedLoginPreferredUsernameClaim, "preferred_username")
+		cfg.ConnectedLoginNameClaim = firstNonEmpty(cfg.ConnectedLoginNameClaim, "name")
+		cfg.ConnectedLoginPictureClaim = firstNonEmpty(cfg.ConnectedLoginPictureClaim, "picture")
+		cfg.ConnectedLoginAvatarURLClaim = firstNonEmpty(cfg.ConnectedLoginAvatarURLClaim, "avatar_url")
+		cfg.ConnectedLoginDescriptionClaim = firstNonEmpty(cfg.ConnectedLoginDescriptionClaim, "description")
+		cfg.ConnectedLoginScopeClaim = firstNonEmpty(cfg.ConnectedLoginScopeClaim, "scope")
 	}
 	return cfg, nil
 }
 
-// SlockOAuthEnabled reports whether Login-with-Slock is configured.
-func (c Config) SlockOAuthEnabled() bool {
-	return strings.TrimSpace(c.SlockOrigin) != "" &&
-		strings.TrimSpace(c.SlockAPIOrigin) != "" &&
-		strings.TrimSpace(c.SlockClientID) != "" &&
-		strings.TrimSpace(c.SlockClientSecret) != ""
+// ConnectedLoginEnabled reports whether connected login is configured.
+func (c Config) ConnectedLoginEnabled() bool {
+	return strings.TrimSpace(c.ConnectedLoginOrigin) != "" &&
+		strings.TrimSpace(c.ConnectedLoginAPIOrigin) != "" &&
+		strings.TrimSpace(c.ConnectedLoginClientID) != "" &&
+		strings.TrimSpace(c.ConnectedLoginClientSecret) != ""
 }
 
 func getEnv(key, fallback string) string {
@@ -263,16 +340,37 @@ func looksLikeAuth0Issuer(raw string) bool {
 	return host == "auth0.com" || strings.HasSuffix(host, ".auth0.com")
 }
 
-func validateSlockOAuthConfig(cfg Config) error {
+func validateConnectedLoginConfig(cfg Config) error {
 	type envValue struct {
 		name  string
 		value string
 	}
 	required := []envValue{
-		{name: "SLOCK_ORIGIN", value: cfg.SlockOrigin},
-		{name: "SLOCK_API_ORIGIN", value: cfg.SlockAPIOrigin},
-		{name: "SLOCK_CLIENT_ID", value: cfg.SlockClientID},
-		{name: "SLOCK_CLIENT_SECRET", value: cfg.SlockClientSecret},
+		{name: "CONNECTED_LOGIN_ORIGIN", value: cfg.ConnectedLoginOrigin},
+		{name: "CONNECTED_LOGIN_API_ORIGIN", value: cfg.ConnectedLoginAPIOrigin},
+		{name: "CONNECTED_LOGIN_CLIENT_ID", value: cfg.ConnectedLoginClientID},
+		{name: "CONNECTED_LOGIN_CLIENT_SECRET", value: cfg.ConnectedLoginClientSecret},
+	}
+	optional := []envValue{
+		{name: "CONNECTED_LOGIN_PROVIDER", value: cfg.ConnectedLoginProvider},
+		{name: "CONNECTED_LOGIN_LOGIN_PATH", value: cfg.ConnectedLoginLoginPath},
+		{name: "CONNECTED_LOGIN_TOKEN_PATH", value: cfg.ConnectedLoginTokenPath},
+		{name: "CONNECTED_LOGIN_USERINFO_PATH", value: cfg.ConnectedLoginUserinfoPath},
+		{name: "CONNECTED_LOGIN_RETURN_TO_PARAM", value: cfg.ConnectedLoginReturnToParam},
+		{name: "CONNECTED_LOGIN_SUBJECT_CLAIM", value: cfg.ConnectedLoginSubjectClaim},
+		{name: "CONNECTED_LOGIN_SUBJECT_NAMESPACE_CLAIM", value: cfg.ConnectedLoginSubjectNamespaceClaim},
+		{name: "CONNECTED_LOGIN_SUBJECT_NAMESPACE_SLUG_CLAIM", value: cfg.ConnectedLoginSubjectNamespaceSlugClaim},
+		{name: "CONNECTED_LOGIN_ACTOR_TYPE_CLAIM", value: cfg.ConnectedLoginActorTypeClaim},
+		{name: "CONNECTED_LOGIN_HUMAN_TYPE_VALUE", value: cfg.ConnectedLoginHumanTypeValue},
+		{name: "CONNECTED_LOGIN_AGENT_TYPE_VALUE", value: cfg.ConnectedLoginAgentTypeValue},
+		{name: "CONNECTED_LOGIN_CLIENT_ID_CLAIM", value: cfg.ConnectedLoginClientIDClaim},
+		{name: "CONNECTED_LOGIN_CLIENT_NAME_CLAIM", value: cfg.ConnectedLoginClientNameClaim},
+		{name: "CONNECTED_LOGIN_PREFERRED_USERNAME_CLAIM", value: cfg.ConnectedLoginPreferredUsernameClaim},
+		{name: "CONNECTED_LOGIN_NAME_CLAIM", value: cfg.ConnectedLoginNameClaim},
+		{name: "CONNECTED_LOGIN_PICTURE_CLAIM", value: cfg.ConnectedLoginPictureClaim},
+		{name: "CONNECTED_LOGIN_AVATAR_URL_CLAIM", value: cfg.ConnectedLoginAvatarURLClaim},
+		{name: "CONNECTED_LOGIN_DESCRIPTION_CLAIM", value: cfg.ConnectedLoginDescriptionClaim},
+		{name: "CONNECTED_LOGIN_SCOPE_CLAIM", value: cfg.ConnectedLoginScopeClaim},
 	}
 	var set, missing []string
 	for _, item := range required {
@@ -282,8 +380,13 @@ func validateSlockOAuthConfig(cfg Config) error {
 		}
 		set = append(set, item.name)
 	}
+	for _, item := range optional {
+		if strings.TrimSpace(item.value) != "" {
+			set = append(set, item.name)
+		}
+	}
 	if len(set) > 0 && len(missing) > 0 {
-		return fmt.Errorf("login-with-slock: partial configuration; set %v, missing %v", set, missing)
+		return fmt.Errorf("connected login: partial configuration; set %v, missing %v", set, missing)
 	}
 	return nil
 }

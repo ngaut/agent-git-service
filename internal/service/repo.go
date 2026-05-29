@@ -40,7 +40,7 @@ type Service struct {
 	Embedder       embedding.Embedder
 	AllowAnyToken  bool
 	OIDC           OIDCProvider
-	SlockOAuth     SlockOAuthProvider
+	ConnectedLogin ConnectedLoginProvider
 	// AttachmentScanner is an optional hook for virus scanning or policy checks
 	// before an attachment is written to disk.
 	AttachmentScanner func(ctx context.Context, filename, contentType string, content []byte) error

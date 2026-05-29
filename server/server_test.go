@@ -88,7 +88,7 @@ func TestInitServiceDeps_EnablesGenericOIDC(t *testing.T) {
 	}
 }
 
-func TestInitServiceDeps_EnablesSlockOAuth(t *testing.T) {
+func TestInitServiceDeps_EnablesConnectedLogin(t *testing.T) {
 	mainDB := openTestDB(t)
 	tmpDir := t.TempDir()
 
@@ -98,39 +98,42 @@ func TestInitServiceDeps_EnablesSlockOAuth(t *testing.T) {
 	}
 
 	deps, err := initServiceDeps(config.Config{
-		BaseURL:               "https://ags.example.com",
-		DBdsn:                 "ignored-by-test",
-		GitRepoDir:            tmpDir,
-		SlockOrigin:           "https://app.slock.ai",
-		SlockAPIOrigin:        "https://api.slock.ai",
-		SlockClientID:         "slock-client",
-		SlockClientSecret:     "slock-secret",
-		WorkflowExecImage:     "bash:5.2",
-		WorkflowExecTimeout:   2 * time.Minute,
-		WorkflowExecCPUs:      "1.0",
-		WorkflowExecMemory:    "256m",
-		WorkflowExecPidsLimit: 128,
-		WorkflowExecNoFile:    1024,
-		WorkflowExecTmpfsSize: "64m",
+		BaseURL:                             "https://ags.example.com",
+		DBdsn:                               "ignored-by-test",
+		GitRepoDir:                          tmpDir,
+		ConnectedLoginProvider:              "provider",
+		ConnectedLoginOrigin:                "https://app.provider.example",
+		ConnectedLoginAPIOrigin:             "https://api.provider.example",
+		ConnectedLoginClientID:              "connected-client",
+		ConnectedLoginClientSecret:          "connected-secret",
+		ConnectedLoginLoginPath:             "/oauth/login",
+		ConnectedLoginSubjectNamespaceClaim: "workspace_id",
+		WorkflowExecImage:                   "bash:5.2",
+		WorkflowExecTimeout:                 2 * time.Minute,
+		WorkflowExecCPUs:                    "1.0",
+		WorkflowExecMemory:                  "256m",
+		WorkflowExecPidsLimit:               128,
+		WorkflowExecNoFile:                  1024,
+		WorkflowExecTmpfsSize:               "64m",
 	}, mainDB, store, nil, context.Background())
 	if err != nil {
 		t.Fatalf("initServiceDeps: %v", err)
 	}
 
-	if deps.svc.SlockOAuth == nil {
-		t.Fatal("expected Slock OAuth client to be configured")
+	if deps.svc.ConnectedLogin == nil {
+		t.Fatal("expected connected login client to be configured")
 	}
-	loginURL, err := url.Parse(deps.svc.SlockOAuth.LoginURL("csrf-state"))
+	loginURL, err := url.Parse(deps.svc.ConnectedLogin.LoginURL("csrf-state"))
 	if err != nil {
 		t.Fatalf("parse login URL: %v", err)
 	}
-	if loginURL.Scheme != "https" || loginURL.Host != "app.slock.ai" || loginURL.Path != "/login-with-slock/setup" {
+	if loginURL.Scheme != "https" || loginURL.Host != "app.provider.example" || loginURL.Path != "/oauth/login" {
 		t.Fatalf("unexpected login URL: %s", loginURL.String())
 	}
-	if got := loginURL.Query().Get("client_id"); got != "slock-client" {
+	if got := loginURL.Query().Get("client_id"); got != "connected-client" {
 		t.Fatalf("client_id: got %q", got)
 	}
-	if got := loginURL.Query().Get("return_to"); got != "https://ags.example.com/auth/slock/callback" {
+	if got := loginURL.Query().Get("return_to"); got != "https://ags.example.com/auth/connected/callback" {
 		t.Fatalf("return_to: got %q", got)
 	}
 	if got := loginURL.Query().Get("state"); got != "csrf-state" {

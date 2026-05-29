@@ -1,4 +1,4 @@
-package slockoauth
+package connectedlogin
 
 import (
 	"context"
@@ -13,12 +13,15 @@ import (
 
 func TestLoginURLUsesCallbackBaseURL(t *testing.T) {
 	c, err := New(Config{
-		Origin:            "https://app.slock.ai/",
-		APIOrigin:         "https://api.slock.ai",
-		ClientID:          "slock-client",
-		ClientSecret:      "slock-secret",
-		CallbackBaseURL:   "https://ags.example.com/",
-		AllowInsecureHTTP: false,
+		Provider:              "provider",
+		Origin:                "https://app.provider.example/",
+		APIOrigin:             "https://api.provider.example",
+		ClientID:              "connected-client",
+		ClientSecret:          "connected-secret",
+		CallbackBaseURL:       "https://ags.example.com/",
+		LoginPath:             "/login/setup",
+		SubjectNamespaceClaim: "workspace_id",
+		AllowInsecureHTTP:     false,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -28,19 +31,19 @@ func TestLoginURLUsesCallbackBaseURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse login URL: %v", err)
 	}
-	if loginURL.Scheme != "https" || loginURL.Host != "app.slock.ai" || loginURL.Path != loginPath {
+	if loginURL.Scheme != "https" || loginURL.Host != "app.provider.example" || loginURL.Path != "/login/setup" {
 		t.Fatalf("unexpected login URL: %s", loginURL.String())
 	}
-	if got := loginURL.Query().Get("client_id"); got != "slock-client" {
+	if got := loginURL.Query().Get("client_id"); got != "connected-client" {
 		t.Fatalf("client_id: got %q", got)
 	}
-	if got := loginURL.Query().Get("return_to"); got != "https://ags.example.com/auth/slock/callback" {
+	if got := loginURL.Query().Get("return_to"); got != "https://ags.example.com/auth/connected/callback" {
 		t.Fatalf("return_to: got %q", got)
 	}
 	if got := loginURL.Query().Get("state"); got != "csrf-state" {
 		t.Fatalf("state: got %q", got)
 	}
-	if got := c.CallbackURL(); got != "https://ags.example.com/auth/slock/callback" {
+	if got := c.CallbackURL(); got != "https://ags.example.com/auth/connected/callback" {
 		t.Fatalf("CallbackURL: got %q", got)
 	}
 }
@@ -48,11 +51,11 @@ func TestLoginURLUsesCallbackBaseURL(t *testing.T) {
 func TestExchangeCodeSendsBasicAuthAndJSON(t *testing.T) {
 	var sawRequest bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != tokenPath {
+		if r.URL.Path != defaultTokenPath {
 			t.Fatalf("path: got %q", r.URL.Path)
 		}
 		user, pass, ok := r.BasicAuth()
-		if !ok || user != "slock-client" || pass != "slock-secret" {
+		if !ok || user != "connected-client" || pass != "connected-secret" {
 			t.Fatalf("basic auth: got ok=%v user=%q pass=%q", ok, user, pass)
 		}
 		var body map[string]string
@@ -111,30 +114,30 @@ func TestUserinfoValidatesResponse(t *testing.T) {
 	}{
 		{
 			name: "human",
-			body: `{"sub":"human-1","type":"human","client_id":"slock-client","server_id":"srv-1","preferred_username":"alice"}`,
+			body: `{"sub":"human-1","type":"human","client_id":"connected-client","workspace_id":"ws-1","preferred_username":"alice"}`,
 		},
 		{
 			name: "agent",
-			body: `{"sub":"agent-1","type":"agent","client_id":"slock-client","server_id":"srv-1","preferred_username":"assistant","picture":"https://cdn.slock.ai/avatar.png","avatar_url":"pixel:random:42"}`,
+			body: `{"sub":"agent-1","type":"agent","client_id":"connected-client","workspace_id":"ws-1","preferred_username":"assistant","picture":"https://cdn.provider.example/avatar.png","avatar_url":"pixel:random:42"}`,
 		},
 		{
 			name: "empty-sub",
-			body: `{"type":"human","client_id":"slock-client","server_id":"srv-1"}`,
+			body: `{"type":"human","client_id":"connected-client","workspace_id":"ws-1"}`,
 			want: "empty sub",
 		},
 		{
-			name: "empty-server-id",
-			body: `{"sub":"human-1","type":"human","client_id":"slock-client"}`,
-			want: "empty server_id",
+			name: "empty-namespace",
+			body: `{"sub":"human-1","type":"human","client_id":"connected-client"}`,
+			want: "empty workspace_id",
 		},
 		{
 			name: "bad-type",
-			body: `{"sub":"human-1","type":"robot","client_id":"slock-client","server_id":"srv-1"}`,
-			want: `unexpected type "robot"`,
+			body: `{"sub":"human-1","type":"robot","client_id":"connected-client","workspace_id":"ws-1"}`,
+			want: `unexpected actor type "robot"`,
 		},
 		{
 			name: "client-id-mismatch",
-			body: `{"sub":"human-1","type":"human","client_id":"other-client","server_id":"srv-1"}`,
+			body: `{"sub":"human-1","type":"human","client_id":"other-client","workspace_id":"ws-1"}`,
 			want: "client_id mismatch",
 		},
 	}
@@ -142,7 +145,7 @@ func TestUserinfoValidatesResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != userinfoPath {
+				if r.URL.Path != defaultUserinfoPath {
 					t.Fatalf("path: got %q", r.URL.Path)
 				}
 				if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
@@ -167,11 +170,11 @@ func TestUserinfoValidatesResponse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Userinfo: %v", err)
 			}
-			if ui.Sub == "" || ui.ServerID == "" || ui.Type == "" {
+			if ui.Sub == "" || ui.SubjectNamespace == "" || ui.Type == "" {
 				t.Fatalf("userinfo not populated: %#v", ui)
 			}
 			if tt.name == "agent" {
-				if ui.Picture == nil || *ui.Picture != "https://cdn.slock.ai/avatar.png" {
+				if ui.Picture != "https://cdn.provider.example/avatar.png" {
 					t.Fatalf("picture not populated: %#v", ui.Picture)
 				}
 			}
@@ -182,12 +185,14 @@ func TestUserinfoValidatesResponse(t *testing.T) {
 func newTestClient(t *testing.T, serverURL string) *Client {
 	t.Helper()
 	c, err := New(Config{
-		Origin:            serverURL,
-		APIOrigin:         serverURL,
-		ClientID:          "slock-client",
-		ClientSecret:      "slock-secret",
-		CallbackBaseURL:   serverURL,
-		AllowInsecureHTTP: true,
+		Provider:              "provider",
+		Origin:                serverURL,
+		APIOrigin:             serverURL,
+		ClientID:              "connected-client",
+		ClientSecret:          "connected-secret",
+		CallbackBaseURL:       serverURL,
+		SubjectNamespaceClaim: "workspace_id",
+		AllowInsecureHTTP:     true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

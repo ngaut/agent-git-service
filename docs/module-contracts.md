@@ -47,7 +47,7 @@ The main runtime layers are:
 - `gitstore`
 
 Supporting packages such as `config`, `oauth`, `authn`, `githttp`, `oidc`,
-`slockoauth`, `rest/respond`, `rest/transform`, `tenant`, `ratelimit`,
+`connectedlogin`, `rest/respond`, `rest/transform`, `tenant`, `ratelimit`,
 `metrics`, `logging`, `httputil`, `testharness`,
 `apperrors`, `crypto`, `embedding`, and `randutil` are included where they
 materially affect the contracts.
@@ -87,7 +87,7 @@ document the relevant contract below in the same change.
 | `rest` | GitHub REST API surface |
 | `router` | route registration and host rewrite |
 | `service` | business logic and cross-store orchestration |
-| `slockoauth` | Login-with-Slock OAuth-style code exchange and userinfo client |
+| `connectedlogin` | configurable OAuth-style browser-login code exchange and userinfo client |
 | `tenant` | gitstore tenant context helpers for physical repo scoping |
 | `testharness` | production-wired service and router test fixtures |
 | `wikicatalog` | legacy wiki catalog primitives, slug canonicalization, and transitional blob/CAS helpers |
@@ -102,7 +102,7 @@ document the relevant contract below in the same change.
 | `rest` | HTTP request decode, REST response codes, REST JSON shapes | `service`, `controlplane`, `rest/respond`, `rest/transform`, `ratelimit`, `db` model types, `Svc.Git` via `*service.Service` | GORM queries, GraphQL helpers |
 | `graphql` | GraphQL request parse, resolver dispatch, GraphQL response shapes, field filtering | `service`, `db` model types, `rest/respond` for HTTP JSON writeout, selected `Svc.Git` and `Svc.DB` access via `*service.Service` | `rest/transform` |
 | `controlplane` | control-plane schema, token-to-tenant DB routing, tenant-user bootstrap | `db`, `crypto`, GORM, standard library | `router`, `rest`, `graphql`, `gitstore`, transport rendering |
-| `service` | business rules, persistence orchestration, Git orchestration, domain side effects | `db`, `gitstore`, `embedding`, `oidc`, `slockoauth` | `router`, `middleware`, `rest`, `graphql`, HTTP response helpers |
+| `service` | business rules, persistence orchestration, Git orchestration, domain side effects | `db`, `gitstore`, `embedding`, `oidc`, `connectedlogin` | `router`, `middleware`, `rest`, `graphql`, HTTP response helpers |
 | `db` | schema, migrations, seed data, relational model types, shared state constants | GORM and standard library only | `service`, `rest`, `graphql`, `gitstore` |
 | `gitstore` | Git-native repo lifecycle, refs, merge/rebase/diff/content/archive operations | system `git`, go-git, filesystem, `tenant` | `db`, `rest`, `graphql` |
 
@@ -456,6 +456,25 @@ Current state:
 - `main` constructs the client and injects it into `service.Service.OIDC`
 - REST handlers under `/api/v3/oidc/*` call service methods, not the client directly
 
+### `connectedlogin`
+
+Ownership:
+
+- configurable OAuth-style browser login URL generation
+- authorization-code token exchange against the configured token path
+- bearer-token userinfo lookup and claim extraction for non-OIDC providers
+
+Rules:
+
+- may perform outbound HTTP and provider response validation
+- must stay transport-agnostic and must not persist application users or tokens directly
+- must remain provider-neutral; provider-specific behavior belongs in deployment configuration such as endpoint paths and claim names
+
+Current state:
+
+- `main` constructs the client and injects it into `service.Service.ConnectedLogin`
+- REST handlers under `/auth/connected/*` call service methods, not the client directly
+
 ### `authn`
 
 Ownership:
@@ -623,6 +642,7 @@ Ownership split:
 - `controlplane`: in multi-tenant mode, resolve token -> `CPUser` -> tenant `*gorm.DB`, and ensure the tenant-local `db.User` exists
 - `service`: validate API tokens and resolve user-by-token in single-DB mode; persist application users and tokens for OIDC-backed human login; map trusted embedded identities onto internal `db.User` + `UserIdentity` rows
 - `oidc`: perform provider-neutral discovery, device-flow requests, and ID token verification
+- `connectedlogin`: perform configurable OAuth-style code exchange and userinfo lookup for providers without standard OIDC discovery
 - `githttp`: uses the same auth middleware on Git routes, with `TokenAuth` in control-plane mode and `OptionalTokenAuth` in single-DB mode
 - `rest` and `graphql`: consume `GetCurrentUser(ctx)` and assume middleware has prepared the context
 
@@ -633,7 +653,7 @@ Rule:
 - embedded single-DB hosts may inject a trusted identity through `server.WithAuthenticator`; middleware must still be the single place that turns that identity into request context
 - the trusted identity contract requires non-empty `Provider`, `Subject`, and `Login`; AGS owns the mapping from that tuple onto `db.User` + `db.UserIdentity`
 - when embedded identity is present in single-DB mode, it takes precedence over `Authorization` headers and must flow through every REST/GraphQL/Git route family that already depends on optional or required auth context, including `/api/v3/rate_limit` and `/api/v3/users/{username}/starred`
-- outbound identity-provider clients such as `oidc` must not write application state directly
+- outbound identity-provider clients such as `oidc` and `connectedlogin` must not write application state directly
 - control-plane mode currently stays fail-closed for embedded identities until a tenant-aware resolver contract is added
 
 ### Collaboration Authorization
@@ -754,6 +774,7 @@ Current state:
 | `githttp -> *gitstore.Store` | Git transport | intended | transport handler needs direct repo access |
 | `githttp -> *service.Service` | ensure repo exists, post-push follow-up | acceptable but visible debt | transport + follow-up logic are coupled in one package |
 | `service -> oidc.Client` | generic human-login flows | acceptable for now | keeps provider-neutral OIDC protocol work outside business-state orchestration |
+| `service -> connectedlogin.Client` | non-OIDC connected-login flows | acceptable for now | keeps configurable OAuth-style protocol work outside business-state orchestration |
 | `gitstore -> tenant` | per-tenant repo roots and lock keys | intended | physical repo scoping is an infrastructure concern, not a service concern |
 
 ## Refactors Worth Doing

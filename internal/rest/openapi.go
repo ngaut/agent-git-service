@@ -124,11 +124,11 @@ func buildRESTOpenAPIPaths() map[string]any {
 				"id_token": stringSchema("OIDC ID token to validate and map to a local user."),
 			}, []string{"id_token"}), nil, response(200, "Identity resolved")),
 		},
-		"/auth/slock/login": map[string]any{
-			"get": operation("startSlockLogin", "Redirect the browser to Login-with-Slock.", nil, nil, nil, response(302, "Redirect to Slock login")),
+		"/auth/connected/login": map[string]any{
+			"get": operation("startConnectedLogin", "Redirect the browser to the configured connected login provider.", nil, nil, nil, response(302, "Redirect to connected login")),
 		},
-		"/auth/slock/callback": map[string]any{
-			"get": operation("handleSlockCallback", "Exchange a Login-with-Slock authorization code for a local session.", nil, nil, queryParams(
+		"/auth/connected/callback": map[string]any{
+			"get": operation("handleConnectedCallback", "Exchange a connected login authorization code for a local session.", nil, nil, queryParams(
 				param("code", "string"),
 				param("error", "string"),
 				param("state", "string"),
