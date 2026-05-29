@@ -173,12 +173,86 @@ func TestUserinfoValidatesResponse(t *testing.T) {
 			if ui.Sub == "" || ui.SubjectNamespace == "" || ui.Type == "" {
 				t.Fatalf("userinfo not populated: %#v", ui)
 			}
+			if ui.SubjectNamespaceClaim != "workspace_id" {
+				t.Fatalf("SubjectNamespaceClaim: got %q", ui.SubjectNamespaceClaim)
+			}
 			if tt.name == "agent" {
 				if ui.Picture != "https://cdn.provider.example/avatar.png" {
 					t.Fatalf("picture not populated: %#v", ui.Picture)
 				}
 			}
 		})
+	}
+}
+
+func TestSlockCompatibleConfigCoversLegacyAdapterShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != defaultUserinfoPath {
+			t.Fatalf("path: got %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Fatalf("Authorization: got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"sub":"agent-sub",
+			"type":"agent",
+			"scope":"repo",
+			"client_id":"slock-client",
+			"client_name":"AGS",
+			"server_id":"server-1",
+			"server_slug":"server-one",
+			"server_role":"admin",
+			"preferred_username":"dev-agent",
+			"name":"Dev Agent",
+			"picture":"https://cdn.slock.example/avatar.png",
+			"avatar_url":"pixel:random:42",
+			"description":"automation agent"
+		}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{
+		Provider:                  "slock",
+		Origin:                    srv.URL + "/",
+		APIOrigin:                 srv.URL,
+		ClientID:                  "slock-client",
+		ClientSecret:              "slock-secret",
+		CallbackBaseURL:           "https://ags.example.com",
+		LoginPath:                 "/login-with-slock/setup",
+		SubjectNamespaceClaim:     "server_id",
+		SubjectNamespaceSlugClaim: "server_slug",
+		AllowInsecureHTTP:         true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	loginURL, err := url.Parse(c.LoginURL("csrf-state"))
+	if err != nil {
+		t.Fatalf("parse login URL: %v", err)
+	}
+	if loginURL.Path != "/login-with-slock/setup" {
+		t.Fatalf("login path: got %q", loginURL.Path)
+	}
+	if got := loginURL.Query().Get("client_id"); got != "slock-client" {
+		t.Fatalf("client_id: got %q", got)
+	}
+	if got := loginURL.Query().Get("return_to"); got != "https://ags.example.com/auth/connected/callback" {
+		t.Fatalf("return_to: got %q", got)
+	}
+
+	ui, err := c.Userinfo(context.Background(), "access-token")
+	if err != nil {
+		t.Fatalf("Userinfo: %v", err)
+	}
+	if ui.Sub != "agent-sub" || ui.Type != "agent" || ui.SubjectNamespace != "server-1" || ui.SubjectNamespaceSlug != "server-one" {
+		t.Fatalf("unexpected slock-compatible userinfo: %#v", ui)
+	}
+	if ui.SubjectNamespaceClaim != "server_id" {
+		t.Fatalf("SubjectNamespaceClaim: got %q", ui.SubjectNamespaceClaim)
+	}
+	if got, _ := ui.RawClaims["server_role"].(string); got != "admin" {
+		t.Fatalf("server_role raw claim: got %q", got)
 	}
 }
 

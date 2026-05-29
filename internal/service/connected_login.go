@@ -21,12 +21,13 @@ type ConnectedLoginProvider interface {
 }
 
 type ConnectedSessionResult struct {
-	Token            string
-	UserID           uint
-	Login            string
-	Type             string
-	Sub              string
-	SubjectNamespace string
+	Token                 string
+	UserID                uint
+	Login                 string
+	Type                  string
+	Sub                   string
+	SubjectNamespace      string
+	SubjectNamespaceClaim string
 }
 
 var ErrConnectedLoginNotConfigured = errors.New("connected login is not configured")
@@ -87,12 +88,13 @@ func (s *Service) ConnectedLoginWithCode(ctx context.Context, code string) (Conn
 		"subject_namespace", ui.SubjectNamespace,
 	)
 	return ConnectedSessionResult{
-		Token:            session.Token,
-		UserID:           session.UserID,
-		Login:            session.Login,
-		Type:             ui.Type,
-		Sub:              ui.Sub,
-		SubjectNamespace: ui.SubjectNamespace,
+		Token:                 session.Token,
+		UserID:                session.UserID,
+		Login:                 session.Login,
+		Type:                  ui.Type,
+		Sub:                   ui.Sub,
+		SubjectNamespace:      ui.SubjectNamespace,
+		SubjectNamespaceClaim: ui.SubjectNamespaceClaim,
 	}, nil
 }
 
@@ -227,6 +229,7 @@ func connectedRawClaims(ui connectedlogin.Userinfo) map[string]any {
 	claims["client_id"] = ui.ClientID
 	claims["client_name"] = ui.ClientName
 	claims["subject_namespace"] = ui.SubjectNamespace
+	claims["subject_namespace_claim"] = ui.SubjectNamespaceClaim
 	claims["subject_namespace_slug"] = ui.SubjectNamespaceSlug
 	claims["preferred_username"] = ui.PreferredUsername
 	claims["name"] = ui.Name

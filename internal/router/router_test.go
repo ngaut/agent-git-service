@@ -147,12 +147,13 @@ func (f routerFakeConnectedLoginProvider) ExchangeCode(ctx context.Context, code
 
 func (f routerFakeConnectedLoginProvider) Userinfo(ctx context.Context, accessToken string) (connectedlogin.Userinfo, error) {
 	return connectedlogin.Userinfo{
-		Sub:               "agent-sub",
-		Type:              "agent",
-		ClientID:          "connected-client",
-		SubjectNamespace:  "workspace-1",
-		PreferredUsername: "agent",
-		Name:              "Connected Agent",
+		Sub:                   "agent-sub",
+		Type:                  "agent",
+		ClientID:              "connected-client",
+		SubjectNamespace:      "workspace-1",
+		SubjectNamespaceClaim: "server_id",
+		PreferredUsername:     "agent",
+		Name:                  "Connected Agent",
 	}, nil
 }
 
@@ -235,7 +236,7 @@ func TestConnectedLoginRoutes(t *testing.T) {
 		if loc.Query().Get("code") == "" || loc.Query().Get("login") == "" {
 			t.Fatalf("expected auth code and login in redirect query, got %q", loc.String())
 		}
-		if loc.Query().Get("type") != "agent" || loc.Query().Get("sub") != "agent-sub" || loc.Query().Get("subject_namespace") != "workspace-1" {
+		if loc.Query().Get("type") != "agent" || loc.Query().Get("sub") != "agent-sub" || loc.Query().Get("subject_namespace") != "workspace-1" || loc.Query().Get("server_id") != "workspace-1" {
 			t.Fatalf("unexpected callback redirect query: %q", loc.String())
 		}
 		var codeVerifier string
@@ -313,7 +314,7 @@ func TestConnectedLoginRoutes(t *testing.T) {
 		if token == "" {
 			t.Fatalf("expected durable token in callback JSON, got %#v", body)
 		}
-		if body["type"] != "agent" || body["sub"] != "agent-sub" || body["subject_namespace"] != "workspace-1" {
+		if body["type"] != "agent" || body["sub"] != "agent-sub" || body["subject_namespace"] != "workspace-1" || body["server_id"] != "workspace-1" {
 			t.Fatalf("unexpected callback JSON metadata: %#v", body)
 		}
 		var dbToken db.Token

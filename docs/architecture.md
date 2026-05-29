@@ -372,7 +372,10 @@ the browser to `CONSOLE_BASE_URL` with the code plus non-secret identity metadat
 in the query string. The console completes sign-in
 by exchanging the code through the existing `/login/oauth/access_token` path
 with browser credentials included, so a copied redirect URL is not sufficient
-to mint a durable AGS bearer token.
+to mint a durable AGS bearer token. Callback JSON and console redirect metadata
+always include `subject_namespace` when present, and also include the configured
+namespace claim name as an alias when it is safe to expose, so providers can keep
+their existing public metadata shape without code-level special cases.
 
 The connected-login browser workflow is:
 

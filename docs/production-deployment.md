@@ -145,6 +145,9 @@ For Slock, `CONNECTED_LOGIN_PROVIDER=slock` preserves the local
 `UserIdentity.provider` key. `CONNECTED_LOGIN_SUBJECT_NAMESPACE_CLAIM=server_id`
 preserves the subject shape `<server_id>:<sub>` and avoids cross-server subject
 collisions; when this claim is configured, Slock must return `server_id`.
+Callback JSON and console redirect metadata include both `subject_namespace`
+and the configured alias `server_id`, preserving the old Slock response shape
+without Slock-specific code.
 `CONNECTED_LOGIN_SUBJECT_NAMESPACE_SLUG_CLAIM=server_slug` only improves
 generated login candidates.
 

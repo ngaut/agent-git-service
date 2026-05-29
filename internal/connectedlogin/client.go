@@ -180,19 +180,20 @@ type Token struct {
 }
 
 type Userinfo struct {
-	Sub                  string
-	Type                 string
-	Scope                string
-	ClientID             string
-	ClientName           string
-	SubjectNamespace     string
-	SubjectNamespaceSlug string
-	PreferredUsername    string
-	Name                 string
-	Picture              string
-	AvatarURL            string
-	Description          string
-	RawClaims            map[string]any
+	Sub                   string
+	Type                  string
+	Scope                 string
+	ClientID              string
+	ClientName            string
+	SubjectNamespace      string
+	SubjectNamespaceClaim string
+	SubjectNamespaceSlug  string
+	PreferredUsername     string
+	Name                  string
+	Picture               string
+	AvatarURL             string
+	Description           string
+	RawClaims             map[string]any
 }
 
 type OAuthError struct {
@@ -281,19 +282,20 @@ func (c *Client) userinfoFromClaims(claims map[string]any) Userinfo {
 		normalizedType = actorType
 	}
 	return Userinfo{
-		Sub:                  claimString(claims, c.cfg.SubjectClaim),
-		Type:                 normalizedType,
-		Scope:                claimString(claims, c.cfg.ScopeClaim),
-		ClientID:             claimString(claims, c.cfg.ClientIDClaim),
-		ClientName:           claimString(claims, c.cfg.ClientNameClaim),
-		SubjectNamespace:     claimString(claims, c.cfg.SubjectNamespaceClaim),
-		SubjectNamespaceSlug: claimString(claims, c.cfg.SubjectNamespaceSlugClaim),
-		PreferredUsername:    claimString(claims, c.cfg.PreferredUsernameClaim),
-		Name:                 claimString(claims, c.cfg.NameClaim),
-		Picture:              claimString(claims, c.cfg.PictureClaim),
-		AvatarURL:            claimString(claims, c.cfg.AvatarURLClaim),
-		Description:          claimString(claims, c.cfg.DescriptionClaim),
-		RawClaims:            claims,
+		Sub:                   claimString(claims, c.cfg.SubjectClaim),
+		Type:                  normalizedType,
+		Scope:                 claimString(claims, c.cfg.ScopeClaim),
+		ClientID:              claimString(claims, c.cfg.ClientIDClaim),
+		ClientName:            claimString(claims, c.cfg.ClientNameClaim),
+		SubjectNamespace:      claimString(claims, c.cfg.SubjectNamespaceClaim),
+		SubjectNamespaceClaim: c.cfg.SubjectNamespaceClaim,
+		SubjectNamespaceSlug:  claimString(claims, c.cfg.SubjectNamespaceSlugClaim),
+		PreferredUsername:     claimString(claims, c.cfg.PreferredUsernameClaim),
+		Name:                  claimString(claims, c.cfg.NameClaim),
+		Picture:               claimString(claims, c.cfg.PictureClaim),
+		AvatarURL:             claimString(claims, c.cfg.AvatarURLClaim),
+		Description:           claimString(claims, c.cfg.DescriptionClaim),
+		RawClaims:             claims,
 	}
 }
 

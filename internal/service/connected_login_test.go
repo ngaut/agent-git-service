@@ -138,6 +138,46 @@ func TestConnectedLoginWithCodeCreatesSession(t *testing.T) {
 	}
 }
 
+func TestConnectedLoginWithCodeCoversSlockIdentityShape(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	svc.ConnectedLogin = &fakeConnectedLoginProvider{
+		provider: "slock",
+		token:    connectedlogin.Token{AccessToken: "access-token"},
+		userinfo: connectedlogin.Userinfo{
+			Sub:                   "agent-sub",
+			Type:                  "agent",
+			ClientID:              "slock-client",
+			SubjectNamespace:      "server-1",
+			SubjectNamespaceClaim: "server_id",
+			SubjectNamespaceSlug:  "server",
+			PreferredUsername:     "Dev Agent",
+			Name:                  "Dev Agent",
+			Picture:               "https://cdn.slock.example/avatar.png",
+			RawClaims: map[string]any{
+				"server_id":   "server-1",
+				"server_role": "admin",
+			},
+		},
+	}
+
+	result, err := svc.ConnectedLoginWithCode(context.Background(), "auth-code")
+	if err != nil {
+		t.Fatalf("ConnectedLoginWithCode: %v", err)
+	}
+	if result.Type != "agent" || result.Sub != "agent-sub" || result.SubjectNamespace != "server-1" || result.SubjectNamespaceClaim != "server_id" {
+		t.Fatalf("unexpected slock-compatible result metadata: %#v", result)
+	}
+	if !strings.HasPrefix(result.Login, "slock-agent-server-dev-agent-") {
+		t.Fatalf("login %q does not keep slock-compatible candidate shape", result.Login)
+	}
+	var ident db.UserIdentity
+	if err := svc.DB.First(&ident, "user_id = ? AND provider = ? AND subject = ?", result.UserID, "slock", "server-1:agent-sub").Error; err != nil {
+		t.Fatalf("load identity: %v", err)
+	}
+}
+
 func TestConnectedLoginWithCodeReusesExistingIdentity(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()

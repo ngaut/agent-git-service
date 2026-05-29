@@ -118,8 +118,23 @@ func connectedSessionResponse(res service.ConnectedSessionResult, base map[strin
 	base["sub"] = res.Sub
 	if res.SubjectNamespace != "" {
 		base["subject_namespace"] = res.SubjectNamespace
+		if alias := connectedSubjectNamespaceAlias(res); alias != "" {
+			if _, exists := base[alias]; !exists {
+				base[alias] = res.SubjectNamespace
+			}
+		}
 	}
 	return base
+}
+
+func connectedSubjectNamespaceAlias(res service.ConnectedSessionResult) string {
+	alias := strings.TrimSpace(res.SubjectNamespaceClaim)
+	switch alias {
+	case "", "subject_namespace", "code", "expires_in", "login", "sub", "token", "type", "user_id":
+		return ""
+	default:
+		return alias
+	}
 }
 
 func connectedLoginStateCookie(value string, r *http.Request, expire bool) *http.Cookie {
@@ -211,6 +226,9 @@ func (d *Deps) connectedConsoleRedirectURL(authCode string, res service.Connecte
 	q.Set("sub", res.Sub)
 	if res.SubjectNamespace != "" {
 		q.Set("subject_namespace", res.SubjectNamespace)
+		if alias := connectedSubjectNamespaceAlias(res); alias != "" {
+			q.Set(alias, res.SubjectNamespace)
+		}
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), true
