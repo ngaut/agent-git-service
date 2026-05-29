@@ -67,7 +67,7 @@ func (s *Service) SlockLoginWithCode(ctx context.Context, code string) (SlockSes
 		Name:              strings.TrimSpace(ui.Name),
 		Nickname:          strings.TrimSpace(ui.PreferredUsername),
 		PreferredUsername: strings.TrimSpace(ui.PreferredUsername),
-		Picture:           slockOptionalString(ui.AvatarURL),
+		Picture:           slockOptionalString(ui.Picture),
 		UserKind:          userKind,
 		LoginCandidates:   slockLoginCandidates(ui),
 		RawClaims:         slockRawClaims(ui),
@@ -217,6 +217,7 @@ func slockRawClaims(ui slockoauth.Userinfo) map[string]any {
 		"server_slug":        ui.ServerSlug,
 		"preferred_username": ui.PreferredUsername,
 		"name":               ui.Name,
+		"picture":            slockOptionalString(ui.Picture),
 		"avatar_url":         slockOptionalString(ui.AvatarURL),
 		"description":        slockOptionalString(ui.Description),
 	}

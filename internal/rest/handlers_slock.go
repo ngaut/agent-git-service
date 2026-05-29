@@ -43,12 +43,16 @@ func (d *Deps) SlockCallback(w http.ResponseWriter, r *http.Request) {
 
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	cookie, err := r.Cookie(slockOAuthStateCookieName)
-	if state == "" || err != nil || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookie.Value)), []byte(state)) != 1 {
+	stateValidated := false
+	if err == nil {
+		if state == "" || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookie.Value)), []byte(state)) != 1 {
+			clearStateCookie()
+			respond.ValidationFailed(w, "invalid or missing state")
+			return
+		}
+		stateValidated = true
 		clearStateCookie()
-		respond.ValidationFailed(w, "invalid or missing state")
-		return
 	}
-	clearStateCookie()
 
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	if code == "" {
@@ -75,6 +79,18 @@ func (d *Deps) SlockCallback(w http.ResponseWriter, r *http.Request) {
 			}
 			respond.ServiceErrorRequest(r, w, err)
 		}
+		return
+	}
+
+	if !stateValidated {
+		respond.JSON(w, http.StatusOK, map[string]any{
+			"token":     res.Token,
+			"user_id":   res.UserID,
+			"login":     res.Login,
+			"type":      res.Type,
+			"sub":       res.Sub,
+			"server_id": res.ServerID,
+		})
 		return
 	}
 

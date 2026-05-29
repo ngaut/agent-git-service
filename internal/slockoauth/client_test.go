@@ -115,7 +115,7 @@ func TestUserinfoValidatesResponse(t *testing.T) {
 		},
 		{
 			name: "agent",
-			body: `{"sub":"agent-1","type":"agent","client_id":"slock-client","server_id":"srv-1","preferred_username":"assistant"}`,
+			body: `{"sub":"agent-1","type":"agent","client_id":"slock-client","server_id":"srv-1","preferred_username":"assistant","picture":"https://cdn.slock.ai/avatar.png","avatar_url":"pixel:random:42"}`,
 		},
 		{
 			name: "empty-sub",
@@ -169,6 +169,11 @@ func TestUserinfoValidatesResponse(t *testing.T) {
 			}
 			if ui.Sub == "" || ui.ServerID == "" || ui.Type == "" {
 				t.Fatalf("userinfo not populated: %#v", ui)
+			}
+			if tt.name == "agent" {
+				if ui.Picture == nil || *ui.Picture != "https://cdn.slock.ai/avatar.png" {
+					t.Fatalf("picture not populated: %#v", ui.Picture)
+				}
 			}
 		})
 	}
