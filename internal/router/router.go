@@ -166,8 +166,8 @@ func registerPublicAuthRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw fun
 		r.Post("/api/v3/oidc/session", handlers.OIDCSession)
 		r.Post("/api/v3/oidc/callback", handlers.OIDCCallback)
 		r.Post("/api/v3/oidc/lookup", handlers.OIDCLookup)
-		r.Get("/auth/slock/login", handlers.SlockLogin)
-		r.Get("/auth/slock/callback", handlers.SlockCallback)
+		r.Get("/auth/connected/login", handlers.ConnectedLogin)
+		r.Get("/auth/connected/callback", handlers.ConnectedCallback)
 	})
 }
 

@@ -19,6 +19,7 @@ import (
 
 	agsauth "github.com/ngaut/agent-git-service/auth"
 	"github.com/ngaut/agent-git-service/config"
+	"github.com/ngaut/agent-git-service/internal/connectedlogin"
 	"github.com/ngaut/agent-git-service/internal/controlplane"
 	"github.com/ngaut/agent-git-service/internal/crypto"
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -35,7 +36,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
-	"github.com/ngaut/agent-git-service/internal/slockoauth"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
@@ -424,25 +424,45 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	} else {
 		slog.Warn("workflow execution disabled; set ENABLE_WORKFLOW_EXEC=1 to allow sandboxed workflow steps")
 	}
-	if cfg.SlockOAuthEnabled() {
-		c, err := slockoauth.New(slockoauth.Config{
-			Origin:          cfg.SlockOrigin,
-			APIOrigin:       cfg.SlockAPIOrigin,
-			ClientID:        cfg.SlockClientID,
-			ClientSecret:    cfg.SlockClientSecret,
-			CallbackBaseURL: cfg.BaseURL,
+	if cfg.ConnectedLoginEnabled() {
+		c, err := connectedlogin.New(connectedlogin.Config{
+			Provider:                  cfg.ConnectedLoginProvider,
+			Origin:                    cfg.ConnectedLoginOrigin,
+			APIOrigin:                 cfg.ConnectedLoginAPIOrigin,
+			ClientID:                  cfg.ConnectedLoginClientID,
+			ClientSecret:              cfg.ConnectedLoginClientSecret,
+			CallbackBaseURL:           cfg.BaseURL,
+			LoginPath:                 cfg.ConnectedLoginLoginPath,
+			TokenPath:                 cfg.ConnectedLoginTokenPath,
+			UserinfoPath:              cfg.ConnectedLoginUserinfoPath,
+			ReturnToParam:             cfg.ConnectedLoginReturnToParam,
+			SubjectClaim:              cfg.ConnectedLoginSubjectClaim,
+			SubjectNamespaceClaim:     cfg.ConnectedLoginSubjectNamespaceClaim,
+			SubjectNamespaceSlugClaim: cfg.ConnectedLoginSubjectNamespaceSlugClaim,
+			ActorTypeClaim:            cfg.ConnectedLoginActorTypeClaim,
+			HumanTypeValue:            cfg.ConnectedLoginHumanTypeValue,
+			AgentTypeValue:            cfg.ConnectedLoginAgentTypeValue,
+			ClientIDClaim:             cfg.ConnectedLoginClientIDClaim,
+			ClientNameClaim:           cfg.ConnectedLoginClientNameClaim,
+			PreferredUsernameClaim:    cfg.ConnectedLoginPreferredUsernameClaim,
+			NameClaim:                 cfg.ConnectedLoginNameClaim,
+			PictureClaim:              cfg.ConnectedLoginPictureClaim,
+			AvatarURLClaim:            cfg.ConnectedLoginAvatarURLClaim,
+			DescriptionClaim:          cfg.ConnectedLoginDescriptionClaim,
+			ScopeClaim:                cfg.ConnectedLoginScopeClaim,
 		})
 		if err != nil {
-			return deps, fmt.Errorf("slockoauth: %w", err)
+			return deps, fmt.Errorf("connectedlogin: %w", err)
 		}
-		svcDeps.SlockOAuth = c
-		slog.Info("login-with-slock enabled",
-			"client_id", cfg.SlockClientID,
-			"slock_origin", cfg.SlockOrigin,
+		svcDeps.ConnectedLogin = c
+		slog.Info("connected login enabled",
+			"provider", cfg.ConnectedLoginProvider,
+			"client_id", cfg.ConnectedLoginClientID,
+			"origin", cfg.ConnectedLoginOrigin,
 			"callback", c.CallbackURL(),
 		)
 	} else {
-		slog.Info("login-with-slock disabled", "reason", "SLOCK_* OAuth configuration not set")
+		slog.Info("connected login disabled", "reason", "CONNECTED_LOGIN_* configuration not set")
 	}
 	if cfg.OIDCProvider != "" && cfg.OIDCClientID != "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "") {
 		c, err := oidc.New(oidc.Config{

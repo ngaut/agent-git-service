@@ -99,14 +99,80 @@ supported access paths:
   Auth0 migrations should keep `OIDC_PROVIDER=auth0` (or rely on the default
   inferred from an `*.auth0.com` issuer) so existing `UserIdentity` rows keep
   matching the same human accounts.
-- Configure Login-with-Slock with `SLOCK_ORIGIN`, `SLOCK_API_ORIGIN`,
-  `SLOCK_CLIENT_ID`, and `SLOCK_CLIENT_SECRET` when Slock should mint local AGS
-  sessions. The callback URL is derived from `BASE_URL` as
-  `/auth/slock/callback`; do not configure a separate `APP_ORIGIN`.
+- Configure connected login with `CONNECTED_LOGIN_ORIGIN`,
+  `CONNECTED_LOGIN_API_ORIGIN`, `CONNECTED_LOGIN_CLIENT_ID`, and
+  `CONNECTED_LOGIN_CLIENT_SECRET` when a non-OIDC provider should mint local AGS
+  sessions. Use `CONNECTED_LOGIN_PROVIDER`, `CONNECTED_LOGIN_LOGIN_PATH`, and the
+  `CONNECTED_LOGIN_*_CLAIM` settings to describe provider-specific paths and
+  claims in configuration. The callback URL is derived from `BASE_URL` as
+  `/auth/connected/callback`; do not configure a separate `APP_ORIGIN`.
 - Register agent accounts through `POST /api/v3/agents`, which returns an agent
   login, token, and default repository.
 - In control-plane mode, provision control-plane users and tokens, then activate
   the users once their tenant databases are ready.
+
+Connected login is for providers that do not expose standard OIDC
+discovery and signed ID tokens, but do support browser login, authorization-code
+exchange, and bearer-token userinfo. The request flow is:
+
+1. `GET /auth/connected/login` redirects the browser to
+   `{CONNECTED_LOGIN_ORIGIN}{CONNECTED_LOGIN_LOGIN_PATH}` with `client_id`,
+   callback URL, and CSRF `state`.
+2. The provider returns to `{BASE_URL}/auth/connected/callback` with `code` and
+   `state`.
+3. AGS exchanges the code at
+   `{CONNECTED_LOGIN_API_ORIGIN}{CONNECTED_LOGIN_TOKEN_PATH}` using
+   `CONNECTED_LOGIN_CLIENT_ID` and `CONNECTED_LOGIN_CLIENT_SECRET`.
+4. AGS calls `{CONNECTED_LOGIN_API_ORIGIN}{CONNECTED_LOGIN_USERINFO_PATH}` with
+   the returned bearer token.
+5. AGS maps configured userinfo claims into the same local identity/session
+   path as OIDC.
+
+Slock-compatible example:
+
+```bash
+CONNECTED_LOGIN_PROVIDER=slock
+CONNECTED_LOGIN_ORIGIN=https://app.slock.ai
+CONNECTED_LOGIN_API_ORIGIN=https://api.slock.ai
+CONNECTED_LOGIN_CLIENT_ID=...
+CONNECTED_LOGIN_CLIENT_SECRET=...
+CONNECTED_LOGIN_LOGIN_PATH=/login-with-slock/setup
+CONNECTED_LOGIN_SUBJECT_NAMESPACE_CLAIM=server_id
+CONNECTED_LOGIN_SUBJECT_NAMESPACE_SLUG_CLAIM=server_slug
+```
+
+For Slock, `CONNECTED_LOGIN_PROVIDER=slock` preserves the local
+`UserIdentity.provider` key. `CONNECTED_LOGIN_SUBJECT_NAMESPACE_CLAIM=server_id`
+preserves the subject shape `<server_id>:<sub>` and avoids cross-server subject
+collisions; when this claim is configured, Slock must return `server_id`.
+Callback JSON and console redirect metadata include both `subject_namespace`
+and the configured alias `server_id`, preserving the old Slock response shape
+without Slock-specific code.
+`CONNECTED_LOGIN_SUBJECT_NAMESPACE_SLUG_CLAIM=server_slug` only improves
+generated login candidates.
+
+These values keep their defaults unless the provider differs:
+
+```bash
+CONNECTED_LOGIN_TOKEN_PATH=/api/oauth/token
+CONNECTED_LOGIN_USERINFO_PATH=/api/oauth/userinfo
+CONNECTED_LOGIN_RETURN_TO_PARAM=return_to
+CONNECTED_LOGIN_SUBJECT_CLAIM=sub
+CONNECTED_LOGIN_ACTOR_TYPE_CLAIM=type
+CONNECTED_LOGIN_HUMAN_TYPE_VALUE=human
+CONNECTED_LOGIN_AGENT_TYPE_VALUE=agent
+CONNECTED_LOGIN_CLIENT_ID_CLAIM=client_id
+CONNECTED_LOGIN_PREFERRED_USERNAME_CLAIM=preferred_username
+CONNECTED_LOGIN_NAME_CLAIM=name
+CONNECTED_LOGIN_PICTURE_CLAIM=picture
+CONNECTED_LOGIN_AVATAR_URL_CLAIM=avatar_url
+CONNECTED_LOGIN_DESCRIPTION_CLAIM=description
+CONNECTED_LOGIN_SCOPE_CLAIM=scope
+```
+
+The Slock sample is based on the historical adapter contract. Confirm the
+provider's userinfo response still returns the configured claims, especially the
+actor type claim, before enabling it in production.
 
 Open agent self-registration is intentional in the current product model. If
 that is not appropriate for your environment, restrict access at the reverse
@@ -281,5 +347,5 @@ allow enough startup time for migrations and full-text index changes.
 - `/readyz` wired as the load balancer readiness check
 - `/metrics` scraped by Prometheus
 - database and Git storage backups configured
-- OIDC, Login-with-Slock, agent registration controls, or control-plane
+- OIDC, connected login, agent registration controls, or control-plane
   provisioning chosen for account bootstrap
