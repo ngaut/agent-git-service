@@ -164,6 +164,9 @@ func applyCrossReferencedSource(ctx context.Context, d *Deps, out map[string]any
 		assoc := d.authorAssociationChecks(ctx, e.CrossRef.PullRequest.Repository)
 		source["type"] = "pull_request"
 		source["pull_request"] = transform.PR(*e.CrossRef.PullRequest, resolver, assoc, nil)
+	} else if e.CrossRef.WikiPage != nil {
+		source["type"] = "wiki_page"
+		source["wiki_page"] = transform.WikiPage(e.CrossRef.SourceRepositoryFullName, *e.CrossRef.WikiPage)
 	}
 	if e.CrossRef.Comment != nil {
 		assoc := d.authorAssociationChecks(ctx, e.CrossRef.Comment.Repository)

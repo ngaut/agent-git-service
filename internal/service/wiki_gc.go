@@ -57,6 +57,11 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 		First(&repo, "id = ?", repoID).Error; err != nil {
 		return fmt.Errorf("wiki post-commit: lookup repo %d: %w", repoID, err)
 	}
+	var changeset db.WikiChangeset
+	if err := s.DBForCtx(ctx).Select("changeset_id", "committed_at").
+		First(&changeset, "changeset_id = ?", result.ChangesetID).Error; err != nil {
+		return fmt.Errorf("wiki post-commit: lookup changeset %d: %w", result.ChangesetID, err)
+	}
 	for _, ch := range result.Changes {
 		switch ch.Op {
 		case wikicatalog.OpUpsert, wikicatalog.OpRename:
@@ -64,6 +69,9 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 			// removed before indexing the new one or `wiki/search`
 			// will surface both.
 			if ch.Op == wikicatalog.OpRename && ch.PrevSlug != "" && ch.PrevSlug != ch.Slug {
+				if err := s.deleteIssueReferencesForWikiPage(ctx, repo.ID, ch.PrevSlug); err != nil {
+					return fmt.Errorf("wiki post-commit: delete prev issue refs for %s: %w", ch.PrevSlug, err)
+				}
 				if result.Source == wikicatalog.SourceMigration {
 					if err := s.deleteWikiSearchDocument(ctx, repo.FullName, ch.PrevSlug); err != nil {
 						return fmt.Errorf("wiki post-commit: delete prev search doc for %s: %w", ch.PrevSlug, err)
@@ -84,6 +92,9 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 			body, ok := s.wikiBodyForReindex(ctx, ch.PageID, ch.BlobSHA)
 			if ok {
 				page.Body = body
+				if err := s.syncWikiPageReferences(ctx, repo, ch.Slug, body, changeset.CommittedAt); err != nil {
+					return fmt.Errorf("wiki post-commit: sync issue refs for %s: %w", ch.Slug, err)
+				}
 			}
 			if result.Source == wikicatalog.SourceMigration {
 				if err := s.upsertWikiSearchDocument(ctx, repo.FullName, page); err != nil {
@@ -93,6 +104,9 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 			}
 			s.queueWikiSearchUpsert(ctx, repo.FullName, page)
 		case wikicatalog.OpDelete:
+			if err := s.deleteIssueReferencesForWikiPage(ctx, repo.ID, ch.Slug); err != nil {
+				return fmt.Errorf("wiki post-commit: delete issue refs for %s: %w", ch.Slug, err)
+			}
 			if result.Source == wikicatalog.SourceMigration {
 				if err := s.deleteWikiSearchDocument(ctx, repo.FullName, ch.Slug); err != nil {
 					return fmt.Errorf("wiki post-commit: delete search doc for %s: %w", ch.Slug, err)
