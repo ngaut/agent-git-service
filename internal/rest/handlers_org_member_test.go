@@ -64,6 +64,55 @@ func TestOrganizationMemberHandlers_DeleteOrgMemberRemovesMemberships(t *testing
 	}
 }
 
+func TestOrganizationMemberHandlers_ListOrgMembersIncludesRoles(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+
+	orgOwner, ownerToken := seedHarnessUser(t, h, "org-list-roles-owner", false)
+	org, err := h.Svc.EnsureOrg(service.ContextWithUser(ctx, orgOwner), "org-list-roles")
+	if err != nil {
+		t.Fatalf("EnsureOrg failed: %v", err)
+	}
+	member, _ := seedHarnessUser(t, h, "org-list-roles-member", false)
+	if err := h.Svc.AddOrgMember(ctx, org.ID, member.ID, db.OrganizationRoleMember); err != nil {
+		t.Fatalf("AddOrgMember failed: %v", err)
+	}
+
+	resp := h.DoRESTWithToken(t, "GET", "/api/v3/orgs/org-list-roles/members", ownerToken)
+	assertStatusCode(t, resp, http.StatusOK)
+	rows := testharness.DecodeJSONArray(t, resp)
+	if len(rows) != 2 {
+		t.Fatalf("member rows = %#v, want owner and member", rows)
+	}
+	roles := map[string]string{}
+	states := map[string]string{}
+	for _, row := range rows {
+		login, _ := row["login"].(string)
+		roles[login], _ = row["role"].(string)
+		states[login], _ = row["state"].(string)
+	}
+	if roles[orgOwner.Login] != "admin" || states[orgOwner.Login] != "active" {
+		t.Fatalf("owner membership = role %q state %q, want admin/active", roles[orgOwner.Login], states[orgOwner.Login])
+	}
+	if roles[member.Login] != "member" || states[member.Login] != "active" {
+		t.Fatalf("member membership = role %q state %q, want member/active", roles[member.Login], states[member.Login])
+	}
+
+	adminResp := h.DoRESTWithToken(t, "GET", "/api/v3/orgs/org-list-roles/members?role=admin", ownerToken)
+	assertStatusCode(t, adminResp, http.StatusOK)
+	adminRows := testharness.DecodeJSONArray(t, adminResp)
+	if len(adminRows) != 1 || adminRows[0]["login"] != orgOwner.Login || adminRows[0]["role"] != "admin" {
+		t.Fatalf("admin filtered rows = %#v, want owner admin row", adminRows)
+	}
+
+	memberResp := h.DoRESTWithToken(t, "GET", "/api/v3/orgs/org-list-roles/members?role=member", ownerToken)
+	assertStatusCode(t, memberResp, http.StatusOK)
+	memberRows := testharness.DecodeJSONArray(t, memberResp)
+	if len(memberRows) != 1 || memberRows[0]["login"] != member.Login || memberRows[0]["role"] != "member" {
+		t.Fatalf("member filtered rows = %#v, want member row", memberRows)
+	}
+}
+
 func TestOrganizationMemberHandlers_DeleteOrgMembershipRevokesPendingInvitation(t *testing.T) {
 	h := testharness.New(t)
 	ctx := context.Background()
