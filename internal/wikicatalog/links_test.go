@@ -17,6 +17,16 @@ func TestExtractOutlinks(t *testing.T) {
 			want: []string{"guides/intro", "home"},
 		},
 		{
+			name: "bracket-link-github-target-label",
+			body: "see [[guides/getting-started|Getting started]]",
+			want: []string{"guides/getting-started"},
+		},
+		{
+			name: "bracket-link-target-before-label",
+			body: "see [[guides/getting-started|other-page]]",
+			want: []string{"guides/getting-started"},
+		},
+		{
 			name: "markdown-link",
 			body: "see [home](home.md) and [intro](guides/intro)",
 			want: []string{"guides/intro", "home"},

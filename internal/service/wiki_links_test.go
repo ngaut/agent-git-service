@@ -42,6 +42,26 @@ func TestExtractWikiLinkMatches_PreservesNestedLiteralPaths(t *testing.T) {
 	}
 }
 
+func TestExtractWikiLinkMatches_UsesGitHubShorthandTarget(t *testing.T) {
+	body := "See [[guides/getting-started|Getting started]] and [[guides/setup|other-page]].\n"
+
+	matches := extractWikiLinkMatches(body)
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 wiki link matches, got %d", len(matches))
+	}
+	if matches[0].targetSlug != "guides/getting-started" {
+		t.Fatalf("first targetSlug = %q, want guides/getting-started", matches[0].targetSlug)
+	}
+	if matches[1].targetSlug != "guides/setup" {
+		t.Fatalf("second targetSlug = %q, want guides/setup", matches[1].targetSlug)
+	}
+	for _, match := range matches {
+		if !match.literal {
+			t.Fatalf("nested shorthand target %q must be treated as literal", match.targetSlug)
+		}
+	}
+}
+
 func TestWikiBacklinkGrepPatterns_FallsBackWhenVariantExpansionIsTooLarge(t *testing.T) {
 	slug := "one-two/three-four/five-six/seven-eight/nine-ten/eleven-twelve"
 
@@ -55,7 +75,8 @@ func TestRewriteWikiReferences_RewritesLiteralTargetsOnly(t *testing.T) {
 	body := strings.Join([]string{
 		"# Home",
 		"",
-		"See [[guides/setup]] and [Setup](guides/setup.md?view=1#intro).",
+		"See [[guides/setup|Setup guide]] and [Setup](guides/setup.md?view=1#intro).",
+		"Label-only text should stay [[home|guides/setup]].",
 		"",
 		"[setup-ref]: guides/setup.md#deep \"Guide\"",
 		"",
@@ -84,7 +105,8 @@ func TestRewriteWikiReferences_RewritesLiteralTargetsOnly(t *testing.T) {
 	want := strings.Join([]string{
 		"# Home",
 		"",
-		"See [[tutorials/setup]] and [Setup](tutorials/setup.md?view=1#intro).",
+		"See [[tutorials/setup|Setup guide]] and [Setup](tutorials/setup.md?view=1#intro).",
+		"Label-only text should stay [[home|guides/setup]].",
 		"",
 		"[setup-ref]: tutorials/setup.md#deep \"Guide\"",
 		"",

@@ -429,7 +429,7 @@ func extractWikiLinkMatches(body string) []wikiLinkMatch {
 		if len(loc) < 4 {
 			continue
 		}
-		target := normalizeWikiReference(body[loc[2]:loc[3]])
+		target := normalizeWikiReference(wikicatalog.WikiShorthandTarget(body[loc[2]:loc[3]]))
 		if target == "" {
 			continue
 		}
