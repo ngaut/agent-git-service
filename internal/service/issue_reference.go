@@ -17,6 +17,7 @@ const (
 	issueReferenceSourceIssueBody       = "issue_body"
 	issueReferenceSourcePullRequestBody = "pull_request_body"
 	issueReferenceSourceIssueComment    = "issue_comment"
+	issueReferenceSourceWikiPage        = "wiki_page"
 )
 
 type issueReferenceSource struct {
@@ -26,6 +27,7 @@ type issueReferenceSource struct {
 	SourceIssueNumber        *int
 	SourcePRNumber           *int
 	SourceCommentID          *uint
+	SourceWikiSlug           *string
 	Body                     string
 	CreatedAt                time.Time
 }
@@ -102,6 +104,25 @@ func (s *Service) syncIssueCommentReferences(ctx context.Context, comment db.Iss
 		return s.deleteIssueReferencesForSource(ctx, source).Error
 	}
 	return s.syncIssueReferencesForSource(ctx, source)
+}
+
+func (s *Service) syncWikiPageReferences(ctx context.Context, repo db.Repository, slug, body string, createdAt time.Time) error {
+	if repo.ID == 0 || repo.FullName == "" || slug == "" {
+		return nil
+	}
+	sourceSlug := slug
+	err := s.syncIssueReferencesForSource(ctx, issueReferenceSource{
+		SourceType:               issueReferenceSourceWikiPage,
+		SourceRepositoryID:       repo.ID,
+		SourceRepositoryFullName: repo.FullName,
+		SourceWikiSlug:           &sourceSlug,
+		Body:                     body,
+		CreatedAt:                createdAt,
+	})
+	if isMissingTableErr(err) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) issueReferenceOwnerKind(ctx context.Context, repoID uint, number int) (string, error) {
@@ -187,6 +208,7 @@ func (s *Service) resolveIssueReferenceMatches(ctx context.Context, source issue
 			SourceIssueNumber:  source.SourceIssueNumber,
 			SourcePRNumber:     source.SourcePRNumber,
 			SourceCommentID:    source.SourceCommentID,
+			SourceWikiSlug:     source.SourceWikiSlug,
 			TargetRepositoryID: targetRepo.ID,
 			TargetNumber:       match.Number,
 			RawReference:       match.RawReference,
@@ -238,7 +260,24 @@ func (s *Service) deleteIssueReferencesForSource(ctx context.Context, source iss
 	} else {
 		q = q.Where("source_comment_id IS NULL")
 	}
+	if source.SourceWikiSlug != nil {
+		q = q.Where("source_wiki_slug = ?", *source.SourceWikiSlug)
+	} else {
+		q = q.Where("source_wiki_slug IS NULL")
+	}
 	return q.Delete(&db.IssueReference{})
+}
+
+func (s *Service) deleteIssueReferencesForWikiPage(ctx context.Context, repoID uint, slug string) error {
+	err := s.deleteIssueReferencesForSource(ctx, issueReferenceSource{
+		SourceType:         issueReferenceSourceWikiPage,
+		SourceRepositoryID: repoID,
+		SourceWikiSlug:     &slug,
+	}).Error
+	if isMissingTableErr(err) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) deleteIssueReferencesForIssueNumber(ctx context.Context, repoID uint, number int) error {
@@ -283,6 +322,22 @@ func (s *Service) BackfillIssueReferences(ctx context.Context) error {
 		}
 		for _, comment := range comments {
 			if err := s.syncIssueCommentReferences(txCtx, comment); err != nil {
+				return err
+			}
+		}
+
+		var pages []db.WikiPage
+		if err := tx.Preload("Repository").
+			Where("deleted_at IS NULL").
+			Find(&pages).Error; err != nil {
+			return err
+		}
+		for _, page := range pages {
+			body, err := s.wikiPageBody(txCtx, page)
+			if err != nil {
+				return err
+			}
+			if err := s.syncWikiPageReferences(txCtx, page.Repository, page.Slug, string(body), issueReferenceEventTime(page.CreatedAt, page.UpdatedAt)); err != nil {
 				return err
 			}
 		}

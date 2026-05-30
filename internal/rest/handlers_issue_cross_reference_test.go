@@ -69,6 +69,53 @@ func TestGetIssueTimeline_CrossReferencedIssueCommentDedupes(t *testing.T) {
 	}
 }
 
+func TestGetIssueTimeline_CrossReferencedWikiPageLifecycle(t *testing.T) {
+	h := testharness.New(t)
+	compatSeedRepo(t, h, "xref-wiki")
+	full := "testuser/xref-wiki"
+
+	w := h.DoRESTJSON(t, http.MethodPost, "/api/v3/repos/"+full+"/issues", map[string]any{
+		"title": "target",
+	})
+	assertStatusCode(t, w, http.StatusCreated)
+
+	w = h.DoRESTJSON(t, http.MethodPut, wikiPagePath(full, "home"), map[string]any{
+		"body": "# Home\n\nRelated to #1 and #1.\n",
+	})
+	assertStatusCode(t, w, http.StatusOK)
+
+	events := getTimelineEvents(t, h, "/api/v3/repos/"+full+"/issues/1/timeline")
+	if !hasCrossReferenceFromWikiPage(t, events, "home", full) {
+		t.Fatalf("expected cross-referenced event from wiki page home, got %#v", events)
+	}
+
+	w = h.DoRESTJSON(t, http.MethodPut, wikiPagePath(full, "home"), map[string]any{
+		"body": "# Home\n\nReference removed.\n",
+	})
+	assertStatusCode(t, w, http.StatusOK)
+
+	events = getTimelineEvents(t, h, "/api/v3/repos/"+full+"/issues/1/timeline")
+	if hasCrossReferenceFromWikiPage(t, events, "home", full) {
+		t.Fatalf("expected wiki cross-reference to be removed after update, got %#v", events)
+	}
+
+	w = h.DoRESTJSON(t, http.MethodPut, wikiPagePath(full, "home"), map[string]any{
+		"body": "# Home\n\nRelated again to #1.\n",
+	})
+	assertStatusCode(t, w, http.StatusOK)
+	events = getTimelineEvents(t, h, "/api/v3/repos/"+full+"/issues/1/timeline")
+	if !hasCrossReferenceFromWikiPage(t, events, "home", full) {
+		t.Fatalf("expected wiki cross-reference to return after update, got %#v", events)
+	}
+
+	w = h.DoREST(t, http.MethodDelete, wikiPagePath(full, "home"), nil)
+	assertStatusCode(t, w, http.StatusNoContent)
+	events = getTimelineEvents(t, h, "/api/v3/repos/"+full+"/issues/1/timeline")
+	if hasCrossReferenceFromWikiPage(t, events, "home", full) {
+		t.Fatalf("expected wiki cross-reference to be removed after delete, got %#v", events)
+	}
+}
+
 func TestGetIssueTimeline_CrossRepoReferencesRespectSourcePermissions(t *testing.T) {
 	h := testharness.New(t)
 	ctx := context.Background()
@@ -112,6 +159,47 @@ func TestGetIssueTimeline_CrossRepoReferencesRespectSourcePermissions(t *testing
 	events = testharness.DecodeJSONArray(t, w)
 	if hasCrossReferenceFromIssue(t, events, 1, sourceRepo.FullName) {
 		t.Fatalf("outsider must not see private source cross-reference, got %#v", events)
+	}
+}
+
+func TestGetIssueTimeline_CrossRepoWikiReferencesRespectSourcePermissions(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+	compatSeedRepo(t, h, "xref-wiki-target")
+
+	w := h.DoRESTJSON(t, http.MethodPost, "/api/v3/repos/testuser/xref-wiki-target/issues", map[string]any{
+		"title": "target",
+	})
+	assertStatusCode(t, w, http.StatusCreated)
+
+	sourceOwner, sourceOwnerToken := seedHarnessUser(t, h, "xref-wiki-source-owner", false)
+	sourceCtx := service.ContextWithUser(ctx, sourceOwner)
+	sourceRepo, err := h.Svc.CreateRepo(sourceCtx, service.CreateRepoInput{
+		OwnerLogin: sourceOwner.Login,
+		Name:       "private-wiki-xref-source",
+		Private:    true,
+		AutoInit:   true,
+	})
+	if err != nil {
+		t.Fatalf("create private source repo: %v", err)
+	}
+	if _, err := h.Svc.PutWikiPage(sourceCtx, sourceRepo.FullName, "home", "# Home\n\nreferences testuser/xref-wiki-target#1\n", "create wiki source", ""); err != nil {
+		t.Fatalf("create source wiki page: %v", err)
+	}
+
+	w = h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/testuser/xref-wiki-target/issues/1/timeline", sourceOwnerToken)
+	assertStatusCode(t, w, http.StatusOK)
+	events := testharness.DecodeJSONArray(t, w)
+	if !hasCrossReferenceFromWikiPage(t, events, "home", sourceRepo.FullName) {
+		t.Fatalf("expected source owner to see private wiki cross-reference, got %#v", events)
+	}
+
+	_, outsiderToken := seedHarnessUser(t, h, "xref-wiki-outsider", false)
+	w = h.DoRESTWithToken(t, http.MethodGet, "/api/v3/repos/testuser/xref-wiki-target/issues/1/timeline", outsiderToken)
+	assertStatusCode(t, w, http.StatusOK)
+	events = testharness.DecodeJSONArray(t, w)
+	if hasCrossReferenceFromWikiPage(t, events, "home", sourceRepo.FullName) {
+		t.Fatalf("outsider must not see private wiki cross-reference, got %#v", events)
 	}
 }
 
@@ -175,4 +263,27 @@ func crossReferenceSourceIssueMatches(t *testing.T, event map[string]any, number
 	}
 	repoURL, _ := issue["repository_url"].(string)
 	return strings.HasSuffix(repoURL, "/api/v3/repos/"+repoFullName)
+}
+
+func hasCrossReferenceFromWikiPage(t *testing.T, events []map[string]any, slug, repoFullName string) bool {
+	t.Helper()
+	for _, event := range crossReferenceEvents(events) {
+		source, ok := event["source"].(map[string]any)
+		if !ok || source["type"] != "wiki_page" {
+			continue
+		}
+		page, ok := source["wiki_page"].(map[string]any)
+		if !ok {
+			continue
+		}
+		gotSlug, _ := page["slug"].(string)
+		if gotSlug != slug {
+			continue
+		}
+		pageURL, _ := page["url"].(string)
+		if strings.Contains(pageURL, "/api/v3/repos/"+repoFullName+"/wiki/pages/") {
+			return true
+		}
+	}
+	return false
 }

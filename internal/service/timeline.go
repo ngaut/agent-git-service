@@ -24,12 +24,14 @@ type TimelineEvent struct {
 }
 
 // CrossReferencedSource is the source object for a cross-referenced timeline
-// event. Exactly one of Issue or PullRequest should be populated.
+// event. Exactly one of Issue, PullRequest, or WikiPage should be populated.
 type CrossReferencedSource struct {
-	Reference   db.IssueReference
-	Issue       *db.Issue
-	PullRequest *db.PullRequest
-	Comment     *db.IssueComment
+	Reference                db.IssueReference
+	SourceRepositoryFullName string
+	Issue                    *db.Issue
+	PullRequest              *db.PullRequest
+	Comment                  *db.IssueComment
+	WikiPage                 *WikiPage
 }
 
 // GetIssueTimeline synthesizes a timeline of events for an issue or pull request.
@@ -175,6 +177,17 @@ func (s *Service) listCrossReferencedTimelineEvents(ctx context.Context, targetR
 func (s *Service) loadCrossReferencedSource(ctx context.Context, ref db.IssueReference) (*CrossReferencedSource, string, error) {
 	source := &CrossReferencedSource{Reference: ref}
 	actor := ""
+	var sourceRepo db.Repository
+	err := s.DBForCtx(ctx).
+		Select("id", "full_name").
+		First(&sourceRepo, "id = ?", ref.SourceRepositoryID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "", nil
+		}
+		return nil, "", err
+	}
+	source.SourceRepositoryFullName = sourceRepo.FullName
 	if ref.SourceCommentID != nil {
 		var comment db.IssueComment
 		err := preloadIssueComment(s.DBForCtx(ctx)).First(&comment, *ref.SourceCommentID).Error
@@ -216,6 +229,29 @@ func (s *Service) loadCrossReferencedSource(ctx context.Context, ref db.IssueRef
 		source.PullRequest = &pr
 		if actor == "" {
 			actor = pr.Author.Login
+		}
+		return source, actor, nil
+	}
+	if ref.SourceWikiSlug != nil {
+		page, err := s.loadLiveWikiPage(ctx, ref.SourceRepositoryID, *ref.SourceWikiSlug)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, "", nil
+			}
+			return nil, "", err
+		}
+		body, err := s.wikiPageBody(ctx, page)
+		if err != nil {
+			return nil, "", err
+		}
+		labelsBySlug, err := s.wikiLabelsForSlugs(ctx, ref.SourceRepositoryID, []string{page.Slug})
+		if err != nil {
+			return nil, "", err
+		}
+		wikiPage := s.wikiPageFromCatalog(page, body, labelsBySlug[page.Slug])
+		source.WikiPage = &wikiPage
+		if page.LastAuthor != nil {
+			actor = page.LastAuthor.Login
 		}
 		return source, actor, nil
 	}
