@@ -18,10 +18,20 @@ var (
 	// at the call site by checking for a preceding '!'.
 	markdownLinkRE = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 
-	// bracketLinkRE matches the GitHub-flavored `[[target]]`
-	// wiki-style link.
+	// bracketLinkRE matches the GitHub-flavored `[[target]]` and
+	// `[[target|label]]` wiki-style links.
 	bracketLinkRE = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 )
+
+// WikiShorthandTarget returns the page target from GitHub wiki shorthand.
+// GitHub treats `[[target|label]]` as target first, label second; the
+// single-argument form `[[target]]` uses the same value for both.
+func WikiShorthandTarget(raw string) string {
+	if pipe := strings.IndexByte(raw, '|'); pipe >= 0 {
+		return raw[:pipe]
+	}
+	return raw
+}
 
 // ExtractOutlinks returns the unique canonical (slug_ci_v1) outbound
 // link targets present in body. The returned slice is sorted so the
@@ -55,7 +65,7 @@ func ExtractOutlinks(body string) []string {
 		if len(loc) < 4 {
 			continue
 		}
-		if slug := canonicalLinkTarget(body[loc[2]:loc[3]]); slug != "" {
+		if slug := canonicalLinkTarget(WikiShorthandTarget(body[loc[2]:loc[3]])); slug != "" {
 			seen[slug] = struct{}{}
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 	"github.com/yuin/goldmark"
 	mdast "github.com/yuin/goldmark/ast"
 	mdtext "github.com/yuin/goldmark/text"
@@ -190,11 +191,13 @@ func scanWikiShorthand(source []byte, blocked []bool, start int, oldSlug, newSlu
 			return start, wikiTextEdit{}, false
 		}
 		if source[i] == ']' && source[i+1] == ']' {
-			replacement, changed := rewriteWikiTargetLiteral(string(source[start+2:i]), oldSlug, newSlug)
+			raw := string(source[start+2 : i])
+			target := wikicatalog.WikiShorthandTarget(raw)
+			replacement, changed := rewriteWikiTargetLiteral(target, oldSlug, newSlug)
 			if !changed {
 				return i + 2, wikiTextEdit{}, false
 			}
-			return i + 2, wikiTextEdit{start: start + 2, stop: i, replacement: replacement}, true
+			return i + 2, wikiTextEdit{start: start + 2, stop: start + 2 + len(target), replacement: replacement}, true
 		}
 	}
 	return start, wikiTextEdit{}, false

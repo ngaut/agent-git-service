@@ -321,7 +321,7 @@ func TestWikiV2ReconcileBuildsHistoryAndBacklinkIndexes(t *testing.T) {
 	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nUpdated.\n", "update home", ""); err != nil {
 		t.Fatalf("PutWikiPage(home update): %v", err)
 	}
-	if _, err := svc.PutWikiPage(ctx, full, "faq", "# FAQ\n\nSee [[home]].\n", "seed faq", ""); err != nil {
+	if _, err := svc.PutWikiPage(ctx, full, "faq", "# FAQ\n\nSee [[home|Home page]].\n", "seed faq", ""); err != nil {
 		t.Fatalf("PutWikiPage(faq): %v", err)
 	}
 

@@ -587,11 +587,17 @@ func TestListWikiBacklinks_MatchesUnderscoreSlugVariants(t *testing.T) {
 	if _, err := svc.PutWikiPage(ctx, full, "plain-page", "# Plain Page\n", "create target", ""); err != nil {
 		t.Fatalf("PutWikiPage(target): %v", err)
 	}
+	if _, err := svc.PutWikiPage(ctx, full, "other-page", "# Other Page\n", "create other target", ""); err != nil {
+		t.Fatalf("PutWikiPage(other target): %v", err)
+	}
 	if _, err := svc.PutWikiPage(ctx, full, "markdown-ref", "# Markdown Ref\n\nSee [Plain](plain_page.md).\n", "create markdown ref", ""); err != nil {
 		t.Fatalf("PutWikiPage(markdown-ref): %v", err)
 	}
-	if _, err := svc.PutWikiPage(ctx, full, "bracket-ref", "# Bracket Ref\n\nSee [[plain_page]].\n", "create bracket ref", ""); err != nil {
+	if _, err := svc.PutWikiPage(ctx, full, "bracket-ref", "# Bracket Ref\n\nSee [[plain_page|Plain page]].\n", "create bracket ref", ""); err != nil {
 		t.Fatalf("PutWikiPage(bracket-ref): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "label-only-ref", "# Label Only Ref\n\nSee [[other-page|plain_page]].\n", "create label-only ref", ""); err != nil {
+		t.Fatalf("PutWikiPage(label-only-ref): %v", err)
 	}
 
 	backlinks, err := svc.ListWikiBacklinks(ctx, full, "plain-page")
@@ -1011,15 +1017,18 @@ func TestMoveWikiPage_RewritesInboundLinksAndSkipsMalformedPages_Issue1361(t *te
 	if err != nil {
 		t.Fatalf("PutWikiPage(source): %v", err)
 	}
-	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nSee [[guides/setup]] and [Setup](guides/setup.md#intro).\n", "create referrer", ""); err != nil {
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nSee [[guides/setup|Setup guide]] and [Setup](guides/setup.md#intro).\nLabel-only text should stay [[home|guides/setup]].\n", "create referrer", ""); err != nil {
 		t.Fatalf("PutWikiPage(referrer): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "shortcut-ref", "# Shortcut Ref\n\nSee [[guides/setup|Setup guide]].\n", "create shorthand-only referrer", ""); err != nil {
+		t.Fatalf("PutWikiPage(shortcut-ref): %v", err)
 	}
 	// The "broken" referrer has an invalid UTF-8 byte in its body so
 	// the regex-based rewriter trips when it tries to scan it during a
 	// MoveWikiPage. Write it through the catalog (Change.Body is raw
 	// []byte) so it shows up in wiki_page_links and the move planner
 	// considers it for rewriting.
-	invalidBody := append([]byte("# Broken\n\n[[guides/setup]]\n"), 0xff)
+	invalidBody := append([]byte("# Broken\n\n[[guides/setup|Setup guide]]\n"), 0xff)
 	rep, err := svc.GetRepo(ctx, full)
 	if err != nil {
 		t.Fatalf("GetRepo: %v", err)
@@ -1040,8 +1049,8 @@ func TestMoveWikiPage_RewritesInboundLinksAndSkipsMalformedPages_Issue1361(t *te
 	if result.Moved.Slug != "tutorials/setup" {
 		t.Fatalf("moved slug = %q, want tutorials/setup", result.Moved.Slug)
 	}
-	if len(result.Rewrites) != 1 || result.Rewrites[0].Slug != "home" {
-		t.Fatalf("rewrites = %+v, want home only", result.Rewrites)
+	if len(result.Rewrites) != 2 || result.Rewrites[0].Slug != "home" || result.Rewrites[1].Slug != "shortcut-ref" {
+		t.Fatalf("rewrites = %+v, want home and shortcut-ref", result.Rewrites)
 	}
 	if len(result.Skipped) != 1 || result.Skipped[0].Slug != "broken" {
 		t.Fatalf("skipped = %+v, want broken only", result.Skipped)
@@ -1054,19 +1063,30 @@ func TestMoveWikiPage_RewritesInboundLinksAndSkipsMalformedPages_Issue1361(t *te
 	if err != nil {
 		t.Fatalf("GetWikiPage(home): %v", err)
 	}
-	if !strings.Contains(rewrittenPage.Body, "[[tutorials/setup]]") || !strings.Contains(rewrittenPage.Body, "(tutorials/setup.md#intro)") {
+	if !strings.Contains(rewrittenPage.Body, "[[tutorials/setup|Setup guide]]") || !strings.Contains(rewrittenPage.Body, "(tutorials/setup.md#intro)") {
 		t.Fatalf("rewritten home body = %q, want moved wiki references", rewrittenPage.Body)
 	}
+	if !strings.Contains(rewrittenPage.Body, "[[home|guides/setup]]") {
+		t.Fatalf("rewritten home body changed shorthand label text: %q", rewrittenPage.Body)
+	}
 
-	latest, err := svc.Git.LatestCommitsForPaths(ctx, full+".wiki", []string{"tutorials/setup.md", "home.md"})
+	shortcutPage, err := svc.GetWikiPage(ctx, full, "shortcut-ref")
+	if err != nil {
+		t.Fatalf("GetWikiPage(shortcut-ref): %v", err)
+	}
+	if !strings.Contains(shortcutPage.Body, "[[tutorials/setup|Setup guide]]") {
+		t.Fatalf("rewritten shortcut-ref body = %q, want moved wiki shorthand target", shortcutPage.Body)
+	}
+
+	latest, err := svc.Git.LatestCommitsForPaths(ctx, full+".wiki", []string{"tutorials/setup.md", "home.md", "shortcut-ref.md"})
 	if err != nil {
 		t.Fatalf("LatestCommitsForPaths: %v", err)
 	}
-	if latest["tutorials/setup.md"].SHA == "" || latest["home.md"].SHA == "" {
+	if latest["tutorials/setup.md"].SHA == "" || latest["home.md"].SHA == "" || latest["shortcut-ref.md"].SHA == "" {
 		t.Fatalf("expected latest commits for moved and rewritten pages, got %+v", latest)
 	}
-	if latest["tutorials/setup.md"].SHA != latest["home.md"].SHA {
-		t.Fatalf("move and rewrite must share one commit, got %q vs %q", latest["tutorials/setup.md"].SHA, latest["home.md"].SHA)
+	if latest["tutorials/setup.md"].SHA != latest["home.md"].SHA || latest["tutorials/setup.md"].SHA != latest["shortcut-ref.md"].SHA {
+		t.Fatalf("move and rewrites must share one commit, got %+v", latest)
 	}
 	commits, err := svc.Git.ListCommits(ctx, full+".wiki", 1, nil)
 	if err != nil {
@@ -1075,7 +1095,7 @@ func TestMoveWikiPage_RewritesInboundLinksAndSkipsMalformedPages_Issue1361(t *te
 	if len(commits) != 1 {
 		t.Fatalf("expected one latest wiki commit, got %d", len(commits))
 	}
-	if commits[0].Message != "Move guides/setup to tutorials/setup (rewrote refs in 1 page)" {
+	if commits[0].Message != "Move guides/setup to tutorials/setup (rewrote refs in 2 pages)" {
 		t.Fatalf("move commit message = %q", commits[0].Message)
 	}
 }
