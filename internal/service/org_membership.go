@@ -312,10 +312,10 @@ func (s *Service) GetOrgMember(ctx context.Context, orgID, userID uint) (db.Orga
 	return member, wrapErr(err)
 }
 
-// ListOrgMembers returns explicit organization members in GitHub-compatible list form.
-func (s *Service) ListOrgMembers(ctx context.Context, orgID uint, roleFilter string) ([]db.User, error) {
+// ListOrgMembers returns active organization members with their REST-facing roles.
+func (s *Service) ListOrgMembers(ctx context.Context, orgID uint, roleFilter string) ([]OrganizationMembershipView, error) {
 	if orgID == 0 {
-		return []db.User{}, nil
+		return []OrganizationMembershipView{}, nil
 	}
 	roleFilter, ok := normalizeOrganizationMembersRoleFilter(roleFilter)
 	if !ok {
@@ -345,11 +345,15 @@ func (s *Service) ListOrgMembers(ctx context.Context, orgID uint, roleFilter str
 		return members[i].UserID < members[j].UserID
 	})
 
-	users := make([]db.User, 0, len(members))
+	views := make([]OrganizationMembershipView, 0, len(members))
 	for _, member := range members {
-		users = append(users, member.User)
+		views = append(views, OrganizationMembershipView{
+			User:  member.User,
+			Role:  organizationMembershipResponseRole(member.Role),
+			State: "active",
+		})
 	}
-	return users, nil
+	return views, nil
 }
 
 // GetOrgMembership returns the active or pending organization membership for a user login.

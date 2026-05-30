@@ -294,7 +294,10 @@ func (d *Deps) ListOrgMembers(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]any, len(paged))
 	for i, member := range paged {
-		out[i] = transform.User(member)
+		row := transform.User(member.User)
+		row["role"] = member.Role
+		row["state"] = member.State
+		out[i] = row
 	}
 	if len(out) == 0 {
 		out = []any{}
