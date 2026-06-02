@@ -31,6 +31,84 @@ run where your agents run:
   real bare Git repositories.
 - Validate compatibility through the vendored GitHub CLI acceptance suite.
 
+
+## Agent-first, GitHub-compatible infrastructure
+
+`agent-git-service` is built on a simple idea: AI agents should be first-class
+citizens in the systems they work in, not temporary helpers hidden behind a
+human account or a chat session.
+
+GitHub is excellent for human developer collaboration. It gives people a shared
+place to host code, open issues, review pull requests, run automation, and keep
+project history.
+
+Agent systems put different pressure on the backend. Agents are API-driven
+workers that may run continuously, keep state across tasks, coordinate with
+other agents, read project context before acting, and leave work records that
+humans need to inspect later.
+
+GitHub can support bots, GitHub Apps, Copilot agents, Actions, webhooks, and
+service accounts. Those are useful integration patterns. But they still live
+inside a collaboration platform whose default model is human-first:
+human-owned accounts, human-owned repositories, human-reviewed pull requests,
+and GitHub.com as the main control plane.
+
+`agent-git-service` keeps the GitHub workflow model, but moves the control plane
+into a self-hosted backend that agent systems can own, extend, and operate close
+to where their agents run.
+
+## Choose agent-git-service when...
+
+Use `agent-git-service` when you need a backend for agent work, not just a place
+to host code.
+
+Choose `agent-git-service` if you need to:
+
+- run a GitHub-compatible control plane where your agents run
+- keep repositories and product metadata under your control
+- support existing GitHub-speaking clients instead of inventing new protocols
+- give agents durable accounts, scoped API tokens, optional human binding, and
+  repository transfer flows
+- preserve Git-native clone, fetch, push, refs, diffs, merges, and history in
+  real bare Git repositories
+- store task state, progress logs, handoff notes, and project context in an
+  inspectable workspace
+- let humans inspect, correct, approve, revoke, or recover agent work
+- coordinate multiple agents through shared repositories, issues, comments,
+  labels, and wiki pages
+- use GitHub-compatible REST, GraphQL, OAuth, and Git HTTP APIs without
+  depending on GitHub.com as your runtime backend
+
+## Why first-class agents matter
+
+Treating agents as first-class citizens changes the backend model.
+
+A first-class agent is not just a script using someone else's token. It can have
+its own durable identity, scoped credentials, default workspace, task history,
+permission boundary, and audit trail.
+
+That matters because production agent systems need to answer operational
+questions that normal chat-based agents cannot answer well:
+
+- Which agent did this work?
+- What was it allowed to access?
+- What task or record was it updating?
+- What context did it use before acting?
+- What did it learn that should survive the run?
+- Can a human inspect or correct the result?
+- Can another agent continue from the same project state?
+- Can the team revoke, transfer, or recover agent-owned work?
+
+If agents are treated as temporary helpers, this context usually disappears into
+prompts, logs, or external databases.
+
+If agents are first-class citizens, their work can live in the same structured
+workspace as the project itself: repositories, issues, comments, labels, wiki
+pages, permissions, and Git history.
+
+GitHub compatibility gives you the workflow language. Agent-first design gives
+agents a backend they can actually live in.
+
 ## Enhancements
 
 | Enhancement | What it adds |
