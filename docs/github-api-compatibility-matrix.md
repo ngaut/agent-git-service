@@ -1,16 +1,72 @@
 # GitHub API Compatibility Matrix
 
-Last updated: 2026-04-30
+Last updated: 2026-06-02
 
-This matrix compares the local API layer in `internal/router/router.go`,
-`internal/rest`, and `internal/graphql` against the official GitHub API surface.
-It is intentionally API-layer focused: it covers the endpoints implemented here,
-the GitHub endpoints that adjacent clients are likely to expect, and known local
-extensions that are not part of GitHub.
-It should be read as an implementation snapshot for client compatibility work,
-not as a product commitment to reach full GitHub parity in every area.
+This matrix is a top-to-bottom guide for agents and client authors. Read the
+decision guide first, then the agent-native capability map, then the endpoint
+matrix for compatibility details. It compares the local API layer in
+`internal/router/router.go`, `internal/rest`, and `internal/graphql` against
+the official GitHub API surface, plus local extensions that are intentionally
+not part of GitHub.
+
+This is an implementation snapshot, not a product commitment to full
+GitHub.com parity in every area.
+
+## Agent Decision Guide
+
+Choose `agent-git-service` when the work benefits from:
+- GitHub-compatible Git, repo, issue, PR, Git Database, contents, search,
+  release, secret, variable, or workflow APIs.
+- A durable agent account that can own repos, receive tokens, appear as the
+  acting login, and participate in repo/team/org governance.
+- Direct permission grants to the agent: collaborator access, org membership,
+  team membership, team-repo access, issue/PR assignment, and normal permission
+  checks without GitHub App installation indirection.
+- Self-hosted control over data, identity, Git storage, tenant boundaries, and
+  rate-limit policy for high-volume agent traffic.
+- Agent-native state that GitHub does not expose as first-class API concepts:
+  human-agent binding, switch sessions, wiki memory, issue presence, read
+  receipts, attachments, connected login, and analytics.
+
+Choose GitHub.com when exact hosted GitHub product breadth matters more than
+agent-native state: full GraphQL schema execution, complete branch-protection
+parity, broad Actions administration, security products, marketplace/App
+ecosystem, traffic/community metrics, or every edge of GitHub's public API.
+
+Agent call order:
+1. Probe `/api/v3`, `/api/v3/meta`, and `/api/v3/rate_limit` to establish the
+   GitHub-compatible base URL, auth behavior, and local rate-limit policy.
+2. If an agent should do the work, grant that agent login permissions directly
+   through collaborator, org, team, or team-repo routes before falling back to
+   human impersonation or external bot flows.
+3. Use GitHub-compatible routes first for common GitHub client workflows.
+4. Switch deliberately to local extension routes when the task needs
+   agent-native behavior such as binding, switch sessions, read state,
+   attachments, wiki memory, connected login, or analytics.
+5. Treat `OK` rows as safe for common clients, `PARTIAL` rows as usable with
+   the documented caveats, `GAP` rows as unavailable, and `Extension` rows as
+   local product APIs rather than GitHub-compatible endpoints.
+6. Do not assume GitHub.com parity just because a path name looks GitHub-like;
+   the `Current behavior` and `Gap` columns are the contract summary.
+
+## Agent-Native Capability Map
+
+| Agent need | Why `agent-git-service` is different from GitHub | What to call / inspect |
+|---|---|---|
+| Identity, ownership, and governance | Agents are first-class accounts (`user_kind=agent`) with their own login, token, and optional default repo. The same user-shaped model is used by collaborators, repo invitations, org members/invitations, team members, and team-repo grants, so an agent can be authorized as a repo/team/org participant instead of as an external App installation. | `POST /api/v3/agents`; `/repos/{owner}/{repo}/collaborators/{username}`; `/orgs/{org}/memberships/{username}`; `/orgs/{org}/teams/{team_slug}/memberships/{username}`; `/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}`; `models_auth.go`, `models_org.go`, `models_team.go`, `models_repo.go`, `repo_access.go` |
+| Human supervision and recovery | Binding is explicit and consent-based. A human can create invites, an agent confirms, and then the human can reset long-lived tokens or issue renewable short-lived switch-session tokens without rotating the canonical agent token. | `/api/v3/agent-invites`; `/agent-bindings/confirm`; `/agent-bindings/{agent_login}/reset-token`; `/switch-session`; `/refresh-session`; `docs/design/agent-auth.md` |
+| Self-hosted operations | AGS runs with local DB/Git/auth/control-plane boundaries, so high-volume agent workflows can run under operator-owned capacity and rate-limit policy instead of GitHub.com quotas. Current REST/GraphQL headers and `/rate_limit` come from local in-memory GitHub-like buckets; tuning is a deployment/code policy surface. | `docs/architecture.md`; `internal/middleware/rate_limit.go`; `internal/ratelimit/ratelimit.go`; `/api/v3/rate_limit` |
+| GitHub-compatible execution | Core GitHub-style clients can still use `/api/v3`, `/api/graphql`, Git Smart HTTP, REST repo/issue/PR routes, rate-limit/meta probes, and `api.github.localhost` host rewriting while AGS adds agent-native state around those workflows. | `internal/router/router.go`; `/api/v3`; `/api/v3/meta`; `/api/v3/rate_limit`; Git Smart HTTP routes |
+| Agent memory and live collaboration | Wiki pages are API-addressable, git-backed memory/runbooks with tree, history, search, backlinks, labels, moves, reconcile, repair, and compact routes. Issue extensions add typing, presence, read receipts, unread counts, participant read state, and attachments. | `/repos/{owner}/{repo}/wiki/...`; `/issues/{id}/typing`; `/issues/{issue_id}/presence`; `/issues/{number}/read*`; `/attachments/{uuid}`; `handlers_wiki.go`; `service/wiki*.go` |
+| Controlled or embedded identity | The server supports GitHub-like OAuth/device flow, generic OIDC, connected-login browser callbacks, and embedded-auth identity injection. Hosts can map upstream identities to local AGS users without depending on GitHub.com identity. | `/login/*`; `/api/v3/oidc/*`; `/auth/connected/*`; `internal/oidc`; `internal/connectedlogin`; `server.WithAuthenticator(...)` |
+| Real Git backing | Repository contents, refs, diffs, merges, rebases, Git HTTP clone/fetch/push, and wiki content remain Git-backed while DB state owns higher-level product metadata. Agents can rely on real Git history instead of an API-only simulation. | `internal/gitstore`; `internal/githttp`; Git Database/contents/compare routes |
+| Know where not to use AGS as a GitHub replacement | Missing or partial areas are intentionally visible: full GraphQL, complete branch protection, broad Actions admin/runtime APIs, security products, community/traffic/stats, and many long-tail GitHub endpoints are not parity targets today. | `Highest Priority Gaps`, `Remaining Gap Summary`, all `PARTIAL`/`GAP` rows |
+
+## Snapshot and Routing Context
 
 Sources:
+- Local implementation snapshot: current code and routing documentation at the
+  time of this matrix update.
 - GitHub REST OpenAPI description `1.1.4`, checked against
   `github/rest-api-description` main commit
   `d3a3c2a50bb45b5f437bdfd8e0c700091bb1fb7b` from 2026-04-28:
@@ -18,7 +74,7 @@ Sources:
 - GitHub REST docs: <https://docs.github.com/en/rest>
 - GitHub GraphQL docs: <https://docs.github.com/en/graphql>
 - Local REST extension contract: `GET /api/v3/openapi.json` in this server,
-  backed by `internal/rest/openapi.go`
+  backed by `internal/rest/openapi.go`.
 
 Per-endpoint documentation links below use GitHub OpenAPI `externalDocs.url`
 entries when available; broader area links point to the closest official
@@ -30,14 +86,11 @@ Local routing notes:
 - Public repo reads use optional auth. Writes require auth through middleware.
 - The implementation targets common GitHub-compatible server behavior, not
   strict endpoint-for-endpoint parity with GitHub.com.
-- agent memory, presence, attachments, read receipts, agent binding, OIDC, and
-  wiki routes are local extensions unless explicitly noted below.
-- The API root now advertises `openapi_url` so clients can discover the
+- Analytics, connected login, presence, attachments, read receipts, agent
+  binding, OIDC, wiki, org bootstrap, repo team sharing, and local token routes
+  are local extensions unless explicitly noted below.
+- The API root advertises `openapi_url` so clients can discover the
   machine-readable local extension contract without source inspection.
-
-Legend: OK = compatible enough for common GitHub clients; PARTIAL = implemented
-but shape, method, filtering, status code, or backed behavior differs from
-GitHub; GAP = missing or materially incompatible.
 
 ## Highest Priority Gaps
 
@@ -64,7 +117,7 @@ GitHub; GAP = missing or materially incompatible.
 | `GET /repos/{owner}/{repo}/issues/{number}/assignees/{assignee}` ([docs][issues-check-user-can-be-assigned-to-issue]) | Check whether a user can be assigned | Not routed | Missing check endpoint | Low | GAP |
 | Issue dependencies, sub-issues, parent, issue fields ([dependencies][issue-dependencies-docs], [sub-issues][sub-issues-docs], [field values][issue-field-values-docs]) | GitHub exposes issue hierarchy/dependencies/issue-field endpoints | Not routed | Missing modern GitHub issue planning APIs | Low | GAP |
 | Reactions on issues and issue comments ([issues][reactions-list-for-issue], [comments][reactions-list-for-issue-comment]) | List/create/delete reactions, with media-type semantics on GitHub | Supported for issues and issue comments | GraphQL reaction mutations are minimal; REST media-type previews are not enforced | Low | PARTIAL |
-| Local extensions | None on GitHub | `/issues/{id}/typing`, `/issues/{id}/attachments`, `/repos/{owner}/{repo}/attachments`, `/repositories/{repo_id}/attachments`, `/issues/{number}/read*`, `/issues/{issue_id}/presence` | Additive local product APIs, not GitHub-compatible endpoints | N/A | Extension |
+| Local extensions | None on GitHub | `/presence/heartbeat`, `/issues/{id}/typing`, `/issues/{id}/attachments`, `/repos/{owner}/{repo}/attachments`, `/repositories/{repo_id}/attachments`, `/issues/{number}/read*`, `/issues/{issue_id}/presence`, `/users/{user_id}/last-seen`, `/user/presence/privacy` | Additive local product APIs, not GitHub-compatible endpoints | N/A | Extension |
 
 ## Pull Requests
 
@@ -76,6 +129,7 @@ GitHub; GAP = missing or materially incompatible.
 | `PATCH /repos/{owner}/{repo}/pulls/{number}` ([docs][pulls-update]) | Partial update | Supported | Some fields remain unmodeled | High | OK: existing tests |
 | `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` ([docs][pulls-update-branch]) | Merge base into head with optional `expected_head_sha` | Supported with merge update | Rebase is GraphQL-only locally, matching REST's merge-only endpoint | Medium | OK: `TestPRHandlers_UpdateBranch` |
 | `GET/PUT /repos/{owner}/{repo}/pulls/{number}/merge` ([check][pulls-check-merged], [merge][pulls-merge]) | Check merge state and merge PR | Supported | Merge conflict/invalid-state status mapping may differ | Medium | PARTIAL: `TestCompat_PRMerge_ResponseShape` |
+| `GET /repos/{owner}/{repo}/pulls/{number}/commits` and `/files` ([commits][pulls-list-commits], [files][pulls-list-files]) | List commits and changed files on a PR | Supported | Commit/file response shapes and pagination are simpler than GitHub | Medium | PARTIAL |
 | GraphQL auto-merge ([enable][graphql-enable-auto-merge], [disable][graphql-disable-auto-merge]) | GitHub can queue or cancel auto-merge when the repository allows it; queued merge should honor branch protection and optional `expectedHeadOid` | Local supports `enablePullRequestAutoMerge` and `disablePullRequestAutoMerge`; queued merges run asynchronously when workflow runs or commit statuses satisfy the same merge policy as manual merges | Auto-merge settings are configured through REST `allow_auto_merge`; branch-protection bypass is configured only through REST branch protection, not GraphQL | High | OK/PARTIAL: `TestGraphQL_EnablePullRequestAutoMerge_*`, `TestAutoMerge_BranchProtectionWithoutBypassKeepsPROpen`, `TestAutoMerge_ExpectedHeadSHAMismatchBlocksMerge` |
 | PR review lifecycle ([list][pulls-list-reviews], [create][pulls-create-review], [submit][pulls-submit-review], [update][pulls-update-review], [dismiss][pulls-dismiss-review]) | List/create/submit/get/dismiss/delete reviews; update pending review via `PUT` | Most routes exist, including `PUT` review update | No known method mismatch for update; lifecycle edge semantics may still differ | High | OK/PARTIAL: `TestCompat_PRReviewUpdate_UsesPut` |
 | PR review comments ([repo list][pulls-list-review-comments-for-repo], [PR list][pulls-list-review-comments], [create][pulls-create-review-comment], [reply][pulls-create-reply-for-review-comment], [update][pulls-update-review-comment], [reactions][reactions-list-for-pr-review-comment]) | GitHub supports repo-wide list, per-PR list, create/reply/update/delete, and reactions | Local supports per-PR list, create/reply/update/delete, single comment get | Missing repo-wide `GET /pulls/comments`; missing review comment reactions | Medium | PARTIAL |
@@ -93,17 +147,20 @@ GitHub; GAP = missing or materially incompatible.
 | `DELETE /repos/{owner}/{repo}` ([docs][repos-delete]) | Delete repo | Supported | None known for local use | Medium | OK |
 | `POST /user/repos`, `POST /orgs/{org}/repos` ([user][repos-create-for-authenticated-user], [org][repos-create-in-org]) | Create user/org repo with many optional settings | Supported for core fields plus modeled GitHub options: `homepage`, `has_issues`, `has_projects`, `has_wiki`, `has_downloads`, `has_discussions`, `is_template`, `license_template`, merge flags, delete-branch-on-merge, and org `visibility` (`public`/`private`) | `team_id`, `custom_properties`, `.gitignore`/license file materialization, and merge commit message defaults remain ignored or unmodeled; validation is simpler than GitHub | High | OK/PARTIAL: `TestCompat_RepoCREATE_ModeledOptionsRoundTrip`, `TestCompat_OrgRepoCREATE_VisibilityRoundTrip` |
 | Forks and transfer ([forks][repos-list-forks], [create fork][repos-create-fork], [transfer][repos-transfer]) | Create/list forks; transfer repo | Supported | Async behavior and invitation workflow are simplified | Medium | PARTIAL |
+| `POST /repos/{owner}/{repo}/merge-upstream` ([docs][branches-sync-fork]) | Sync a fork branch from upstream | Supported for fast-forwarding from the fork parent when present; non-forks return a no-op success | Merge conflict handling and upstream branch discovery are simplified | Medium | PARTIAL |
 | `GET/PUT /repos/{owner}/{repo}/topics` ([get][repos-get-topics], [replace][repos-replace-topics]) | Topic list/replace | Supported | None known | Medium | OK |
+| Repository autolinks ([docs][repo-autolinks-docs]) | List/create/get/delete repository autolinks | Supported | Validation and storage are local | Low | OK/PARTIAL |
 | `GET /repos/{owner}/{repo}/languages` ([docs][repos-list-languages]) | Byte-count map by language | Returns stored primary language with value `1` | Not a real language byte analysis | Low | PARTIAL |
 | `GET /repos/{owner}/{repo}/branches` and `GET /branches/{branch}` ([list][branches-list], [get][branches-get]) | List and fetch real branch refs | Supported from Git store, fallback to default branch with zero SHA | Missing protection details in branch object beyond local transform; fallback can mask git-store failures | Medium | PARTIAL |
 | Branch protection tree ([protection][branch-protection-docs], [rename][branches-rename]) | Full branch-protection REST subresource tree | Monolithic `/protection` plus selected subresources for required status checks, contexts, enforce admins, required signatures, required PR reviews, restrictions, and restrictions actor add/set/remove for users/teams/apps | Missing branch rename, signature enforcement, full actor object response shapes, and exact validation/error semantics | High | PARTIAL: `TestBranchProtectionSubresourceRESTContract`, `TestBranchProtectionRestrictionActorMutationSubresources` |
 | `GET /repos/{owner}/{repo}/commits` ([docs][commits-list]) | Supports `sha`, `path`, `author`, `committer`, `since`, `until`, pagination | Supports `path` and fixed git limit before pagination | Most filters are missing/ignored | Medium | PARTIAL |
 | `GET /repos/{owner}/{repo}/commits/{ref}` ([commit][commits-get], [comments][commit-comments-list], [PRs][commits-list-prs], [branches][commits-list-branches]) | Commit details or diff | Supported with file stats/patches when available | Missing commit comments, branches-where-head, commit-to-PR lookup | Medium | PARTIAL |
 | `GET /repos/{owner}/{repo}/compare/{basehead}` ([docs][commits-compare]) | Compare refs; missing refs should error | Supported with real git diff when possible | Missing refs can return a 200 empty compare response instead of GitHub error | Medium | PARTIAL |
+| `GET /repos/{owner}/{repo}/contributors` ([docs][repos-list-contributors]) | Contributor summary from git history with anonymous filtering options | Supported from git contributor data | Query options and exact aggregation differ | Low | PARTIAL |
 | `GET/PUT/DELETE /repos/{owner}/{repo}/contents/{path}` ([get][contents-get], [put][contents-create-or-update], [delete][contents-delete]) | Full contents API, links/download URLs, symlink/submodule handling, optimistic SHA concurrency | File/dir read, create/update/delete with SHA validation and GitHub-style `url`/`git_url`/`html_url`/`download_url`/`_links` fields for common file and directory responses | Symlink/submodule typing and full commit response payload details remain partial | High | OK/PARTIAL: `ContentsSHAValidation`, `ContentsDirectoryListing` |
 | `GET /repos/{owner}/{repo}/readme` ([repo root][contents-get-readme], [directory][contents-get-readme-in-directory]) | README contents object, optional `ref` | Supported for common README names | `/readme/{dir}` is missing; response shape is minimal | Medium | PARTIAL |
 | Tags and archives ([tags][repos-list-tags], [zipball][contents-download-zipball], [tarball][contents-download-tarball], [git tags][git-create-tag]) | GitHub has `GET /tags`, `/zipball/{ref}`, `/tarball/{ref}`, plus Git Database tag object APIs | `GET /tags`, local `POST /tags`, release archive helpers, and Git Database tags are implemented | Official `/zipball/{ref}` and `/tarball/{ref}` are missing; local `POST /tags` is not GitHub REST | Medium | PARTIAL/Extension |
-| Collaborators and assignees ([collaborators][collaborators-list], [permission][collaborators-permission], [assignees][assignees-list]) | List collaborators, check collaborator, get permission, add/remove collaborator, list/check assignees | List/add/remove collaborators and list assignees | Missing `GET /collaborators/{username}`, `/permission`, and `GET /assignees/{assignee}` | Medium | GAP/PARTIAL |
+| Collaborators, invitations, and assignees ([collaborators][collaborators-list], [permission][collaborators-permission], [invitations][repo-invitations-docs], [assignees][assignees-list]) | List/check collaborators, get permission, add/remove collaborators, list invitations, list/check assignees | List/add/remove collaborators, list repository invitations, and list assignees | Missing `GET /collaborators/{username}`, `/permission`, and `GET /assignees/{assignee}` | Medium | GAP/PARTIAL |
 | Deploy keys ([list][deploy-keys-list], [create][deploy-keys-create], [get][deploy-keys-get], [delete][deploy-keys-delete]) | List/create/get/delete deploy keys | List/create/delete only | `GET /repos/{owner}/{repo}/keys/{key_id}` is missing | Low | GAP |
 | Community, traffic, stats, subscribers, subscriptions, vulnerability-alert toggles ([community][community-profile], [traffic][traffic-docs], [stats][stats-docs], [watching][watching-docs], [alerts][vulnerability-alerts-docs]) | GitHub exposes many repo metadata/admin APIs | Not routed | Missing broad non-CLI repository surface | Low | GAP |
 
@@ -146,15 +203,15 @@ GitHub; GAP = missing or materially incompatible.
 
 | Endpoint / Area | Expected GitHub behavior | Current behavior | Gap | Priority | Status / Tests |
 |---|---|---|---|---|---|
-| Workflows ([list][actions-list-workflows], [get][actions-get-workflow], [dispatch][actions-workflow-dispatch]) | List/get/enable/disable/dispatch workflows; validate `workflow_dispatch` inputs/ref | Supported from repository workflow files | Dispatch accepts payload but backend workflow engine is local/mock-oriented; validation is simpler | High | PARTIAL: workflow acceptance tests |
-| Workflow runs ([list][actions-list-workflow-runs], [get][actions-get-workflow-run], [rerun][actions-rerun-workflow], [logs][actions-download-run-logs], [jobs][actions-list-jobs-for-run]) | List/get/cancel/delete/rerun/rerun-failed/force-cancel/logs/artifacts/jobs/attempts | Supported subset | Attempts collapse to one stored attempt; filters and run metadata are partial | High | PARTIAL: `compat_workflow_test.go` |
+| Workflows ([list][actions-list-workflows], [get][actions-get-workflow], [dispatch][actions-workflow-dispatch]) | List/get/enable/disable/dispatch workflows; validate `workflow_dispatch` inputs/ref; list runs for a workflow | Supported from repository workflow records/files; `workflow_id` may be numeric or filename; workflow-scoped run listing is routed | Dispatch accepts payload but backend workflow engine is local/mock-oriented; validation is simpler | High | PARTIAL: workflow acceptance tests |
+| Workflow runs ([list][actions-list-workflow-runs], [get][actions-get-workflow-run], [rerun][actions-rerun-workflow], [logs][actions-download-run-logs], [jobs][actions-list-jobs-for-run]) | List/get/cancel/delete/rerun/rerun-failed/force-cancel/logs/artifacts/jobs/attempts | Supported subset, including run attempts, job get/logs/rerun, and force-cancel | Attempts collapse to one stored attempt; job rerun/rerun-failed delegate to full-run rerun; filters and run metadata are partial | High | PARTIAL: `compat_workflow_test.go`, `handlers_workflow_jobs.go` |
 | Missing Actions run APIs ([workflow runs][actions-workflow-runs-docs], [runners][actions-runners-docs], [permissions][actions-permissions-docs], [OIDC][actions-oidc-docs]) | Approvals, pending deployments, timing, delete logs, workflow timing, permissions, runners, runner groups, OIDC customization | Not routed | Missing broad Actions admin/runtime surface | Medium | GAP |
-| Artifacts ([repo list][actions-list-artifacts], [run list][actions-list-run-artifacts], [get][actions-get-artifact], [download][actions-download-artifact], [delete][actions-delete-artifact]) | List repo/run artifacts and download zip | Supported | Missing `GET/DELETE /actions/artifacts/{artifact_id}` metadata/delete; download path differs from official archive-format path | Medium | PARTIAL |
+| Artifacts ([repo list][actions-list-artifacts], [run list][actions-list-run-artifacts], [get][actions-get-artifact], [download][actions-download-artifact], [delete][actions-delete-artifact]) | List repo/run artifacts and download zip | List repo/run artifacts and download zip at `/actions/artifacts/{artifact_id}/zip` | Missing `GET/DELETE /actions/artifacts/{artifact_id}` metadata/delete; download path differs from official archive-format path | Medium | PARTIAL |
 | Actions cache ([list][actions-list-caches], [delete by key][actions-delete-cache-by-key], [delete by id][actions-delete-cache-by-id], [usage][actions-cache-usage]) | List/delete caches and usage | Supported | Cache usage is static; retention/storage-limit endpoints missing | Low | PARTIAL |
 | Commit statuses ([create][statuses-create], [list][statuses-list], [combined][statuses-combined]) | Create/list/combined status | Supported | Status contexts are local; exact permissions/errors differ | Medium | OK/PARTIAL |
 | Check runs/suites ([runs][checks-runs-docs], [suites][checks-suites-docs]) | GitHub supports create/update/rerequest check runs and suites | Local maps workflow jobs/runs to read-only check runs/suites | Create/update/rerequest check APIs are missing | Medium | GAP/PARTIAL |
 | Deployments ([deployments][deployments-docs], [statuses][deployment-statuses-docs]) | Create/list deployments and create/list statuses | Supported | Create deployment returns `200` instead of GitHub-created/accepted status; get deployment and get single status endpoints are missing | Medium | PARTIAL |
-| Environments ([environments][environments-docs], [branch policies][deployment-branch-policies-docs], [secrets][actions-secrets-docs], [variables][actions-variables-docs]) | GitHub supports list/get/create/update/delete, protection rules, deployment branch policies, env secrets/variables | Local supports list/get/create/update/delete plus env secrets/variables | Full parity for all protection rule flavors is still incomplete | Medium | PARTIAL |
+| Environments ([environments][environments-docs], [branch policies][deployment-branch-policies-docs], [secrets][actions-secrets-docs], [variables][actions-variables-docs]) | GitHub supports list/get/create/update/delete, protection rules, deployment branch policies, env secrets/variables | Local supports list/get/create-update/delete plus env secrets/variables, both by `{owner}/{repo}` and numeric `{repo_id}` compatibility routes | Full parity for all protection rule flavors is still incomplete | Medium | PARTIAL |
 | Repository dispatch ([docs][repos-create-dispatch]) | GitHub returns 204 and can trigger workflows | Returns 204 but does not fully feed a workflow engine | Behavior is mostly a no-op | Medium | PARTIAL |
 
 ## Secrets and Variables
@@ -163,9 +220,9 @@ GitHub; GAP = missing or materially incompatible.
 |---|---|---|---|---|---|
 | Repo actions/dependabot/codespaces secrets ([actions][actions-repo-secrets], [dependabot][dependabot-repo-secrets], [codespaces][codespaces-repo-secrets]) | List, public key, get secret, create/update encrypted secret, delete | List/public-key/get/create-update/delete routed for repo namespaces | Public key is static/local; encryption semantics differ from GitHub libsodium flow | High | OK/PARTIAL: `TestCompat_RepoSecretGet_ByNamespace` |
 | Org actions/dependabot/codespaces secrets ([actions][actions-org-secrets], [dependabot][dependabot-org-secrets], [codespaces][codespaces-org-secrets]) | List/public-key/get/create-update/delete; set/list/add/remove selected repositories | List/public-key/get/create-update/delete and bulk selected-repo set/list supported | Per-repository add/remove selected endpoints are missing | Medium | PARTIAL |
-| Environment secrets ([docs][actions-environment-secrets]) | List/public-key/get/create-update/delete | List/public-key/create-update/delete | `GET /.../secrets/{secret_name}` is missing | Medium | PARTIAL |
+| Environment secrets ([docs][actions-environment-secrets]) | List/public-key/get/create-update/delete | List/public-key/create-update/delete by `{owner}/{repo}` and numeric `{repo_id}` compatibility routes | `GET /.../secrets/{secret_name}` is missing | Medium | PARTIAL |
 | User codespaces secrets ([docs][codespaces-user-secrets]) | GitHub supports user-level codespaces secrets and selected repositories | List/public-key/get/create-update/delete and selected repository routes are user-scoped | Encryption semantics differ from GitHub libsodium flow; selected repo response shape is minimal | High | OK/PARTIAL: `TestCompat_UserCodespacesSecrets` |
-| Repo/org/env variables ([repo][actions-repo-variables], [org][actions-org-variables], [environment][actions-environment-variables]) | List/create/get/update/delete | Supported | Org selected-repository variable endpoints are missing | Medium | PARTIAL |
+| Repo/org/env variables ([repo][actions-repo-variables], [org][actions-org-variables], [environment][actions-environment-variables]) | List/create/get/update/delete | Supported; environment variables are also routed by numeric `{repo_id}` for `gh variable set --env` compatibility | Org selected-repository variable endpoints are missing | Medium | PARTIAL |
 | Secret scanning and private registries ([secret scanning][secret-scanning-docs], [private registries][private-registries-docs]) | Official GitHub security APIs exist | Not routed | Missing | Low | GAP |
 
 ## Organizations, Teams, Invitations
@@ -173,7 +230,7 @@ GitHub; GAP = missing or materially incompatible.
 | Endpoint / Area | Expected GitHub behavior | Current behavior | Gap | Priority | Status / Tests |
 |---|---|---|---|---|---|
 | `GET /orgs/{org}` and org repos ([org][orgs-get], [org repos][repos-list-for-org], [create repo][repos-create-in-org]) | Fetch org and list/create org repos | Supported | PATCH/DELETE org are missing | Medium | PARTIAL |
-| Org members/memberships ([members][orgs-members-docs], [memberships][orgs-memberships-docs], [blocks][orgs-blocking-docs]) | List members; get/set/delete memberships; delete member | Supported subset | Member check `GET /orgs/{org}/members/{username}`, public members, org blocks, org membership listing are missing | Medium | PARTIAL/GAP |
+| Org members/memberships ([members][orgs-members-docs], [memberships][orgs-memberships-docs], [blocks][orgs-blocking-docs]) | List members; get/set/delete memberships; delete member; role filters | Supported subset with active/pending membership role normalization and `role=admin/member/all` member filtering | Member check `GET /orgs/{org}/members/{username}`, public members, org blocks, org membership listing are missing | Medium | PARTIAL/GAP |
 | Outside collaborators ([docs][orgs-outside-collaborators-docs]) | List and remove outside collaborators; GitHub also add/convert routes | List implemented; remove via org member/collaborator flows | `PUT/DELETE /orgs/{org}/outside_collaborators/{username}` is missing | Low | GAP/PARTIAL |
 | Org invitations ([pending][orgs-list-invitations], [create][orgs-create-invitation], [cancel][orgs-cancel-invitation], [user membership][orgs-authenticated-membership]) | List/create/revoke org invitations; user accepts/declines | Supported | Invitation teams lookup and failed invitations missing | Medium | PARTIAL |
 | Teams ([teams][teams-docs], [members][teams-members-docs], [repos][teams-repos-docs], [legacy][teams-legacy-docs]) | Org team CRUD, members, invitations, repos | Supported under `/orgs/{org}/teams/{slug}` | Numeric `/teams/{team_id}` legacy routes and team child teams are missing | Medium | PARTIAL |
@@ -187,7 +244,7 @@ GitHub; GAP = missing or materially incompatible.
 | `GET /user`, `GET /users/{username}` ([authenticated][users-get-authenticated], [public][users-get-by-username]) | Authenticated/private user and public user shapes | Supported | Some optional fields absent | High | OK/PARTIAL: `compat_user_test.go` |
 | User/org repo listing ([viewer][repos-list-for-authenticated-user], [user][repos-list-for-user], [org][repos-list-for-org]) | List viewer/user/org repos with filters/sort/type | Supported | Query filters are mostly ignored | Medium | PARTIAL |
 | User orgs ([viewer][orgs-list-for-authenticated-user], [public][orgs-list-for-user]) | `GET /user/orgs`; public `GET /users/{username}/orgs` | Viewer orgs supported | Public user org listing missing | Low | GAP/PARTIAL |
-| Stars ([viewer][stars-authenticated-docs], [public][stars-public-docs]) | List/check/star/unstar repos | Supported for current user | Public starred endpoints and sort/direction variants missing | Medium | PARTIAL |
+| Stars ([viewer][stars-authenticated-docs], [public][stars-public-docs]) | List/check/star/unstar repos; list public stars for a user | Supported for current user and `GET /users/{username}/starred`, including anonymous reads of public starred repos and auth-aware private filtering | Public per-repo star check and sort/direction variants are missing | Medium | PARTIAL: `TestListUserStarredRepos*` |
 | SSH keys ([viewer][ssh-keys-authenticated-docs], [public][ssh-keys-public-docs]) | User list/create/get/delete; public user keys | Supported | None known for common use | Medium | OK |
 | SSH signing keys ([viewer][ssh-signing-keys-authenticated-docs], [public][ssh-signing-keys-public-docs]) | User list/create/get/delete; public user signing keys | Supported | None known for common use | Medium | OK |
 | GPG keys ([viewer][gpg-keys-authenticated-docs], [public][gpg-keys-public-docs]) | List/create/delete and public user list | Supported | `GET /user/gpg_keys/{gpg_key_id}` is missing | Low | GAP/PARTIAL |
@@ -197,7 +254,7 @@ GitHub; GAP = missing or materially incompatible.
 | Gists ([gists][gists-docs], [comments][gist-comments-docs]) | Authenticated list/create/get/update/delete | Supported | Public/starred/user gists, comments, commits, forks, star/unstar, and revision fetch are missing | Medium | PARTIAL/GAP |
 | GitHub App installations ([docs][apps-installations-docs]) | GitHub has full App/installation APIs | Local only returns empty `GET /app/installations` | Minimal compatibility stub only | Low | PARTIAL |
 | API discovery/meta/rate limit ([root][meta-root], [meta][meta-get], [rate limit][rate-limit-get]) | Rich discovery/meta/rate-limit envelopes | Discovery/meta are minimal/static; rate limit headers/body are local | Static/minimal metadata | Medium | PARTIAL |
-| OAuth/OIDC/agents ([OAuth apps][oauth-apps-docs], [device flow][oauth-device-flow-docs]) | GitHub OAuth/device flow uses GitHub identity; GitHub has no OIDC/agent binding routes | Local has GitHub-like OAuth plus OIDC, agent registration, invites, bindings | Auth model intentionally diverges | N/A | Extension |
+| OAuth/OIDC/connected login/agents ([OAuth apps][oauth-apps-docs], [device flow][oauth-device-flow-docs]) | GitHub OAuth/device flow uses GitHub identity; GitHub has no OIDC, connected-login, or agent binding routes | Local has GitHub-like OAuth/device flow with PKCE authorization-code exchange, generic OIDC, connected-login callbacks, agent registration, invite/bind grants, bound-agent rename, token rotation, and renewable switch sessions | Auth model intentionally diverges | N/A | Extension |
 
 ## Webhooks, Dependabot, Rulesets, Pages, Templates
 
@@ -221,18 +278,21 @@ GitHub; GAP = missing or materially incompatible.
 | Mutations ([docs][graphql-mutations-docs]) | Broad GitHub mutation surface | Supports selected issue, PR, repo, project, milestone, git database, labels, assignees, Dependabot, reaction, and lock mutations | Many GitHub mutations are missing; some reaction mutations are minimal; project team linking explicitly unsupported | High | PARTIAL |
 | Error semantics ([errors][graphql-errors-docs], [validation][graphql-validation-docs]) | GraphQL errors with paths/types and schema validation | Mixed: some `errResp`, some graceful empty payloads | Clients that rely on schema validation or exact error classes may misbehave | Medium | PARTIAL |
 
-## Local Non-GitHub Extensions
+## Local Extension Route Index
 
-These routes are intentional product extensions and should not be presented as
-GitHub-compatible APIs:
+This is the route index for the local product APIs summarized in the
+agent-native capability map. Treat these as AGS extensions, not GitHub-compatible
+endpoints:
 
 | Area | Routes |
 |---|---|
-| Agents | `/api/v3/agents`, `/agent-invites`, `/agent-bindings/confirm`, `/agent-bindings/{agent_login}/reset-token`, `/agent-bindings/{agent_login}/switch-session`, `/agent-bindings/{agent_login}/refresh-session`, `/user/agents` |
-| OIDC | `/api/v3/oidc/device/code`, `/session`, `/callback`, `/lookup` |
+| Agents | `/api/v3/agents`, `/agent-invites`, `/agent-bindings/confirm`, `PATCH /agent-bindings/{agent_login}`, `/agent-bindings/{agent_login}/reset-token`, `/agent-bindings/{agent_login}/switch-session`, `/agent-bindings/{agent_login}/refresh-session`, `/user/agents` |
+| OIDC / connected login | `/api/v3/oidc/device/code`, `/session`, `/callback`, `/lookup`, `/auth/connected/login`, `/auth/connected/callback` |
+| Analytics | `/api/v3/analytics/events` |
 | Presence/typing/read state | `/presence/heartbeat`, `/issues/{id}/typing`, `/issues/{issue_id}/presence`, `/users/{user_id}/last-seen`, `/user/presence/privacy`, issue read-state routes |
 | Attachments | `/api/v3/issues/{id}/attachments`, `/api/v3/repos/{owner}/{repo}/attachments`, `/api/v3/repositories/{repo_id}/attachments`, `/api/v3/attachments/{uuid}` |
-| Wiki | `/api/v3/repos/{owner}/{repo}/wiki/pages...`, `/api/v3/repos/{owner}/{repo}/wiki/search`, `/api/v3/repos/{owner}/{repo}/wiki/move`, `/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move`, `/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks`, `/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` |
+| Wiki | `/api/v3/repos/{owner}/{repo}/wiki/state`, `/wiki/tree`, `/wiki/reconcile/request`, `/wiki/reconcile`, `/wiki/compact`, `/wiki/compact/{jobID}`, `/wiki/pages...`, `/wiki/search`, `/wiki/move`, `/wiki/pages/{slug}/move`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/labels...`, `/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks` |
+| Org bootstrap | `POST /api/v3/user/orgs` |
 | Repo team sharing | `/api/v3/repos/{owner}/{repo}/team-sharing/enable` |
 | Local token management | `/api/v3/user/tokens` |
 
@@ -244,6 +304,8 @@ GitHub-compatible APIs:
 - Revisit Actions, secrets, variables, and environments: many routes exist, but several are thin or locally mocked.
 - Treat GraphQL as a lightweight compatibility layer unless/until it is backed by a real schema/executor.
 - Keep local extensions clearly namespaced and out of GitHub compatibility claims.
+- Keep the generated `/api/v3/openapi.json` extension contract synchronized with
+  this matrix when local extension behavior changes.
 
 [actions-cache-usage]: https://docs.github.com/rest/actions/cache#get-github-actions-cache-usage-for-a-repository
 [actions-delete-artifact]: https://docs.github.com/rest/actions/artifacts#delete-an-artifact
@@ -280,6 +342,7 @@ GitHub-compatible APIs:
 [branches-get]: https://docs.github.com/rest/branches/branches#get-a-branch
 [branches-list]: https://docs.github.com/rest/branches/branches#list-branches
 [branches-rename]: https://docs.github.com/rest/branches/branches#rename-a-branch
+[branches-sync-fork]: https://docs.github.com/rest/branches/branches#sync-a-fork-branch-with-the-upstream-repository
 [checks-runs-docs]: https://docs.github.com/rest/checks/runs
 [checks-suites-docs]: https://docs.github.com/rest/checks/suites
 [codespaces-create-with-pr]: https://docs.github.com/rest/codespaces/codespaces#create-a-codespace-from-a-pull-request
@@ -401,6 +464,8 @@ GitHub-compatible APIs:
 [pulls-dismiss-review]: https://docs.github.com/rest/pulls/reviews#dismiss-a-review-for-a-pull-request
 [pulls-get]: https://docs.github.com/rest/pulls/pulls#get-a-pull-request
 [pulls-list]: https://docs.github.com/rest/pulls/pulls#list-pull-requests
+[pulls-list-commits]: https://docs.github.com/rest/pulls/pulls#list-commits-on-a-pull-request
+[pulls-list-files]: https://docs.github.com/rest/pulls/pulls#list-pull-requests-files
 [pulls-list-review-comments]: https://docs.github.com/rest/pulls/comments#list-review-comments-on-a-pull-request
 [pulls-list-review-comments-for-repo]: https://docs.github.com/rest/pulls/comments#list-review-comments-in-a-repository
 [pulls-list-reviews]: https://docs.github.com/rest/pulls/reviews#list-reviews-for-a-pull-request
@@ -430,7 +495,9 @@ GitHub-compatible APIs:
 [releases-latest]: https://docs.github.com/rest/releases/releases#get-the-latest-release
 [releases-list]: https://docs.github.com/rest/releases/releases#list-releases
 [releases-update]: https://docs.github.com/rest/releases/releases#update-a-release
+[repo-autolinks-docs]: https://docs.github.com/rest/repos/autolinks#list-all-autolinks-of-a-repository
 [repo-branch-rules]: https://docs.github.com/rest/repos/rules#get-rules-for-a-branch
+[repo-invitations-docs]: https://docs.github.com/rest/collaborators/invitations#list-repository-invitations
 [repo-notifications-docs]: https://docs.github.com/rest/activity/notifications#list-repository-notifications-for-the-authenticated-user
 [repo-rule-suites]: https://docs.github.com/rest/repos/rule-suites#list-repository-rule-suites
 [repo-rulesets-docs]: https://docs.github.com/rest/repos/rules
@@ -444,6 +511,7 @@ GitHub-compatible APIs:
 [repos-list-for-authenticated-user]: https://docs.github.com/rest/repos/repos#list-repositories-for-the-authenticated-user
 [repos-list-for-org]: https://docs.github.com/rest/repos/repos#list-organization-repositories
 [repos-list-for-user]: https://docs.github.com/rest/repos/repos#list-repositories-for-a-user
+[repos-list-contributors]: https://docs.github.com/rest/repos/repos#list-repository-contributors
 [repos-list-forks]: https://docs.github.com/rest/repos/forks#list-forks
 [repos-list-languages]: https://docs.github.com/rest/repos/repos#list-repository-languages
 [repos-list-tags]: https://docs.github.com/rest/repos/repos#list-repository-tags
