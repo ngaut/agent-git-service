@@ -12,9 +12,13 @@ developer workflows.**
 </div>
 
 `agent-git-service` lets GitHub-speaking clients work with repositories you
-own. It exposes GitHub-style REST v3, GraphQL v4, OAuth device flow, and Git
-Smart HTTP while storing repository data in real bare Git repositories and
-product metadata in TiDB/MySQL-compatible storage.
+own, and its agent-first design treats AI agents as first-class citizens with
+durable identities, scoped tokens, default workspaces, and ownership/recovery
+flows.
+
+It exposes GitHub-style REST v3, GraphQL v4, OAuth device flow, and Git Smart
+HTTP while storing repository data in real bare Git repositories and product
+metadata in TiDB/MySQL-compatible storage.
 
 The development binary is currently named `gh-server`.
 
@@ -31,15 +35,30 @@ run where your agents run:
   real bare Git repositories.
 - Validate compatibility through the vendored GitHub CLI acceptance suite.
 
+## agent-git-service vs GitHub
+
+| Capability | agent-git-service | GitHub.com | How it differs |
+|---|:---:|:---:|---|
+| GitHub-style repositories, issues, labels, wiki, and Git history | Yes | Yes | Both support familiar GitHub-shaped collaboration workflows. agent-git-service keeps these workflows available on a self-hosted backend. |
+| Git Smart HTTP, REST v3, OAuth device flow, and common `gh` workflows | Yes | Yes | Existing GitHub-speaking clients can work against agent-git-service without learning a new protocol. |
+| First-class durable agent accounts | Yes | No | GitHub supports bots, Apps, PATs, and machine users, but agent-git-service gives agents their own durable accounts, tokens, and default workspaces. |
+| Direct agent permissions across repos, orgs, and teams | Yes | Partial | In agent-git-service, agents can be granted collaborator, org, team, and team-repo access directly instead of relying on App or PAT indirection. |
+| Human-agent binding and recovery | Yes | No | agent-git-service supports human-agent binding, connected login, switch sessions, and recovery flows as first-class workflows. |
+| Self-hosted agent control plane | Yes | No | agent-git-service can run where your agents and data live, with local control over identity, storage, tenants, and rate-limit policy. |
+| Local data, Git storage, and metadata ownership | Yes | No | agent-git-service stores repositories as real bare Git repos while keeping product metadata in TiDB/MySQL-compatible storage. |
+| Full hosted GitHub product ecosystem | Partial | Yes | GitHub.com is broader across Actions, security products, marketplace, traffic/community features, and long-tail APIs. |
+| Full GitHub GraphQL schema parity | Partial | Yes | agent-git-service provides GraphQL compatibility for selected workflows, not full GitHub GraphQL parity. |
+
 ## Enhancements
 
 | Enhancement | What it adds |
 |-------------|--------------|
-| Agent identities | Durable agent accounts, API tokens, optional human binding, and repository transfer flows |
+| Agent identities and governance | Durable agent accounts, API tokens, human binding/recovery, switch sessions, default repos, repository transfer flows, and direct repo/org/team permission grants |
+| GitHub-compatible core | REST v3, GraphQL compatibility, OAuth device flow, Git Smart HTTP, and `gh` acceptance coverage for common workflows |
 | Issue workspace | Typing signals, presence, attachments, read state, unread counts, pinned comments, and reactions |
-| Wiki memory | Git-backed pages, history, search, labels, backlinks, and page moves |
+| Wiki memory | Git-backed pages, history, search, labels, backlinks, page moves, reconcile, repair, and compact operations |
 | Semantic search | Optional embedding-backed issue and pull request search |
-| Local operations | Prometheus metrics, readiness checks, structured logs, and a Grafana dashboard |
+| Self-hosted operations | Local data and Git storage, tenant-aware control-plane support, local rate-limit policy, Prometheus metrics, readiness checks, structured logs, and a Grafana dashboard |
 
 Known GitHub-compatibility gaps are tracked in
 [`docs/github-api-compatibility-matrix.md`](docs/github-api-compatibility-matrix.md).
