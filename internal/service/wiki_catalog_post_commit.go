@@ -1,14 +1,8 @@
 package service
 
-// Wiki catalog GC — service-layer entry point. Wraps wikicatalog.Catalog.GCRun
-// so an admin endpoint or scheduled job can invoke it without depending on
-// catalog internals.
-
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	"gorm.io/gorm"
 
@@ -17,26 +11,13 @@ import (
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
-// Default TTLs documented in wikicatalog/gc.go. The service-level
-// defaults are conservative; operators may override via the
-// WikiGCOptions struct.
 const (
-	defaultWikiPendingTTL  = time.Hour
-	defaultWikiRefcountTTL = time.Hour
-
 	synthProjectionPending      int16 = 0
 	synthProjectionMaterialized int16 = 1
 )
 
-// WikiGCOptions tunes a GC run. Zero values pick the defaults
-// documented above.
-type WikiGCOptions struct {
-	PendingTTL  time.Duration
-	RefcountTTL time.Duration
-}
-
-// WikiCatalogPostCommit is the catalog's post-commit hook, wired in
-// main.go. It drives every side effect that the legacy git-backed
+// WikiCatalogPostCommit is the catalog's post-commit hook, wired during
+// server bootstrap. It drives every side effect that the legacy git-backed
 // handlers used to schedule synchronously: the search index plus
 // materialization of the wiki bare git repo so `git clone` / `git
 // pull` against the wiki still works after the catalog cutover.
@@ -235,22 +216,4 @@ func (s *Service) wikiBodyForReindex(ctx context.Context, pageID uint64, blobSHA
 		return "", false
 	}
 	return string(body), true
-}
-
-// RunWikiCatalogGC reclaims orphaned wiki blobs and zero-refcount
-// entries. Operators run this on a schedule (recommended: daily) or
-// manually after a known large delete/migration. Idempotent.
-func (s *Service) RunWikiCatalogGC(ctx context.Context, opts WikiGCOptions) (wikicatalog.GCStats, error) {
-	if s.WikiCatalog == nil {
-		return wikicatalog.GCStats{}, errors.New("wiki gc: catalog not configured")
-	}
-	pendingTTL := opts.PendingTTL
-	if pendingTTL <= 0 {
-		pendingTTL = defaultWikiPendingTTL
-	}
-	refcountTTL := opts.RefcountTTL
-	if refcountTTL <= 0 {
-		refcountTTL = defaultWikiRefcountTTL
-	}
-	return s.WikiCatalog.GCRun(ctx, time.Now().UTC(), pendingTTL, refcountTTL)
 }

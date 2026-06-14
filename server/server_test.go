@@ -165,19 +165,9 @@ func TestMain_SignalDrivenShutdown(t *testing.T) {
 
 func TestShutdown_Graceful_Success(t *testing.T) {
 	// Create a minimal bootstrap deps for testing shutdown.
-	mainDB := openTestDB(t)
-	tmpDir := t.TempDir()
-
-	store, err := gitstore.New(tmpDir)
-	if err != nil {
-		t.Fatalf("gitstore: %v", err)
-	}
-
 	srvCtx, srvCancel := context.WithCancel(context.Background())
 	svcDeps := &service.Service{
 		Ctx: srvCtx,
-		DB:  mainDB,
-		Git: store,
 		Wg:  sync.WaitGroup{},
 	}
 
@@ -219,27 +209,22 @@ func TestShutdown_Graceful_Success(t *testing.T) {
 }
 
 func TestShutdown_BackgroundDrain_Timeout(t *testing.T) {
-	mainDB := openTestDB(t)
-	tmpDir := t.TempDir()
-
-	store, err := gitstore.New(tmpDir)
-	if err != nil {
-		t.Fatalf("gitstore: %v", err)
-	}
-
 	srvCtx, srvCancel := context.WithCancel(context.Background())
 	svcDeps := &service.Service{
 		Ctx: srvCtx,
-		DB:  mainDB,
-		Git: store,
 		Wg:  sync.WaitGroup{},
 	}
 
-	// Simulate a background worker that never finishes.
+	// Simulate a background worker that ignores server cancellation and never
+	// finishes within the shutdown grace period.
+	releaseWorker := make(chan struct{})
+	t.Cleanup(func() {
+		close(releaseWorker)
+	})
 	svcDeps.Wg.Add(1)
 	go func() {
 		defer svcDeps.Wg.Done()
-		<-srvCtx.Done() // Only exits when context is canceled
+		<-releaseWorker
 	}()
 
 	testMux := http.NewServeMux()
