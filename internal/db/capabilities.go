@@ -169,12 +169,15 @@ func probeTiDBFullText(database *gorm.DB) bool {
 }
 
 func probeTiDBFullTextQuery(database *gorm.DB, table string) bool {
-	var score float64
+	var matchedID int64
 	tableIdent := mysqlIdent(table)
 	result := database.Raw(fmt.Sprintf(
-		"SELECT FTS_MATCH_WORD('test', `body`) FROM %s WHERE FTS_MATCH_WORD('test', `body`) LIMIT 1",
-		tableIdent,
-	)).Scan(&score)
+		"SELECT fts_probe.id FROM %s AS fts_probe "+
+			"JOIN (SELECT `id` AS id, FTS_MATCH_WORD('test', `body`) AS fts_score FROM %s WHERE FTS_MATCH_WORD('test', `body`)) AS fts_matches "+
+			"ON fts_matches.id = fts_probe.id "+
+			"ORDER BY fts_matches.fts_score DESC, fts_probe.id DESC LIMIT 1",
+		tableIdent, tableIdent,
+	)).Scan(&matchedID)
 	return result.Error == nil && result.RowsAffected > 0
 }
 
