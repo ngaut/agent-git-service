@@ -6,7 +6,7 @@
 It bridges HTTP requests from Git clients to the system's `git-http-backend` CGI binary and performs post-push follow-up work (HEAD fixing, webhook dispatch, and workflow discovery).
 Within the product, this is a supporting surface for GitHub-compatible repository workflows rather than a separate standalone Git-hosting focus.
 Users normally encounter it only after starting with an API client or the REST discovery/auth endpoints such as `/api/v3/` and `/api/v3/meta`.
-This document records the current implementation. Planned multi-agent tenant-routing and logical-path separation changes live in [docs/design/multi-agent.md](../design/multi-agent.md).
+This document records the current implementation.
 
 For the full system overview see [docs/architecture.md](../architecture.md).
 Core invariant: `agent-git-service` is Git-backed; see [architecture.md § Purpose](../architecture.md#purpose).
@@ -46,7 +46,7 @@ The `Handler` struct holds:
 
 ```
 git clone https://host/{owner}/{repo}.git
-  → credentials pass through route auth middleware (`OptionalTokenAuth` in single-DB mode, `TokenAuth` in control-plane mode)
+  → credentials pass through route auth middleware (`OptionalTokenAuth`)
   → GET /{owner}/{repo}.git/info/refs?service=git-upload-pack
       → InfoRefs handler
       → resolve repo from DB (including historical names via `repo_redirects`)
@@ -96,16 +96,12 @@ The current route is authenticated and permission-aware:
 
 - Git Smart HTTP routes are registered separately from the REST API paths, but they are wrapped in auth middleware at route registration time
 - middleware accepts `token`, `Bearer`, and Git-helper `Basic` auth forms and injects the resolved viewer into request context
-- in control-plane mode, route auth is mandatory and missing/invalid credentials are rejected as `401 Unauthorized` before the Git handler runs
-- in single-DB mode, auth remains optional at the route layer so unauthenticated requests can still reach the handler
+- auth remains optional at the route layer so unauthenticated requests can still reach the handler for public-repo reads
 - `resolveRepoContext` calls `Svc.HasRepoAccess`, using read access for clone/fetch and write access for push
 - `InfoRefs` derives the required permission from the `service` query parameter, so push discovery is checked before `git-receive-pack`
 - after the request reaches `resolveRepoContext`, missing viewer context, missing repo access, and missing repos intentionally collapse to `404 Not Found`, matching GitHub-style repo hiding
 - CGI still receives a fixed `REMOTE_USER=git`, but that value is no longer the security decision point
 - the requested public `owner/repo` path is first normalized through DB lookup; historical repo URLs can resolve to the canonical repo before the handler computes the on-disk path
-
-The remaining multi-agent work is tenant-path / logical-path separation, not basic transport authorization.
-That future design is documented in [docs/design/multi-agent.md](../design/multi-agent.md).
 
 ## Invariants and Design Constraints
 
@@ -115,7 +111,7 @@ That future design is documented in [docs/design/multi-agent.md](../design/multi
 - **Dual dependency on gitstore and service.** The handler depends on both `*gitstore.Store` (for repo paths and existence checks) and `*service.Service` (for DB repo lookup, webhook dispatch, and workflow sync). This is an accepted coupling documented as visible technical debt.
 - **Post-push follow-up is asynchronous.** HEAD fixing, push webhook fan-out, pull request synchronize webhook fan-out, and workflow sync run in a background goroutine after the push response is sent to the client. Failures are logged but do not affect the client response.
 - **HEAD repair handles branch naming mismatches.** When a client pushes to a branch that differs from the repository's HEAD target (e.g., pushing to `master` when HEAD points to `main`), `fixHEAD` corrects the dangling reference to the first available branch.
-- **Current canonical repo path = physical path.** The request URL still starts as `/{owner}/{repo}.git`, but the handler first resolves the repo through `service.GetRepo` (including redirects) and then maps the canonical full name to `GIT_REPO_DIR/{owner}/{repo}.git`. The planned multi-agent design separates logical and physical repo identity.
+- **Current canonical repo path = physical path.** The request URL still starts as `/{owner}/{repo}.git`, but the handler first resolves the repo through `service.GetRepo` (including redirects) and then maps the canonical full name to `GIT_REPO_DIR/{owner}/{repo}.git`.
 
 For the full dependency-boundary rules see [module-contracts.md § githttp](../module-contracts.md#githttp).
 

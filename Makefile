@@ -16,15 +16,6 @@ DB_NAME     = gh-server
 TEST_DB_DSN ?= root:@tcp(127.0.0.1:4000)/$(DB_NAME)?parseTime=true&timeout=10s
 TIDB_TMP_DIR ?= /mnt/gh-server-tidb-tmp
 TIDB_CONFIG_FILE ?= /tmp/gh-server-tidb.toml
-EPIC130_CP_DB ?= e2e_mt_cp
-EPIC130_A_DB ?= e2e_mt_a
-EPIC130_B_DB ?= e2e_mt_b
-EPIC130_TOKEN_ENV ?= /tmp/epic130_tokens.env
-EPIC130_SCRIPT ?= multi-tenant-control-plane-integration
-EPIC130_MAIN_DSN ?= $(TEST_DB_DSN)
-EPIC130_CP_DSN ?= root:@tcp(127.0.0.1:4000)/$(EPIC130_CP_DB)?parseTime=true&timeout=10s
-EPIC130_A_DSN ?= root:@tcp(127.0.0.1:4000)/$(EPIC130_A_DB)?parseTime=true&timeout=10s
-EPIC130_B_DSN ?= root:@tcp(127.0.0.1:4000)/$(EPIC130_B_DB)?parseTime=true&timeout=10s
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 

@@ -22,11 +22,8 @@ type Catalog struct {
 	Blob *BlobStore
 
 	// DBFor resolves the *gorm.DB to use for a given request context.
-	// Required for multi-tenant deployments where Service.DBForCtx
-	// returns a per-tenant DB injected via ContextWithDB; without
-	// this hook the catalog would commit page rows to the
-	// control-plane DB while the post-commit search hook writes to
-	// the tenant DB.
+	// This keeps catalog writes aligned with service transactions and
+	// request cancellation.
 	//
 	// If nil, the catalog falls back to c.DB.WithContext(ctx) for
 	// single-DB deployments. New() defaults to that behavior.
@@ -70,9 +67,8 @@ type Catalog struct {
 // New constructs a Catalog. db and blob must be non-nil; the caller
 // is responsible for AutoMigrate having already run on db.
 //
-// In a multi-tenant deployment the caller should set DBFor after
-// construction so the catalog routes writes to the per-request
-// tenant DB instead of the static fallback held in c.DB.
+// Callers may set DBFor after construction so the catalog uses the same
+// context-scoped DB handle as the service layer.
 func New(db *gorm.DB, blob *BlobStore) *Catalog {
 	return &Catalog{
 		DB:   db,

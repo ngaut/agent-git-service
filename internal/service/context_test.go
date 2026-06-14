@@ -8,7 +8,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/service"
-	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 func TestDBForCtx_WithContextDB(t *testing.T) {
@@ -17,24 +16,24 @@ func TestDBForCtx_WithContextDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open default db: %v", err)
 	}
-	tenantDB, err := gorm.Open(sqlite.Open("file:dbforctx_tenant?mode=memory&cache=shared"), &gorm.Config{})
+	scopedDB, err := gorm.Open(sqlite.Open("file:dbforctx_scoped?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("open tenant db: %v", err)
+		t.Fatalf("open scoped db: %v", err)
 	}
 
 	svc := &service.Service{DB: defaultDB}
 
-	// Inject tenant DB into context
-	ctx := service.ContextWithDB(context.Background(), tenantDB)
+	// Inject scoped DB into context.
+	ctx := service.ContextWithDB(context.Background(), scopedDB)
 	got := svc.DBForCtx(ctx)
 
-	// The returned DB should be derived from tenantDB, not defaultDB.
+	// The returned DB should be derived from scopedDB, not defaultDB.
 	// We verify by checking the underlying sql.DB pointer.
 	gotSQL, _ := got.DB()
-	tenantSQL, _ := tenantDB.DB()
+	scopedSQL, _ := scopedDB.DB()
 	defaultSQL, _ := defaultDB.DB()
 
-	if gotSQL != tenantSQL {
+	if gotSQL != scopedSQL {
 		t.Error("DBForCtx did not return the context-injected DB")
 	}
 	if gotSQL == defaultSQL {
@@ -80,30 +79,5 @@ func TestDBFromContext_Empty(t *testing.T) {
 	_, ok := service.DBFromContext(context.Background())
 	if ok {
 		t.Error("DBFromContext should return false for empty context")
-	}
-}
-
-// TestTenantContext_SingleKey guards the fix for the tenantKey split
-// (issue #1244): service.ContextWithTenant and tenant.ContextWithTenant must
-// write to the same underlying key so middleware (service.ContextWithTenant)
-// and gitstore (tenant.FromContext) see the same value.
-func TestTenantContext_SingleKey(t *testing.T) {
-	ctx := service.ContextWithTenant(context.Background(), "tenant-foo")
-
-	gotViaService, okService := service.TenantFromContext(ctx)
-	if !okService || gotViaService != "tenant-foo" {
-		t.Errorf("service.TenantFromContext: got (%q, %v), want (\"tenant-foo\", true)", gotViaService, okService)
-	}
-
-	gotViaTenant, okTenant := tenant.FromContext(ctx)
-	if !okTenant || gotViaTenant != "tenant-foo" {
-		t.Errorf("tenant.FromContext did not see service-package write: got (%q, %v), want (\"tenant-foo\", true)", gotViaTenant, okTenant)
-	}
-
-	// Symmetric: a tenant-package write must be visible via service.TenantFromContext.
-	ctx2 := tenant.ContextWithTenant(context.Background(), "tenant-bar")
-	gotViaService2, ok2 := service.TenantFromContext(ctx2)
-	if !ok2 || gotViaService2 != "tenant-bar" {
-		t.Errorf("service.TenantFromContext did not see tenant-package write: got (%q, %v), want (\"tenant-bar\", true)", gotViaService2, ok2)
 	}
 }

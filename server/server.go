@@ -15,19 +15,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	agsauth "github.com/ngaut/agent-git-service/auth"
 	"github.com/ngaut/agent-git-service/config"
 	"github.com/ngaut/agent-git-service/internal/connectedlogin"
-	"github.com/ngaut/agent-git-service/internal/controlplane"
-	"github.com/ngaut/agent-git-service/internal/crypto"
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 	"github.com/ngaut/agent-git-service/internal/githttp"
 	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/graphql"
-	applog "github.com/ngaut/agent-git-service/internal/logging"
 	"github.com/ngaut/agent-git-service/internal/metrics"
 	srvmiddleware "github.com/ngaut/agent-git-service/internal/middleware"
 	"github.com/ngaut/agent-git-service/internal/oauth"
@@ -84,7 +80,6 @@ type bootstrapDeps struct {
 	SrvCtx       context.Context
 	SrvCancel    context.CancelFunc
 	SvcDeps      *service.Service
-	DBRouter     *controlplane.DBRouter
 	GqlSrv       *graphql.Server
 	GitHandler   *githttp.Handler
 	OauthHandler *oauth.Handler
@@ -115,7 +110,6 @@ func buildPartialDeps(deps *bootstrapDeps) *bootstrapDeps {
 		SrvCtx:       deps.SrvCtx,
 		SrvCancel:    deps.SrvCancel,
 		SvcDeps:      deps.SvcDeps,
-		DBRouter:     deps.DBRouter,
 		GqlSrv:       deps.GqlSrv,
 		GitHandler:   deps.GitHandler,
 		OauthHandler: deps.OauthHandler,
@@ -128,104 +122,6 @@ func buildPartialDeps(deps *bootstrapDeps) *bootstrapDeps {
 
 func (r *bootstrapResult) setPartial() {
 	r.Partial = buildPartialDeps(r.Deps)
-}
-
-func controlPlaneGormConfig() *gorm.Config {
-	return &gorm.Config{
-		Logger: applog.NewGormLogger(gormlogger.Config{
-			LogLevel:                  gormlogger.Warn,
-			Colorful:                  false,
-			ParameterizedQueries:      true,
-			IgnoreRecordNotFoundError: true,
-		}),
-	}
-}
-
-func openControlPlane(dsn string) (*gorm.DB, error) {
-	dialector, dialect := db.DialectorForDSN(dsn)
-	cfg := controlPlaneGormConfig()
-	if dialect == "postgres" {
-		cfg.PrepareStmt = true
-	}
-	return gorm.Open(dialector, cfg)
-}
-
-var openControlPlaneDB = func(dsn string) (*gorm.DB, error) {
-	return openControlPlane(dsn)
-}
-
-var openControlPlaneTenantDB = func(encryptedDSN string) (*gorm.DB, error) {
-	rawDSN, err := crypto.DecryptSecret(encryptedDSN)
-	if err == nil {
-		if rawDSN == "" {
-			return nil, fmt.Errorf("tenant db: decrypted DSN is empty")
-		}
-		return openControlPlaneDB(rawDSN)
-	}
-
-	// Backward compatibility for legacy/e2e control-plane rows that still store
-	// tenant DSNs in plaintext instead of sealed-box ciphertext.
-	if !looksLikePlainTenantDSN(encryptedDSN) {
-		return nil, fmt.Errorf("tenant db: decrypt dsn: %w", err)
-	}
-	return openControlPlaneDB(strings.TrimSpace(encryptedDSN))
-}
-
-func looksLikePlainTenantDSN(raw string) bool {
-	trimmed := strings.TrimSpace(raw)
-	lower := strings.ToLower(trimmed)
-
-	switch {
-	case trimmed == "":
-		return false
-	case lower == ":memory:":
-		return true
-	case strings.HasPrefix(lower, "file:"):
-		return true
-	case strings.HasPrefix(lower, "sqlite://"):
-		return true
-	case strings.HasPrefix(lower, "sqlite:"):
-		return true
-	case strings.HasPrefix(lower, "postgres://"):
-		return true
-	case strings.HasPrefix(lower, "postgresql://"):
-		return true
-	case strings.HasPrefix(trimmed, "/"):
-		return true
-	case strings.HasPrefix(trimmed, "./"):
-		return true
-	case strings.HasPrefix(trimmed, "../"):
-		return true
-	case strings.Contains(lower, "@tcp("):
-		return true
-	case strings.Contains(lower, "@unix("):
-		return true
-	case strings.Contains(trimmed, "@/"):
-		return true
-	default:
-		return false
-	}
-}
-
-var controlPlaneAutoMigrate = func(database *gorm.DB) error {
-	return database.AutoMigrate(&controlplane.CPUser{}, &controlplane.CPToken{})
-}
-
-func initControlPlaneDB(dsn string) (*gorm.DB, error) {
-	cpDB, err := openControlPlaneDB(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("control plane db: %w", err)
-	}
-	if err := controlPlaneAutoMigrate(cpDB); err != nil {
-		return nil, fmt.Errorf("control plane migrate: %w", err)
-	}
-	if err := cpDB.Model(&controlplane.CPUser{}).
-		Where("state = '' OR state IS NULL").
-		Update("state", controlplane.AgentStateActive).Error; err != nil {
-		return nil, fmt.Errorf("control plane state backfill: %w", err)
-	}
-
-	return cpDB, nil
 }
 
 type coreDeps struct {
@@ -241,10 +137,6 @@ type serviceDeps struct {
 	gqlSrv       *graphql.Server
 	gitHandler   *githttp.Handler
 	oauthHandler *oauth.Handler
-}
-
-type controlPlaneDeps struct {
-	dbRouter *controlplane.DBRouter
 }
 
 type muxDeps struct {
@@ -345,11 +237,7 @@ func initCoreDepsFromConfig(cfg config.Config) (coreDeps, error) {
 	}
 	deps.embedder = embedder
 
-	var gitOpts []gitstore.Option
-	if cfg.ControlPlaneDSN != "" {
-		gitOpts = append(gitOpts, gitstore.WithTenantIsolation(), gitstore.WithDefaultTenant("default"))
-	}
-	store, err := gitstore.New(cfg.GitRepoDir, gitOpts...)
+	store, err := gitstore.New(cfg.GitRepoDir)
 	if err != nil {
 		return deps, fmt.Errorf("gitstore: %w", err)
 	}
@@ -399,10 +287,8 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	// stale. The hook is best-effort — failures log and do not roll
 	// back the catalog commit.
 	wikiCat.OnChangeSetCommitted = svcDeps.WikiCatalogPostCommit
-	// Route every catalog write through the same per-request DB the
-	// service layer uses; otherwise multi-tenant deployments commit
-	// page rows to the control-plane DB while the post-commit search
-	// hook (which uses DBForCtx) writes to the tenant DB.
+	// Route catalog writes through the same context-aware DB accessor the
+	// service layer uses so transactions and request cancellation propagate.
 	wikiCat.DBFor = svcDeps.DBForCtx
 	// Initialize PresenceHub for collaborative conversation presence
 	svcDeps.PresenceHub = service.NewPresenceHub(database)
@@ -491,27 +377,6 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	return deps, nil
 }
 
-func initControlPlane(cfg config.Config) (controlPlaneDeps, error) {
-	var deps controlPlaneDeps
-
-	if cfg.ControlPlaneDSN == "" {
-		return deps, nil
-	}
-	cpDB, err := initControlPlaneDB(cfg.ControlPlaneDSN)
-	if err != nil {
-		return deps, err
-	}
-	deps.dbRouter = controlplane.NewDBRouter(cpDB, openControlPlaneTenantDB, true, controlplane.RouterConfig{
-		MaxOpenConns:    5,
-		MaxIdleConns:    2,
-		ConnMaxLifetime: 30 * time.Minute,
-		MaxAgents:       100,
-	})
-
-	slog.Info("control plane enabled")
-	return deps, nil
-}
-
 // httpMuxConfig holds all dependencies required to build the HTTP multiplexer.
 // This struct reduces parameter count in buildHTTPMux and related functions.
 type httpMuxConfig struct {
@@ -521,7 +386,6 @@ type httpMuxConfig struct {
 	GQLServer    *graphql.Server
 	GitHandler   *githttp.Handler
 	OAuthHandler *oauth.Handler
-	DBRouter     *controlplane.DBRouter
 	Version      string
 	EmbeddedAuth srvmiddleware.EmbeddedAuthConfig
 }
@@ -529,7 +393,6 @@ type httpMuxConfig struct {
 func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 	handlers := &rest.Deps{
 		Svc:            cfg.ServiceDeps,
-		Router:         cfg.DBRouter,
 		ConsoleBaseURL: cfg.Cfg.ConsoleBaseURL,
 		Presence:       &rest.PresenceHandlers{Svc: cfg.ServiceDeps, Hub: cfg.ServiceDeps.PresenceHub},
 	}
@@ -543,7 +406,7 @@ func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 	metricsHandler := metrics.Init()
 	r.Use(srvmiddleware.MetricsInstrumentation())
 
-	hostMux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.DBRouter, cfg.Cfg.ConsoleBaseURL, cfg.EmbeddedAuth)
+	hostMux := router.RegisterRoutes(r, handlers, cfg.GitHandler, cfg.GQLServer, cfg.OAuthHandler, cfg.Cfg.ConsoleBaseURL, cfg.EmbeddedAuth)
 	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		transform.Wrap(cfg.Cfg.BaseURL, func() {
 			hostMux.ServeHTTP(w, req)
@@ -553,9 +416,8 @@ func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 
 	// Register readiness probe.
 	r.Get("/readyz", readyzHandler(readyzConfig{
-		MainDB:   cfg.Database,
-		DBRouter: cfg.DBRouter,
-		Version:  cfg.Version,
+		MainDB:  cfg.Database,
+		Version: cfg.Version,
 	}))
 
 	return muxDeps{handlers: handlers, router: r, mux: mux}, nil
@@ -657,16 +519,7 @@ func bootstrapWithConfig(cfg config.Config, opts options) bootstrapResult {
 	deps.GitHandler = svc.gitHandler
 	deps.OauthHandler = svc.oauthHandler
 
-	// 4. Optional control plane for multi-agent DB routing.
-	cp, err := initControlPlane(core.cfg)
-	if err != nil {
-		result.Err = err
-		result.Partial = &bootstrapDeps{Cfg: core.cfg, DB: core.db, Embedder: core.embedder, Store: core.store, SrvCtx: srvCtx, SrvCancel: srvCancel, SvcDeps: svc.svc, GqlSrv: svc.gqlSrv, GitHandler: svc.gitHandler, OauthHandler: svc.oauthHandler}
-		return result
-	}
-	deps.DBRouter = cp.dbRouter
-
-	// 5. Build router and host-aware mux.
+	// 4. Build router and host-aware mux.
 	mux, err := buildHTTPMux(httpMuxConfig{
 		Cfg:          core.cfg,
 		Database:     core.db,
@@ -674,7 +527,6 @@ func bootstrapWithConfig(cfg config.Config, opts options) bootstrapResult {
 		GQLServer:    svc.gqlSrv,
 		GitHandler:   svc.gitHandler,
 		OAuthHandler: svc.oauthHandler,
-		DBRouter:     cp.dbRouter,
 		Version:      gitSHA,
 		EmbeddedAuth: embeddedAuthConfig(opts),
 	})
@@ -691,7 +543,6 @@ func bootstrapWithConfig(cfg config.Config, opts options) bootstrapResult {
 			GqlSrv:       svc.gqlSrv,
 			GitHandler:   svc.gitHandler,
 			OauthHandler: svc.oauthHandler,
-			DBRouter:     cp.dbRouter,
 		}
 		return result
 	}
@@ -713,7 +564,6 @@ func bootstrapWithConfig(cfg config.Config, opts options) bootstrapResult {
 			GqlSrv:       svc.gqlSrv,
 			GitHandler:   svc.gitHandler,
 			OauthHandler: svc.oauthHandler,
-			DBRouter:     cp.dbRouter,
 		}
 		return result
 	}
@@ -890,18 +740,13 @@ func (s *Server) RESTHandler() http.Handler {
 
 // GraphQLHandler returns a mountable handler for the GraphQL surface.
 func (s *Server) GraphQLHandler() http.Handler {
-	return srvmiddleware.TokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, s.deps.DBRouter, embeddedAuthConfig(s.deps.Options))(http.HandlerFunc(s.deps.GqlSrv.Handler))
+	return srvmiddleware.TokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, embeddedAuthConfig(s.deps.Options))(http.HandlerFunc(s.deps.GqlSrv.Handler))
 }
 
 // GitHTTPHandler returns the mountable Git Smart HTTP handler.
 func (s *Server) GitHTTPHandler() http.Handler {
 	r := chi.NewRouter()
-	var authMw func(http.Handler) http.Handler
-	if s.deps.DBRouter != nil {
-		authMw = srvmiddleware.TokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, s.deps.DBRouter, embeddedAuthConfig(s.deps.Options))
-	} else {
-		authMw = srvmiddleware.OptionalTokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, s.deps.DBRouter, embeddedAuthConfig(s.deps.Options))
-	}
+	authMw := srvmiddleware.OptionalTokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, embeddedAuthConfig(s.deps.Options))
 	r.With(authMw).Get("/{owner}/{repo}.git/info/refs", s.deps.GitHandler.InfoRefs)
 	r.With(authMw).Post("/{owner}/{repo}.git/git-upload-pack", s.deps.GitHandler.UploadPack)
 	r.With(authMw).Post("/{owner}/{repo}.git/git-receive-pack", s.deps.GitHandler.ReceivePack)
@@ -986,15 +831,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// readyzHandler returns an http.HandlerFunc that pings the main DB (and the
-// control-plane DB when running in multi-agent mode). Returns 200 when all
-// backing stores are reachable, 503 otherwise.
+// readyzHandler returns an http.HandlerFunc that pings the main DB. Returns
+// 200 when backing stores are reachable, 503 otherwise.
 // readyzConfig holds dependencies for the readiness probe handler.
 // This struct reduces parameter count and improves clarity.
 type readyzConfig struct {
-	MainDB   *gorm.DB
-	DBRouter *controlplane.DBRouter
-	Version  string
+	MainDB  *gorm.DB
+	Version string
 }
 
 func readyzHandler(cfg readyzConfig) http.HandlerFunc {
@@ -1018,16 +861,6 @@ func readyzHandler(cfg readyzConfig) http.HandlerFunc {
 			healthy = false
 		} else {
 			checks["main_db"] = checkResult{Status: "ok"}
-		}
-
-		// Check control-plane DB (multi-agent mode only).
-		if cfg.DBRouter != nil {
-			if err := cfg.DBRouter.PingCP(ctx); err != nil {
-				checks["control_plane_db"] = checkResult{Status: "unavailable", Error: err.Error()}
-				healthy = false
-			} else {
-				checks["control_plane_db"] = checkResult{Status: "ok"}
-			}
 		}
 
 		status := "ready"

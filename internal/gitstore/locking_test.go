@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 func TestStoreRepoLock_SerializesSameRepo(t *testing.T) {
@@ -65,38 +63,5 @@ func TestStoreRepoLock_IsolatesDifferentRepos(t *testing.T) {
 	case <-acquired:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("expected different repo lock not to block")
-	}
-}
-
-func TestStoreRepoLock_IsolatesTenants(t *testing.T) {
-	store, err := New(t.TempDir(), WithTenantIsolation(), WithDefaultTenant("default"))
-	if err != nil {
-		t.Fatalf("New store failed: %v", err)
-	}
-
-	ctxA := tenant.ContextWithTenant(context.Background(), "tenant-a")
-	ctxB := tenant.ContextWithTenant(context.Background(), "tenant-b")
-
-	muA := store.repoLock(ctxA, "owner/repo")
-	muB := store.repoLock(ctxB, "owner/repo")
-
-	if muA == muB {
-		t.Fatal("expected distinct locks for different tenants")
-	}
-
-	muA.Lock()
-	defer muA.Unlock()
-
-	acquired := make(chan struct{})
-	go func() {
-		muB.Lock()
-		close(acquired)
-		muB.Unlock()
-	}()
-
-	select {
-	case <-acquired:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("expected tenant-scoped lock not to block")
 	}
 }

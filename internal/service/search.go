@@ -185,8 +185,8 @@ func (s *Service) embedQuery(ctx context.Context, text string) string {
 		return ""
 	}
 	targetDB := s.DB
-	if tenantDB, ok := DBFromContext(ctx); ok {
-		targetDB = tenantDB
+	if scopedDB, ok := DBFromContext(ctx); ok {
+		targetDB = scopedDB
 	}
 	s.ensureVectorInit(targetDB, len(vec))
 	return embedding.FormatVector(vec)

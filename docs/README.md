@@ -23,10 +23,6 @@ Component and cross-cutting references live in [architecture/](architecture/):
 - [Git Store](architecture/gitstore.md)
 - [Git Smart HTTP](architecture/git-http.md)
 - [OAuth](architecture/oauth.md)
-- [Control Plane](architecture/controlplane.md)
-- [Tenant Context](architecture/tenant.md)
-- [Tenant DB Correctness](architecture/tenant-db-correctness.md)
-- [Tenant Git Storage](architecture/tenant-git-storage.md)
 - [Collaboration Framework](architecture/collaboration-framework.md)
 - [Error Semantics](architecture/error-semantics.md)
 - [Secrets Encryption](architecture/secrets-encryption.md)
@@ -39,7 +35,6 @@ accepted direction, or incremental work that has not fully landed yet.
 
 - [Agent Auth and Account Model](design/agent-auth.md)
 - [Authorization Layer](design/authz-layer.md)
-- [Multi-Agent Architecture](design/multi-agent.md)
 - [Wiki Storage Re-Architecture](design/wiki-storage-rearchitecture.md)
 
 ## Testing And Operations

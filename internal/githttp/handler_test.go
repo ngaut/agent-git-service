@@ -104,7 +104,7 @@ func setupTestServer(t *testing.T, owner, repo, defaultBranch string, seed bool)
 	oauthHandler := oauth.New(svc)
 
 	r := chi.NewRouter()
-	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
@@ -1355,7 +1355,7 @@ func TestReceivePack_PropagatesDBAndUserContext(t *testing.T) {
 	skipIfNoBackend(t)
 
 	baseDB := newTestDB(t)
-	tenantDB := newTestDB(t)
+	scopedDB := newTestDB(t)
 
 	tmpDir := t.TempDir()
 	gitStore, err := gitstore.New(tmpDir)
@@ -1363,7 +1363,7 @@ func TestReceivePack_PropagatesDBAndUserContext(t *testing.T) {
 		t.Fatalf("gitstore.New: %v", err)
 	}
 
-	anonUser, repo := seedUserRepo(t, tenantDB, "anon", "repo", "anon/repo", "main")
+	anonUser, repo := seedUserRepo(t, scopedDB, "anon", "repo", "anon/repo", "main")
 
 	if err := gitStore.Init(context.Background(), repo.FullName, repo.DefaultBranch, false); err != nil {
 		t.Fatalf("gitStore.Init: %v", err)
@@ -1376,7 +1376,7 @@ func TestReceivePack_PropagatesDBAndUserContext(t *testing.T) {
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
-			ctx = service.ContextWithDB(ctx, tenantDB)
+			ctx = service.ContextWithDB(ctx, scopedDB)
 			ctx = service.ContextWithUser(ctx, anonUser)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -1408,12 +1408,12 @@ func TestReceivePack_PropagatesDBAndUserContext(t *testing.T) {
 
 	waitFor(t, 5*time.Second, 100*time.Millisecond, func() bool {
 		var wf db.Workflow
-		err := tenantDB.Where("repository_id = ? AND path = ?", repo.ID, ".github/workflows/ci.yml").First(&wf).Error
+		err := scopedDB.Where("repository_id = ? AND path = ?", repo.ID, ".github/workflows/ci.yml").First(&wf).Error
 		return err == nil
-	}, "workflow row was not created in tenant DB")
+	}, "workflow row was not created in scoped DB")
 
 	var wf db.Workflow
-	if err := tenantDB.Where("repository_id = ? AND path = ?", repo.ID, ".github/workflows/ci.yml").First(&wf).Error; err != nil {
+	if err := scopedDB.Where("repository_id = ? AND path = ?", repo.ID, ".github/workflows/ci.yml").First(&wf).Error; err != nil {
 		t.Fatalf("query workflow: %v", err)
 	}
 	if wf.Name != "CI" {

@@ -109,7 +109,7 @@ func NewService(tb testing.TB, cfg ServiceConfig) (*service.Service, func()) {
 	wikiBlob := wikicatalog.NewBlobStore(tmpDir)
 	wikiCat := wikicatalog.New(gdb, wikiBlob)
 	// Mirror the production wiring so tests exercise the catalog's
-	// context-aware DB resolution. Tenant-injected DBs (via
+	// context-aware DB resolution. Context-injected DBs (via
 	// ContextWithDB) reach the catalog, not just the static gdb.
 
 	svc := &service.Service{

@@ -24,7 +24,7 @@ The development binary is currently named `gh-server`.
 
 ## Why
 
-Use `agent-git-service` when you want a GitHub-compatible control plane that can
+Use `agent-git-service` when you want a GitHub-compatible service that can
 run where your agents run:
 
 - Keep repositories and product metadata under your control.
@@ -44,7 +44,7 @@ run where your agents run:
 | First-class durable agent accounts | Yes | No | GitHub supports bots, Apps, PATs, and machine users, but agent-git-service gives agents their own durable accounts, tokens, and default workspaces. |
 | Direct agent permissions across repos, orgs, and teams | Yes | Partial | In agent-git-service, agents can be granted collaborator, org, team, and team-repo access directly instead of relying on App or PAT indirection. |
 | Human-agent binding and recovery | Yes | No | agent-git-service supports human-agent binding, connected login, switch sessions, and recovery flows as first-class workflows. |
-| Self-hosted agent control plane | Yes | No | agent-git-service can run where your agents and data live, with local control over identity, storage, tenants, and rate-limit policy. |
+| Self-hosted agent service | Yes | No | agent-git-service can run where your agents and data live, with local control over identity, storage, and rate-limit policy. |
 | Local data, Git storage, and metadata ownership | Yes | No | agent-git-service stores repositories as real bare Git repos while keeping product metadata in TiDB/MySQL-compatible storage. |
 | Full hosted GitHub product ecosystem | Partial | Yes | GitHub.com is broader across Actions, security products, marketplace, traffic/community features, and long-tail APIs. |
 | Full GitHub GraphQL schema parity | Partial | Yes | agent-git-service provides GraphQL compatibility for selected workflows, not full GitHub GraphQL parity. |
@@ -58,7 +58,7 @@ run where your agents run:
 | Issue workspace | Typing signals, presence, attachments, read state, unread counts, pinned comments, and reactions |
 | Wiki memory | Git-backed pages, history, search, labels, backlinks, page moves, reconcile, repair, and compact operations |
 | Semantic search | Optional embedding-backed issue and pull request search |
-| Self-hosted operations | Local data and Git storage, tenant-aware control-plane support, local rate-limit policy, Prometheus metrics, readiness checks, structured logs, and a Grafana dashboard |
+| Self-hosted operations | Local data and Git storage, local rate-limit policy, Prometheus metrics, readiness checks, structured logs, and a Grafana dashboard |
 
 Known GitHub-compatibility gaps are tracked in
 [`docs/github-api-compatibility-matrix.md`](docs/github-api-compatibility-matrix.md).

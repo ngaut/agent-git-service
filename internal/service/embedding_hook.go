@@ -60,11 +60,11 @@ func (s *Service) embedAndStore(ctx context.Context, table string, id uint, text
 		s.embedSem <- struct{}{}
 		defer func() { <-s.embedSem }()
 
-		// Propagate the tenant DB (if any) so background writes target the correct database.
+		// Propagate any scoped DB so background writes target the correct handle.
 		bgCtx := s.ServerCtx()
 		bgCtx = applog.CloneContext(bgCtx, ctx)
-		if tenantDB, ok := DBFromContext(ctx); ok {
-			bgCtx = ContextWithDB(bgCtx, tenantDB)
+		if scopedDB, ok := DBFromContext(ctx); ok {
+			bgCtx = ContextWithDB(bgCtx, scopedDB)
 		}
 		applog.AddAttrs(bgCtx,
 			slog.String("embedding_table", table),
@@ -91,11 +91,10 @@ func (s *Service) embedAndStore(ctx context.Context, table string, id uint, text
 			return
 		}
 
-		// Ensure vector column exists on the target DB (tenant DB or base DB)
-		// This fixes the bug where vector init used base DB but writes went to tenant DB
+		// Ensure vector column exists on the target DB.
 		targetDB := s.DB
-		if tenantDB, ok := DBFromContext(bgCtx); ok {
-			targetDB = tenantDB
+		if scopedDB, ok := DBFromContext(bgCtx); ok {
+			targetDB = scopedDB
 		}
 		s.ensureVectorInit(targetDB, len(vec))
 
@@ -180,8 +179,7 @@ func isTransientError(err error) bool {
 }
 
 // ensureVectorInit ensures the embedding column exists on the target DB.
-// Uses per-DB tracking to avoid redundant init calls while supporting
-// multi-tenant scenarios where each tenant DB needs its own vector columns.
+// Uses per-DB tracking to avoid redundant init calls.
 func (s *Service) ensureVectorInit(targetDB *gorm.DB, dims int) {
 	if targetDB == nil {
 		return

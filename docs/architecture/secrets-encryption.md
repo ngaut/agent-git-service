@@ -20,11 +20,11 @@ pub, priv, err := box.GenerateKey(rand.Reader)
 - Simple setup for local development
 - Each server instance has a unique keypair
 - Secrets encrypted against one instance cannot be decrypted by another
-- **Not suitable for multi-tenant or load-balanced deployments**
+- **Not suitable for load-balanced deployments unless all instances share the same key**
 
-### Multi-Tenant Mode
+### Multi-Instance Mode
 
-For stateless multi-tenant deployments, all server instances must share the same encryption keypair. Set the `SECRET_ENCRYPTION_KEY` environment variable:
+For load-balanced or otherwise multi-instance deployments, all server instances must share the same encryption keypair. Set the `SECRET_ENCRYPTION_KEY` environment variable:
 
 ```bash
 export SECRET_ENCRYPTION_KEY="<base64-encoded-32-byte-private-key>"
@@ -35,9 +35,9 @@ export SECRET_ENCRYPTION_KEY="<base64-encoded-32-byte-private-key>"
 - Secrets are portable across instances
 - Required for load-balanced or horizontally scaled deployments
 
-## Generating a Key for Multi-Tenant Mode
+## Generating a Key for Multi-Instance Mode
 
-To generate a new key for multi-tenant deployments:
+To generate a new key for deployments with multiple server instances:
 
 ```bash
 # Using Go (requires golang.org/x/crypto/nacl/box)
@@ -76,12 +76,12 @@ openssl rand -base64 32
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SECRET_ENCRYPTION_KEY` | No (multi-tenant: **yes**) | (generated) | Base64-encoded 32-byte private key |
+| `SECRET_ENCRYPTION_KEY` | No (multi-instance: **yes**) | (generated) | Base64-encoded 32-byte private key |
 
 ### Example Configuration
 
 ```env
-# Multi-tenant deployment
+# Shared-instance deployment
 DB_DSN="root:@tcp(tidb-cluster:4000)/gh-server?parseTime=true"
 SECRET_ENCRYPTION_KEY="<base64-encoded-32-byte-key>"
 ```
@@ -95,7 +95,7 @@ If `SECRET_ENCRYPTION_KEY` is set but invalid, the server panics at startup with
 - **Invalid base64:** `crypto: failed to initialize keypair: SECRET_ENCRYPTION_KEY is not valid base64: ...`
 - **Wrong length:** `crypto: failed to initialize keypair: SECRET_ENCRYPTION_KEY must be 32 bytes, got N`
 
-### Key Mismatch in Multi-Tenant Mode
+### Key Mismatch Across Instances
 
 If different instances have different keys:
 - Secrets encrypted against instance A cannot be decrypted by instance B
@@ -124,7 +124,7 @@ The key management is implemented in `internal/crypto/nacl.go`:
 
 ## Testing
 
-To test multi-tenant key configuration locally:
+To test shared key configuration locally:
 
 ```bash
 # Generate a key

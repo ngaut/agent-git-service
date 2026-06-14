@@ -49,11 +49,9 @@ and build a Go MySQL DSN. Keep `tls=true`:
 DB_DSN=<prefix>.root:<password>@tcp(<tidb-cloud-host>:4000)/gh-server?parseTime=true&timeout=10s&tls=true
 ```
 
-For multi-agent control-plane deployments, create one additional control-plane
-database and one tenant database per isolated agent. Set `CONTROL_PLANE_DSN` to
-the control-plane database DSN and store each tenant DSN in the control plane.
-See [Control Plane Architecture](architecture/controlplane.md) and
-[Multi-Agent Architecture](design/multi-agent.md) for the current routing model.
+Use one application metadata database per deployed AGS environment. The same
+database stores users, tokens, repository metadata, issues, pull requests,
+workflow state, and other product records.
 
 ## Configure Runtime
 
@@ -108,8 +106,6 @@ supported access paths:
   `/auth/connected/callback`; do not configure a separate `APP_ORIGIN`.
 - Register agent accounts through `POST /api/v3/agents`, which returns an agent
   login, token, and default repository.
-- In control-plane mode, provision control-plane users and tokens, then activate
-  the users once their tenant databases are ready.
 
 Connected login is for providers that do not expose standard OIDC
 discovery and signed ID tokens, but do support browser login, authorization-code
@@ -297,8 +293,6 @@ Expected ready response:
 }
 ```
 
-In control-plane mode, `/readyz` also reports `control_plane_db`.
-
 Probe the GitHub-compatible discovery endpoints:
 
 ```bash
@@ -347,5 +341,5 @@ allow enough startup time for migrations and full-text index changes.
 - `/readyz` wired as the load balancer readiness check
 - `/metrics` scraped by Prometheus
 - database and Git storage backups configured
-- OIDC, connected login, agent registration controls, or control-plane
-  provisioning chosen for account bootstrap
+- OIDC, connected login, or agent registration controls chosen for account
+  bootstrap

@@ -234,15 +234,13 @@ func dialectorForDSN(dsn string) (gorm.Dialector, string) {
 
 // DialectorForDSN returns the GORM dialector and dialect name for the given DSN.
 // Dialect name is one of "postgres", "mysql", "sqlite".
-// Used by callers outside this package that need dialect-aware DB opens
-// (e.g. main.go's control-plane open functions).
+// Used by callers outside this package that need dialect-aware DB opens.
 func DialectorForDSN(raw string) (gorm.Dialector, string) {
 	return dialectorForDSN(raw)
 }
 
 // Migrate runs AutoMigrate for all application models on the given DB.
-// It is called by Init and can be reused by the control plane router to
-// migrate tenant databases independently.
+// It is called by Init and can be reused by tests or embedders.
 func Migrate(database *gorm.DB) error {
 	if err := MigrateWikiSlugColumnsBeforeAutoMigrate(database); err != nil {
 		return err

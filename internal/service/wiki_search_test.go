@@ -972,7 +972,7 @@ func TestWikiSearchVectorUnavailableFallsBackToLexicalAndReindex_Issue1362(t *te
 	}
 	full := "testuser/wiki-semantic"
 
-	if _, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on tenant policy.", "create sessions", ""); err != nil {
+	if _, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on workspace policy.", "create sessions", ""); err != nil {
 		t.Fatalf("PutWikiPage(first): %v", err)
 	}
 	if _, err := svc.PutWikiPage(ctx, full, "ops/cache", "# Cache\n\nCache invalidation guide.", "create cache", ""); err != nil {
@@ -1207,7 +1207,7 @@ func TestWikiSearchSemanticUsesDatabaseVectorDistance(t *testing.T) {
 	}
 	full := "testuser/wiki-db-vector"
 
-	if _, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on tenant policy.", "create sessions", ""); err != nil {
+	if _, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on workspace policy.", "create sessions", ""); err != nil {
 		t.Fatalf("PutWikiPage(session): %v", err)
 	}
 	if _, err := svc.PutWikiPage(ctx, full, "ops/cache", "# Cache\n\nCache invalidation guide.", "create cache", ""); err != nil {
@@ -1799,7 +1799,7 @@ func TestWikiSearchUpdateClearsStaleEmbeddingOnEmbedFailure(t *testing.T) {
 	}
 	full := "testuser/wiki-stale-embedding"
 
-	page, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on tenant policy.", "create sessions", "")
+	page, err := svc.PutWikiPage(ctx, full, "ops/session-expiry", "# Sessions\n\nSession expiry depends on workspace policy.", "create sessions", "")
 	if err != nil {
 		t.Fatalf("PutWikiPage(create): %v", err)
 	}

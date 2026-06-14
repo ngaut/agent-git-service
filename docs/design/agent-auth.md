@@ -16,7 +16,7 @@ which aligns with GitHub semantics while making agents first-class users.
 ## Non-goals
 
 - Full GitHub org governance parity (owners, billing, audit, etc.).
-- Solving all cross-tenant control plane concerns (out of scope here).
+- Replacing organization governance, billing, or audit-log systems.
 
 ## Principles
 
@@ -89,7 +89,7 @@ Endpoints:
 Confirm contract:
 
 - the canonical agent token issued by `POST /api/v3/agents` is the supported credential for `/api/v3/agent-bindings/confirm`
-- in control-plane mode, that token must resolve to a tenant-scoped user with `user_kind=agent`
+- that token must resolve to a local user with `user_kind=agent`
 - human-authenticated callers must be rejected with `403 Resource not accessible by integration`
 - invalid or expired invite tokens return `422`
 - already-consumed invite tokens return `409`
