@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
@@ -91,6 +92,178 @@ func TestCompat_SearchIssues_ResponseShape(t *testing.T) {
 	}
 	item, _ := items[0].(map[string]any)
 	assertFieldPresent(t, item, "score", "number")
+	if _, ok := item["debug"]; ok {
+		t.Fatal("default search response should not include debug")
+	}
+	if _, ok := item["text_matches"]; ok {
+		t.Fatal("default search response should not include text_matches")
+	}
+}
+
+func TestCompat_SearchIssues_DebugRankingAndTextMatches(t *testing.T) {
+	h := testharness.New(t)
+	compatSeedRepo(t, h, "compat-search-observability")
+
+	w := h.DoRESTJSON(t, "POST", "/api/v3/repos/testuser/compat-search-observability/issues", map[string]any{
+		"title": "observability alpha report",
+		"body":  "ranking beta signal lives in the body",
+	})
+	assertStatusCode(t, w, 201)
+
+	q := url.QueryEscape("repo:testuser/compat-search-observability observability beta")
+	w = h.DoREST(t, "GET", "/api/v3/search/issues?q="+q+"&debug=true&text_matches=true", nil)
+	assertStatusCode(t, w, 200)
+	body := testharness.DecodeJSON(t, w)
+
+	items, _ := body["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 search result, got %d: %v", len(items), items)
+	}
+	item, _ := items[0].(map[string]any)
+	debug, ok := item["debug"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected debug payload, got %T", item["debug"])
+	}
+	if score, ok := debug["score"].(float64); !ok || score <= 0 {
+		t.Fatalf("expected positive debug score, got %v", debug["score"])
+	}
+	if rank, ok := debug["lexical_rank"].(float64); !ok || rank <= 0 {
+		t.Fatalf("expected positive lexical_rank, got %v", debug["lexical_rank"])
+	}
+	if got := debug["search_path"]; got != "lexical_only" {
+		t.Fatalf("expected lexical_only search path, got %v", got)
+	}
+	matchedFields, _ := debug["matched_fields"].([]any)
+	if !containsStringValue(matchedFields, "title") || !containsStringValue(matchedFields, "body") {
+		t.Fatalf("expected title and body matched_fields, got %v", matchedFields)
+	}
+
+	textMatches, ok := item["text_matches"].([]any)
+	if !ok || len(textMatches) == 0 {
+		t.Fatalf("expected text_matches, got %T %v", item["text_matches"], item["text_matches"])
+	}
+	properties := make([]any, 0, len(textMatches))
+	for _, raw := range textMatches {
+		match, _ := raw.(map[string]any)
+		properties = append(properties, match["property"])
+	}
+	if !containsStringValue(properties, "title") || !containsStringValue(properties, "body") {
+		t.Fatalf("expected title and body text_matches, got %v", textMatches)
+	}
+}
+
+func TestCompat_SearchIssues_CommentObservabilityAndRepeatedTextMatches(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+	repoName := "compat-search-issue-comments"
+	fullName := "testuser/" + repoName
+	compatSeedRepo(t, h, repoName)
+
+	w := h.DoRESTJSON(t, "POST", "/api/v3/repos/"+fullName+"/issues", map[string]any{
+		"title": "comment-backed issue",
+	})
+	assertStatusCode(t, w, 201)
+
+	if _, err := h.Svc.CreateIssueComment(ctx, fullName, 1, "needle first, needle second", h.User.Login, nil); err != nil {
+		t.Fatalf("CreateIssueComment: %v", err)
+	}
+
+	q := url.QueryEscape("repo:" + fullName + " in:comments needle")
+	w = h.DoREST(t, "GET", "/api/v3/search/issues?q="+q+"&debug=true&text_matches=true", nil)
+	assertStatusCode(t, w, 200)
+	body := testharness.DecodeJSON(t, w)
+
+	items, _ := body["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 search result, got %d: %v", len(items), items)
+	}
+	item, _ := items[0].(map[string]any)
+	debug, _ := item["debug"].(map[string]any)
+	matchedFields, _ := debug["matched_fields"].([]any)
+	if !containsStringValue(matchedFields, "comments") {
+		t.Fatalf("expected comments matched_fields, got %v", matchedFields)
+	}
+
+	textMatch := findTextMatchByProperty(t, item["text_matches"], "comments")
+	matches, _ := textMatch["matches"].([]any)
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 repeated comment spans, got %v", textMatch)
+	}
+}
+
+func TestCompat_SearchPRs_CommentObservabilityWithExplicitSort(t *testing.T) {
+	h := testharness.New(t)
+	ctx := context.Background()
+	repoName := "compat-search-pr-comments"
+	fullName := "testuser/" + repoName
+	compatSeedRepo(t, h, repoName)
+
+	if err := h.Svc.Git.CreateBranch(ctx, fullName, "feature-comments", "main"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	pr, err := h.Svc.CreatePR(ctx, service.CreatePRInput{
+		RepoFullName: fullName,
+		Title:        "comment-backed pull request",
+		HeadRef:      "feature-comments",
+		BaseRef:      "main",
+		AuthorLogin:  h.User.Login,
+	})
+	if err != nil {
+		t.Fatalf("CreatePR: %v", err)
+	}
+	if _, err := h.Svc.AddCommentByPRID(ctx, pr.ID, "approval first, approval second", h.User.Login); err != nil {
+		t.Fatalf("AddCommentByPRID: %v", err)
+	}
+
+	q := url.QueryEscape("repo:" + fullName + " is:pr in:comments approval sort:created-desc")
+	w := h.DoREST(t, "GET", "/api/v3/search/issues?q="+q+"&debug=true&text_matches=true", nil)
+	assertStatusCode(t, w, 200)
+	body := testharness.DecodeJSON(t, w)
+
+	items, _ := body["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 search result, got %d: %v", len(items), items)
+	}
+	item, _ := items[0].(map[string]any)
+	debug, _ := item["debug"].(map[string]any)
+	if got := debug["search_path"]; got != "lexical_only" {
+		t.Fatalf("expected lexical_only search path for comment-only PR search, got %v", got)
+	}
+	matchedFields, _ := debug["matched_fields"].([]any)
+	if !containsStringValue(matchedFields, "comments") {
+		t.Fatalf("expected comments matched_fields, got %v", matchedFields)
+	}
+
+	textMatch := findTextMatchByProperty(t, item["text_matches"], "comments")
+	matches, _ := textMatch["matches"].([]any)
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 repeated comment spans, got %v", textMatch)
+	}
+}
+
+func containsStringValue(values []any, want string) bool {
+	for _, value := range values {
+		if got, ok := value.(string); ok && got == want {
+			return true
+		}
+	}
+	return false
+}
+
+func findTextMatchByProperty(t *testing.T, raw any, property string) map[string]any {
+	t.Helper()
+	textMatches, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("expected text_matches array, got %T %v", raw, raw)
+	}
+	for _, rawMatch := range textMatches {
+		match, _ := rawMatch.(map[string]any)
+		if match["property"] == property {
+			return match
+		}
+	}
+	t.Fatalf("expected text_match for property %q, got %v", property, textMatches)
+	return nil
 }
 
 // ─── Search Labels Response Shape ───────────────────────────────────────────
