@@ -145,14 +145,6 @@ func (d *Deps) resolveBranchProtectionPath(ctx context.Context, full, branchPath
 	return branch, resource, true
 }
 
-// GetBranchProtection handles GET /api/v3/repos/{owner}/{repo}/branches/{branch}/protection
-// Deprecated: Use GetBranch which now handles both branch info and protection requests.
-func (d *Deps) GetBranchProtection(w http.ResponseWriter, r *http.Request) {
-	// This handler is kept for backward compatibility but should not be used.
-	// All GET requests go through GetBranch which detects /protection suffix.
-	d.GetBranch(w, r)
-}
-
 // UpdateBranchProtection handles PUT /api/v3/repos/{owner}/{repo}/branches/{branch}/protection
 func (d *Deps) UpdateBranchProtection(w http.ResponseWriter, r *http.Request) {
 	repo := d.mustGetRepo(w, r)

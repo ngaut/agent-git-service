@@ -287,64 +287,6 @@ func (s *Service) deleteIssueReferencesForIssueNumber(ctx context.Context, repoI
 	).Delete(&db.IssueReference{}).Error
 }
 
-// BackfillIssueReferences rebuilds cross-reference edges from all existing
-// issue, pull request, and issue comment bodies.
-func (s *Service) BackfillIssueReferences(ctx context.Context) error {
-	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := ContextWithDB(ctx, tx)
-		if err := tx.Where("1 = 1").Delete(&db.IssueReference{}).Error; err != nil {
-			return err
-		}
-
-		var issues []db.Issue
-		if err := preloadIssue(tx).Find(&issues).Error; err != nil {
-			return err
-		}
-		for _, issue := range issues {
-			if err := s.syncIssueBodyReferences(txCtx, issue); err != nil {
-				return err
-			}
-		}
-
-		var prs []db.PullRequest
-		if err := preloadPRFull(tx).Find(&prs).Error; err != nil {
-			return err
-		}
-		for _, pr := range prs {
-			if err := s.syncPullRequestBodyReferences(txCtx, pr); err != nil {
-				return err
-			}
-		}
-
-		var comments []db.IssueComment
-		if err := preloadIssueComment(tx).Find(&comments).Error; err != nil {
-			return err
-		}
-		for _, comment := range comments {
-			if err := s.syncIssueCommentReferences(txCtx, comment); err != nil {
-				return err
-			}
-		}
-
-		var pages []db.WikiPage
-		if err := tx.Preload("Repository").
-			Where("deleted_at IS NULL").
-			Find(&pages).Error; err != nil {
-			return err
-		}
-		for _, page := range pages {
-			body, err := s.wikiPageBody(txCtx, page)
-			if err != nil {
-				return err
-			}
-			if err := s.syncWikiPageReferences(txCtx, page.Repository, page.Slug, string(body), issueReferenceEventTime(page.CreatedAt, page.UpdatedAt)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 func (s *Service) viewerCanReadReferencedSource(ctx context.Context, repoID uint) bool {
 	viewer, ok := UserFromContext(ctx)
 	if !ok || viewer.ID == 0 {

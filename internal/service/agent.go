@@ -746,7 +746,3 @@ func boundHumanIDForAgentQuery(q *gorm.DB, agentID uint) (uint, bool, error) {
 	}
 	return binding.HumanUserID, true, nil
 }
-
-func (s *Service) boundHumanIDForAgent(ctx context.Context, agentID uint) (uint, bool, error) {
-	return boundHumanIDForAgentQuery(s.DBForCtx(ctx), agentID)
-}

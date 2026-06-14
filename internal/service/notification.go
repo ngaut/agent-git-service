@@ -25,11 +25,6 @@ const (
 	NotificationSubjectWorkflowRun = "workflow_run"
 )
 
-// CreateNotification creates or refreshes a notification thread.
-func (s *Service) CreateNotification(ctx context.Context, userID, actorID uint, typ, subjectType string, subjectID, repoID uint) (db.Notification, error) {
-	return s.createNotification(ctx, userID, actorID, typ, subjectType, subjectID, repoID, "")
-}
-
 // ListNotifications returns notifications for a user ordered by most recent update.
 func (s *Service) ListNotifications(ctx context.Context, userID uint, unreadOnly bool, limit int) ([]db.Notification, error) {
 	if userID == 0 {
