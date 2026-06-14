@@ -39,14 +39,6 @@ else
   DEFAULT_DB_DSN="root:@tcp(127.0.0.1:4000)/${TIDB_DB_NAME}?parseTime=true&timeout=10s"
   DROP_TIDB_DB_ON_CLEANUP="true"
 fi
-CONTROL_PLANE_DB_NAME=""
-TENANT_A_DB_NAME=""
-TENANT_B_DB_NAME=""
-TENANT_C_DB_NAME=""
-CONTROL_PLANE_DSN=""
-TENANT_A_DSN=""
-TENANT_B_DSN=""
-TENANT_C_DSN=""
 SQLITE_DB="/tmp/gh-server-vector-e2e-$RANDOM_STRING.db"
 SQLITE_DSN="sqlite:$SQLITE_DB"
 GIT_REPO_DIR="$(mktemp -d /tmp/gh-server-e2e-repos.XXXXXX)"
@@ -96,23 +88,6 @@ mysql_exec() {
   mysql "${MYSQL_ARGS[@]}" -e "$stmt"
 }
 
-mysql_exec_db() {
-  local db="$1"
-  local stmt="$2"
-  mysql "${MYSQL_ARGS[@]}" "$db" -e "$stmt"
-}
-
-dsn_for_db() {
-  local db_name="$1"
-  local base="${DEFAULT_DB_DSN%%\?*}"
-  local params=""
-  if [[ "$DEFAULT_DB_DSN" == *"?"* ]]; then
-    params="${DEFAULT_DB_DSN#*\?}"
-  fi
-  local prefix="${base%/*}"
-  echo "${prefix}/${db_name}${params:+?${params}}"
-}
-
 init_mysql_args "$DEFAULT_DB_DSN"
 
 cleanup() {
@@ -147,18 +122,6 @@ cleanup() {
   fi
   if [ "$DROP_TIDB_DB_ON_CLEANUP" = "true" ] && [ -n "$TIDB_DB_NAME" ]; then
     mysql_exec "DROP DATABASE IF EXISTS \`$TIDB_DB_NAME\`" 2>/dev/null || true
-  fi
-  if [ "$DROP_TIDB_DB_ON_CLEANUP" = "true" ] && [ -n "$CONTROL_PLANE_DB_NAME" ]; then
-    mysql_exec "DROP DATABASE IF EXISTS \`$CONTROL_PLANE_DB_NAME\`" 2>/dev/null || true
-  fi
-  if [ "$DROP_TIDB_DB_ON_CLEANUP" = "true" ] && [ -n "$TENANT_A_DB_NAME" ]; then
-    mysql_exec "DROP DATABASE IF EXISTS \`$TENANT_A_DB_NAME\`" 2>/dev/null || true
-  fi
-  if [ "$DROP_TIDB_DB_ON_CLEANUP" = "true" ] && [ -n "$TENANT_B_DB_NAME" ]; then
-    mysql_exec "DROP DATABASE IF EXISTS \`$TENANT_B_DB_NAME\`" 2>/dev/null || true
-  fi
-  if [ "$DROP_TIDB_DB_ON_CLEANUP" = "true" ] && [ -n "$TENANT_C_DB_NAME" ]; then
-    mysql_exec "DROP DATABASE IF EXISTS \`$TENANT_C_DB_NAME\`" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -209,50 +172,13 @@ create_pr() {
     -d "{\"title\":\"$title\",\"body\":\"$body\",\"head\":\"$head\",\"base\":\"$base\"}"
 }
 
-init_control_plane_schema() {
-  note "Creating control plane schema..."
-  mysql_exec_db "$CONTROL_PLANE_DB_NAME" "CREATE TABLE IF NOT EXISTS cpusers (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    login VARCHAR(255) NOT NULL UNIQUE,
-    email VARCHAR(255),
-    dsn VARCHAR(2048),
-    state VARCHAR(32) NOT NULL DEFAULT 'pending',
-    failure_reason VARCHAR(1024),
-    created_at DATETIME(3),
-    updated_at DATETIME(3)
-  )"
-  mysql_exec_db "$CONTROL_PLANE_DB_NAME" "CREATE TABLE IF NOT EXISTS cp_tokens (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    value VARCHAR(255) NOT NULL UNIQUE,
-    cpuser_id BIGINT UNSIGNED NOT NULL,
-    created_at DATETIME(3),
-    INDEX idx_cpuser_id (cpuser_id),
-    CONSTRAINT fk_cp_tokens_cpuser FOREIGN KEY (cpuser_id) REFERENCES cpusers(id)
-  )"
-  ok "Control plane schema created"
-}
-
-seed_control_plane_user() {
-  local login="$1"
-  local token="$2"
-  local dsn="$3"
-  mysql_exec_db "$CONTROL_PLANE_DB_NAME" "INSERT INTO cpusers (login, email, dsn, state, created_at, updated_at) VALUES ('${login}', '${login}@e2e.local', '${dsn}', 'active', NOW(3), NOW(3))"
-  mysql_exec_db "$CONTROL_PLANE_DB_NAME" "INSERT INTO cp_tokens (cpuser_id, value, created_at) SELECT id, '${token}', NOW(3) FROM cpusers WHERE login='${login}'"
-}
-
 start_gh_server() {
   local dsn="$1"
-  local control_plane_dsn="${2:-}"
-  if [ -n "$control_plane_dsn" ]; then
-    note "Starting gh-server (DB_DSN=$dsn, CONTROL_PLANE_DSN=$control_plane_dsn)"
-  else
-    note "Starting gh-server (DB_DSN=$dsn)"
-  fi
+  note "Starting gh-server (DB_DSN=$dsn)"
   ENVIRONMENT=development \
   LISTEN_MODE=production \
   PORT="$SERVER_PORT" \
   BASE_URL="$BASE_URL" \
-  CONTROL_PLANE_DSN="$control_plane_dsn" \
   ADMIN_LOGIN="$ADMIN_LOGIN" \
   ADMIN_TOKEN="$ADMIN_TOKEN" \
   EMBEDDING_BASE_URL="http://localhost${EMBEDDING_PORT#/}" \
@@ -314,16 +240,6 @@ assert_issue_present() {
   local title="$2"
   if ! jq -e --arg title "$title" '.items[]? | select(.title == $title)' >/dev/null <<<"$resp"; then
     echo "expected issue not found: $title" >&2
-    echo "Results: $resp" >&2
-    exit 1
-  fi
-}
-
-assert_issue_absent() {
-  local resp="$1"
-  local title="$2"
-  if jq -e --arg title "$title" '.items[]? | select(.title == $title)' >/dev/null <<<"$resp"; then
-    echo "unexpected issue found: $title" >&2
     echo "Results: $resp" >&2
     exit 1
   fi
@@ -455,142 +371,7 @@ code="$(http_code --max-time 5 "$BASE_URL/api/v3/")"
 assert_eq "$code" "200"
 ok "rate limit handled without crash/hang"
 
-# Step 10: Multi-tenant vector isolation and discoverability (control-plane mode)
-note "Restarting gh-server with control plane for multi-tenant vector isolation..."
-stop_gh_server
-
-CONTROL_PLANE_DB_NAME="vector_cp_${RANDOM_STRING}"
-TENANT_A_DB_NAME="vector_tenant_a_${RANDOM_STRING}"
-TENANT_B_DB_NAME="vector_tenant_b_${RANDOM_STRING}"
-TENANT_C_DB_NAME="vector_tenant_c_${RANDOM_STRING}"
-CONTROL_PLANE_DSN="$(dsn_for_db "$CONTROL_PLANE_DB_NAME")"
-TENANT_A_DSN="$(dsn_for_db "$TENANT_A_DB_NAME")"
-TENANT_B_DSN="$(dsn_for_db "$TENANT_B_DB_NAME")"
-TENANT_C_DSN="$(dsn_for_db "$TENANT_C_DB_NAME")"
-
-note "Creating control plane and tenant databases..."
-mysql_exec "CREATE DATABASE IF NOT EXISTS \`$CONTROL_PLANE_DB_NAME\`"
-mysql_exec "CREATE DATABASE IF NOT EXISTS \`$TENANT_A_DB_NAME\`"
-mysql_exec "CREATE DATABASE IF NOT EXISTS \`$TENANT_B_DB_NAME\`"
-mysql_exec "CREATE DATABASE IF NOT EXISTS \`$TENANT_C_DB_NAME\`"
-
-start_gh_server "$DEFAULT_DB_DSN" "$CONTROL_PLANE_DSN"
-
-TENANT_A_LOGIN="tenant-a-$RANDOM_STRING"
-TENANT_B_LOGIN="tenant-b-$RANDOM_STRING"
-TENANT_C_LOGIN="tenant-c-$RANDOM_STRING"
-TENANT_A_TOKEN="tenant-a-token-$RANDOM_STRING"
-TENANT_B_TOKEN="tenant-b-token-$RANDOM_STRING"
-TENANT_C_TOKEN="tenant-c-token-$RANDOM_STRING"
-
-note "Initializing control plane schema..."
-init_control_plane_schema
-note "Seeding control plane tenants..."
-seed_control_plane_user "$TENANT_A_LOGIN" "$TENANT_A_TOKEN" "$TENANT_A_DSN"
-seed_control_plane_user "$TENANT_B_LOGIN" "$TENANT_B_TOKEN" "$TENANT_B_DSN"
-seed_control_plane_user "$TENANT_C_LOGIN" "$TENANT_C_TOKEN" "$TENANT_C_DSN"
-
-curl_json 200 -H "Authorization: token $TENANT_A_TOKEN" "$BASE_URL/api/v3/user" > /dev/null
-curl_json 200 -H "Authorization: token $TENANT_B_TOKEN" "$BASE_URL/api/v3/user" > /dev/null
-curl_json 200 -H "Authorization: token $TENANT_C_TOKEN" "$BASE_URL/api/v3/user" > /dev/null
-
-TENANT_A_REPO_NAME="vector-tenant-a-$RANDOM_STRING"
-TENANT_B_REPO_NAME="vector-tenant-b-$RANDOM_STRING"
-
-note "Creating tenant A repository $TENANT_A_LOGIN/$TENANT_A_REPO_NAME..."
-create_repo "$TENANT_A_REPO_NAME" "$TENANT_A_TOKEN" > /dev/null
-TENANT_A_REPO_FULL="$TENANT_A_LOGIN/$TENANT_A_REPO_NAME"
-add_repo_cleanup "$TENANT_A_REPO_FULL" "$TENANT_A_TOKEN"
-
-note "Creating tenant B repository $TENANT_B_LOGIN/$TENANT_B_REPO_NAME..."
-create_repo "$TENANT_B_REPO_NAME" "$TENANT_B_TOKEN" > /dev/null
-TENANT_B_REPO_FULL="$TENANT_B_LOGIN/$TENANT_B_REPO_NAME"
-add_repo_cleanup "$TENANT_B_REPO_FULL" "$TENANT_B_TOKEN"
-
-note "Creating tenant C repository..."
-TENANT_C_REPO_RESP="$(create_repo "tenant-c-repo-$RANDOM_STRING" "$TENANT_C_TOKEN")"
-TENANT_C_REPO_FULL="$(json_get full_name <<<"$TENANT_C_REPO_RESP")"
-add_repo_cleanup "$TENANT_C_REPO_FULL" "$TENANT_C_TOKEN"
-
-VECTOR_QUERY="vector-isolation-probe-$RANDOM_STRING"
-VECTOR_BODY="authentication regression in multi-tenant login $VECTOR_QUERY"
-TENANT_C_BODY="tenant C workspace content $RANDOM_STRING $VECTOR_QUERY"
-
-VEC_ISSUE_A_TITLE="Tenant A vector issue $RANDOM_STRING"
-VEC_ISSUE_B_TITLE="Tenant B vector issue $RANDOM_STRING"
-VEC_ISSUE_TENANT_C_TITLE="Tenant C vector issue $RANDOM_STRING"
-VEC_PR_A_TITLE="Tenant A vector PR $RANDOM_STRING"
-VEC_PR_B_TITLE="Tenant B vector PR $RANDOM_STRING"
-VEC_PR_TENANT_C_TITLE="Tenant C vector PR $RANDOM_STRING"
-
-note "Creating tenant issues and PRs for vector isolation..."
-create_issue "$TENANT_A_REPO_FULL" "$VEC_ISSUE_A_TITLE" "$VECTOR_BODY" "$TENANT_A_TOKEN" > /dev/null
-create_issue "$TENANT_B_REPO_FULL" "$VEC_ISSUE_B_TITLE" "$VECTOR_BODY" "$TENANT_B_TOKEN" > /dev/null
-create_issue "$TENANT_C_REPO_FULL" "$VEC_ISSUE_TENANT_C_TITLE" "$TENANT_C_BODY" "$TENANT_C_TOKEN" > /dev/null
-
-create_pr "$TENANT_A_REPO_FULL" "$VEC_PR_A_TITLE" "$VECTOR_BODY" "feature-a" "main" "$TENANT_A_TOKEN" > /dev/null
-create_pr "$TENANT_B_REPO_FULL" "$VEC_PR_B_TITLE" "$VECTOR_BODY" "feature-b" "main" "$TENANT_B_TOKEN" > /dev/null
-create_pr "$TENANT_C_REPO_FULL" "$VEC_PR_TENANT_C_TITLE" "$TENANT_C_BODY" "feature-tenant-c" "main" "$TENANT_C_TOKEN" > /dev/null
-
-TIMEOUT_ISSUE_A_TITLE="Tenant A timeout issue $RANDOM_STRING"
-TIMEOUT_ISSUE_B_TITLE="Tenant B timeout issue $RANDOM_STRING"
-OUTAGE_PR_A_TITLE="Tenant A outage PR $RANDOM_STRING"
-OUTAGE_PR_B_TITLE="Tenant B outage PR $RANDOM_STRING"
-
-note "Creating tenant issues and PRs for fallback isolation..."
-create_issue "$TENANT_A_REPO_FULL" "$TIMEOUT_ISSUE_A_TITLE" "trigger __e2e_timeout__" "$TENANT_A_TOKEN" > /dev/null
-create_issue "$TENANT_B_REPO_FULL" "$TIMEOUT_ISSUE_B_TITLE" "trigger __e2e_timeout__" "$TENANT_B_TOKEN" > /dev/null
-create_pr "$TENANT_A_REPO_FULL" "$OUTAGE_PR_A_TITLE" "trigger __e2e_outage__" "feature-timeout-a" "main" "$TENANT_A_TOKEN" > /dev/null
-create_pr "$TENANT_B_REPO_FULL" "$OUTAGE_PR_B_TITLE" "trigger __e2e_outage__" "feature-timeout-b" "main" "$TENANT_B_TOKEN" > /dev/null
-
-note "Waiting for async embedding (multi-tenant)..."
-sleep 10
-
-note "Tenant A vector issue search (no repo qualifier)..."
-MT_ISSUE_VEC_RESP="$(search_issues "$VECTOR_QUERY" 15 "$TENANT_A_TOKEN")"
-assert_search_contract "$MT_ISSUE_VEC_RESP"
-assert_issue_present "$MT_ISSUE_VEC_RESP" "$VEC_ISSUE_A_TITLE"
-assert_issue_absent "$MT_ISSUE_VEC_RESP" "$VEC_ISSUE_B_TITLE"
-assert_issue_absent "$MT_ISSUE_VEC_RESP" "$VEC_ISSUE_TENANT_C_TITLE"
-ok "tenant A issue search isolated in vector phase"
-
-note "Tenant A vector PR search (no repo qualifier)..."
-MT_PR_VEC_RESP="$(search_issues "$VECTOR_QUERY is:pr" 15 "$TENANT_A_TOKEN")"
-assert_search_contract "$MT_PR_VEC_RESP"
-assert_issue_present "$MT_PR_VEC_RESP" "$VEC_PR_A_TITLE"
-assert_issue_absent "$MT_PR_VEC_RESP" "$VEC_PR_B_TITLE"
-assert_issue_absent "$MT_PR_VEC_RESP" "$VEC_PR_TENANT_C_TITLE"
-ok "tenant A PR search isolated in vector phase"
-
-note "Tenant C vector issue search (discoverability)..."
-TENANT_C_ISSUE_VEC_RESP="$(search_issues "$VECTOR_QUERY" 15 "$TENANT_C_TOKEN")"
-assert_search_contract "$TENANT_C_ISSUE_VEC_RESP"
-assert_issue_present "$TENANT_C_ISSUE_VEC_RESP" "$VEC_ISSUE_TENANT_C_TITLE"
-assert_issue_absent "$TENANT_C_ISSUE_VEC_RESP" "$VEC_ISSUE_A_TITLE"
-ok "tenant C issue search limited to owned repos"
-
-note "Tenant C vector PR search (discoverability)..."
-TENANT_C_PR_VEC_RESP="$(search_issues "$VECTOR_QUERY is:pr" 15 "$TENANT_C_TOKEN")"
-assert_search_contract "$TENANT_C_PR_VEC_RESP"
-assert_issue_present "$TENANT_C_PR_VEC_RESP" "$VEC_PR_TENANT_C_TITLE"
-assert_issue_absent "$TENANT_C_PR_VEC_RESP" "$VEC_PR_A_TITLE"
-ok "tenant C PR search limited to owned repos"
-
-note "Case: embedder timeout (multi-tenant issue search)"
-MT_TIMEOUT_RESP="$(search_issues "__e2e_timeout__" 25 "$TENANT_A_TOKEN")"
-assert_search_contract "$MT_TIMEOUT_RESP"
-assert_issue_present "$MT_TIMEOUT_RESP" "$TIMEOUT_ISSUE_A_TITLE"
-assert_issue_absent "$MT_TIMEOUT_RESP" "$TIMEOUT_ISSUE_B_TITLE"
-ok "tenant A issue search isolated during timeout fallback"
-
-note "Case: embedder outage (multi-tenant PR search)"
-MT_OUTAGE_RESP="$(search_issues "__e2e_outage__ is:pr" 15 "$TENANT_A_TOKEN")"
-assert_search_contract "$MT_OUTAGE_RESP"
-assert_issue_present "$MT_OUTAGE_RESP" "$OUTAGE_PR_A_TITLE"
-assert_issue_absent "$MT_OUTAGE_RESP" "$OUTAGE_PR_B_TITLE"
-ok "tenant A PR search isolated during outage fallback"
-
-# Step 11: Vector DB query failure handling (SQLite has no VEC_COSINE_DISTANCE)
+# Step 10: Vector DB query failure handling (SQLite has no VEC_COSINE_DISTANCE)
 note "Restarting gh-server with SQLite to force vector query failure..."
 stop_gh_server
 start_gh_server "$SQLITE_DSN"

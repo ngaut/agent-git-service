@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate a new SECRET_ENCRYPTION_KEY for multi-tenant deployments.
+# Generate a new SECRET_ENCRYPTION_KEY for deployments with multiple server instances.
 # Usage: ./scripts/generate-secrets-key.sh
 #
 # This script generates a cryptographically secure 32-byte random key
@@ -18,7 +18,7 @@ fi
 # Generate 32 random bytes and encode as base64
 KEY=$(openssl rand -base64 32)
 
-echo "# Generated SECRET_ENCRYPTION_KEY for multi-tenant deployment"
+echo "# Generated SECRET_ENCRYPTION_KEY for shared-instance deployment"
 echo "# Store this securely and configure all instances with the same value"
 echo "SECRET_ENCRYPTION_KEY=\"$KEY\""
 echo

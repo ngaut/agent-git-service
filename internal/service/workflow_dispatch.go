@@ -84,11 +84,11 @@ func (s *Service) DispatchWorkflow(ctx context.Context, repoFullName string, wor
 	// Execute workflow in background — jobs, logs, and artifacts are created here.
 	// Uses the server context so the workflow outlives the HTTP request
 	// but still drains on server shutdown.
-	// Propagate the tenant DB (if any) so background writes target the correct database.
+	// Propagate any scoped DB so background writes target the correct handle.
 	bgCtx := s.ServerCtx()
 	bgCtx = applog.CloneContext(bgCtx, ctx)
-	if tenantDB, ok := DBFromContext(ctx); ok {
-		bgCtx = ContextWithDB(bgCtx, tenantDB)
+	if scopedDB, ok := DBFromContext(ctx); ok {
+		bgCtx = ContextWithDB(bgCtx, scopedDB)
 	}
 	applog.AddAttrs(bgCtx,
 		slog.String("repo", repo.FullName),

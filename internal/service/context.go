@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/ngaut/agent-git-service/internal/db"
-	"github.com/ngaut/agent-git-service/internal/tenant"
 
 	"gorm.io/gorm"
 )
@@ -208,27 +207,14 @@ func IsAnonRequest(ctx context.Context) bool {
 // dbContextKey is an unexported type for the per-request DB context key.
 type dbContextKey struct{}
 
-// ContextWithDB returns a copy of ctx carrying the per-request tenant DB.
+// ContextWithDB returns a copy of ctx carrying a scoped DB override.
 func ContextWithDB(ctx context.Context, db *gorm.DB) context.Context {
 	return context.WithValue(ctx, dbContextKey{}, db)
 }
 
-// DBFromContext extracts the per-request tenant DB set by middleware.
+// DBFromContext extracts the scoped DB override set by callers or tests.
 // Returns the DB and true if present, or nil and false otherwise.
 func DBFromContext(ctx context.Context) (*gorm.DB, bool) {
 	db, ok := ctx.Value(dbContextKey{}).(*gorm.DB)
 	return db, ok
-}
-
-// ContextWithTenant returns a copy of ctx carrying the tenant identifier.
-// It delegates to the tenant package so a single context key is used across
-// middleware (writer), service, and gitstore (reader via tenant.FromContext).
-func ContextWithTenant(ctx context.Context, t string) context.Context {
-	return tenant.ContextWithTenant(ctx, t)
-}
-
-// TenantFromContext extracts the tenant identifier set by middleware.
-// Returns the tenant and true if present, or empty string and false otherwise.
-func TenantFromContext(ctx context.Context) (string, bool) {
-	return tenant.FromContext(ctx)
 }

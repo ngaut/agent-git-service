@@ -22,7 +22,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/connectedlogin"
-	"github.com/ngaut/agent-git-service/internal/controlplane"
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/githttp"
 	"github.com/ngaut/agent-git-service/internal/gitstore"
@@ -106,7 +105,7 @@ func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps,
 func setupRouterTest(t *testing.T) (*service.Service, http.Handler) {
 	t.Helper()
 	svc, gqlSrv, restDeps, gitHandler, oauthHandler := setupTestDeps(t)
-	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 	return svc, mux
 }
 
@@ -519,7 +518,7 @@ func TestCORS_ExposesRequestIDHeader(t *testing.T) {
 func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 	_, gqlSrv, restDeps, gitHandler, oauthHandler := setupTestDeps(t)
 	rawRouter := chi.NewRouter()
-	mux := router.RegisterRoutes(rawRouter, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(rawRouter, restDeps, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v3/openapi.json", nil)
 	w := httptest.NewRecorder()
@@ -941,7 +940,7 @@ func TestHostRewrite_GraphQL(t *testing.T) {
 			next.ServeHTTP(w, req)
 		})
 	})
-	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 
 	// POST /graphql on api.github.localhost must be rewritten to /api/graphql.
 	body, _ := json.Marshal(map[string]any{"query": `{ viewer { login } }`})
@@ -1124,45 +1123,6 @@ func TestConsoleRedirects(t *testing.T) {
 	}
 }
 
-func TestGitHTTP_ControlPlaneRequiresAuth(t *testing.T) {
-	_, gqlSrv, restDeps, gitHandler, oauthHandler := setupTestDeps(t)
-	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, gqlSrv, oauthHandler, &controlplane.DBRouter{}, "http://console.localhost")
-
-	req := httptest.NewRequest("GET", "/testowner/testrepo.git/info/refs?service=git-upload-pack", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 in control-plane mode without token, got %d: %s", w.Code, w.Body.String())
-	}
-	var body map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body["message"] != "Requires authentication" {
-		t.Errorf("message: got %v, want Requires authentication", body["message"])
-	}
-}
-
-func TestRegisterRoutes_NilDBRouterLeavesDepsRouterNil(t *testing.T) {
-	_, gqlSrv, restDeps, gitHandler, oauthHandler := setupTestDeps(t)
-
-	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
-
-	if restDeps.Router != nil {
-		t.Fatal("expected deps router to remain nil in single-db mode")
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v3/user", nil)
-	req.Header.Set("Authorization", "token test-token")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 in single-db mode, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
 func TestGitHTTP_SingleModeAllowsUnauthenticatedRequests(t *testing.T) {
 	_, mux := setupRouterTest(t)
 
@@ -1201,7 +1161,7 @@ func TestGitReceivePack_BypassesDefaultBodyLimit(t *testing.T) {
 	}
 	t.Setenv("GIT_EXEC_PATH", backendDir)
 
-	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 

@@ -174,7 +174,7 @@ For the full dependency-boundary rules see [module-contracts.md § service](../m
 **Adding a new domain operation:**
 
 1. Add the method to `Service` in the appropriate domain file.
-2. Use the active request-scoped DB accessor for all GORM queries to respect request cancellation and tenant routing. In today's code that is `s.DBForCtx(ctx)`.
+2. Use the active request-scoped DB accessor for all GORM queries to respect request cancellation and context-scoped DB overrides. In today's code that is `s.DBForCtx(ctx)`.
 3. Return sentinel errors for failures that surfaces need to distinguish (e.g., `ErrNotFound` for missing entities).
 4. If the operation touches Git state, coordinate through `s.Git` and handle the case where `s.Git` is nil.
 5. If the operation creates sequentially-numbered entities, follow the retry + `lockRepoForNumbering` pattern from `issue.go`.

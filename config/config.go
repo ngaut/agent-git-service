@@ -42,11 +42,6 @@ type Config struct {
 	// never silently seeds credentials.
 	Environment string
 
-	// ControlPlaneDSN, when set, enables multi-agent mode.
-	// Requests are routed to per-agent TiDB instances via the control plane.
-	// When empty, the system runs in single-DB mode (current behavior).
-	ControlPlaneDSN string
-
 	// Embedding provider configuration (all optional).
 	// When EmbeddingAPIKey is empty, vector search is disabled and
 	// search falls back to lexical-only matching.
@@ -124,7 +119,6 @@ func New() (Config, error) {
 		AdminLogin:                              os.Getenv("ADMIN_LOGIN"),
 		AdminToken:                              os.Getenv("ADMIN_TOKEN"),
 		Environment:                             os.Getenv("ENVIRONMENT"),
-		ControlPlaneDSN:                         os.Getenv("CONTROL_PLANE_DSN"),
 		EmbeddingAPIKey:                         os.Getenv("EMBEDDING_API_KEY"),
 		EmbeddingBaseURL:                        os.Getenv("EMBEDDING_BASE_URL"),
 		EmbeddingModel:                          os.Getenv("EMBEDDING_MODEL"),

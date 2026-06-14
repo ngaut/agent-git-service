@@ -51,7 +51,6 @@ Jobs:
    - compiles the backend tree with `go test ./... -run '^$'`
    - compiles the vendored `cli/` tree and `cli/_go-gh-local`
    - runs the stable package pack defined in `scripts/regression_gate.list`
-   - runs the tenant DB audit through the regression manifest
 3. `unit-tests`
    - runs `make test-unit`
    - executes the backend Go unit-test inventory with `go test -v ./...`

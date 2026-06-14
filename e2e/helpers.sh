@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# helpers.sh - Shared utility functions for multi-tenant control-plane integration tests
+# helpers.sh - Shared utility functions for integration tests
 
 # Record test result and update counters
 # Usage: record_result <name> <status> [details]

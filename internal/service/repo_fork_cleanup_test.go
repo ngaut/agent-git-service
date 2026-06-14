@@ -37,7 +37,7 @@ func setupCleanupForkRepoService(t *testing.T) (*Service, func()) {
 		t.Fatalf("auto-migrate: %v", err)
 	}
 
-	store, err := gitstore.New(tmpDir, gitstore.WithTenantIsolation())
+	store, err := gitstore.New(tmpDir)
 	if err != nil {
 		t.Fatalf("gitstore new: %v", err)
 	}
@@ -61,7 +61,7 @@ func setupCleanupForkRepoService(t *testing.T) (*Service, func()) {
 	return svc, cleanup
 }
 
-func TestCleanupForkRepo_JoinsDeleteAndGitErrors(t *testing.T) {
+func TestCleanupForkRepo_ReturnsDeleteError(t *testing.T) {
 	svc, cleanup := setupCleanupForkRepoService(t)
 	defer cleanup()
 
@@ -99,8 +99,5 @@ func TestCleanupForkRepo_JoinsDeleteAndGitErrors(t *testing.T) {
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "forced update failure") {
 		t.Fatalf("expected delete error to be included, got: %v", err)
-	}
-	if !strings.Contains(errMsg, "missing tenant") {
-		t.Fatalf("expected git delete error to be included, got: %v", err)
 	}
 }

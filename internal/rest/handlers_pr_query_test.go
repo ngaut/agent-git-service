@@ -110,7 +110,7 @@ func TestCreatePR_QueryCount(t *testing.T) {
 	gqlSrv := graphql.NewServer(svc)
 	gitHandler := githttp.New(store, svc)
 	oauthHandler := oauth.New(svc)
-	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 
 	ctx := context.Background()
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{

@@ -116,8 +116,8 @@ func (s *Service) kickWikiCompactionJob(ctx context.Context, repo db.Repository,
 	}
 
 	bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
-	if tenantDB, ok := DBFromContext(ctx); ok {
-		bgCtx = ContextWithDB(bgCtx, tenantDB)
+	if scopedDB, ok := DBFromContext(ctx); ok {
+		bgCtx = ContextWithDB(bgCtx, scopedDB)
 	}
 	if user, ok := UserFromContext(ctx); ok {
 		bgCtx = ContextWithUser(bgCtx, user)

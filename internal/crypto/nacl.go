@@ -3,14 +3,15 @@
 // this package generates the keypair and decrypts the sealed boxes.
 //
 // Configuration:
-//   - SECRET_ENCRYPTION_KEY: base64-encoded 32-byte private key for multi-tenant
-//     deployments. When set, all server instances use the same keypair.
+//   - SECRET_ENCRYPTION_KEY: base64-encoded 32-byte private key for
+//     load-balanced deployments. When set, all server instances use the same
+//     keypair.
 //   - When unset, a new keypair is generated at startup (single-node mode only).
 //
 // Failure behavior:
 //   - If SECRET_ENCRYPTION_KEY is set but invalid (wrong length, bad base64),
 //     the server panics at startup with a descriptive error.
-//   - In multi-tenant mode, all instances MUST share the same key; otherwise
+//   - In multi-instance mode, all instances MUST share the same key; otherwise
 //     secrets encrypted against one instance cannot be decrypted by another.
 package crypto
 
@@ -62,7 +63,7 @@ func initKey() error {
 		return nil
 	}
 
-	// Multi-tenant mode: load configured keypair
+	// Multi-instance mode: load configured keypair.
 	keyBytes, err := base64.StdEncoding.DecodeString(keyB64)
 	if err != nil {
 		return fmt.Errorf("SECRET_ENCRYPTION_KEY is not valid base64: %w", err)

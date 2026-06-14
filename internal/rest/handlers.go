@@ -28,7 +28,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ngaut/agent-git-service/internal/authn"
 	"github.com/ngaut/agent-git-service/internal/db"
 	applog "github.com/ngaut/agent-git-service/internal/logging"
 	"github.com/ngaut/agent-git-service/internal/ratelimit"
@@ -123,7 +122,6 @@ func repoFullName(r *http.Request) string {
 // Deps holds server-wide dependencies passed to handlers.
 type Deps struct {
 	Svc            *service.Service
-	Router         authn.TokenResolver
 	ConsoleBaseURL string
 	Presence       *PresenceHandlers
 }

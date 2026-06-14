@@ -44,7 +44,7 @@ func setupTestEnvironment(t *testing.T) (*service.Service, http.Handler, db.User
 	gitHandler := &githttp.Handler{Svc: svc}
 	oauthHandler := &oauth.Handler{Svc: svc}
 
-	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, graphqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), restDeps, gitHandler, graphqlSrv, oauthHandler, "http://console.localhost")
 
 	return svc, mux, u, cleanup
 }

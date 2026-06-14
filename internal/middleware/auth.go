@@ -4,10 +4,8 @@ package middleware
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"log/slog"
 	"net/http"
-	"reflect"
 	"strings"
 
 	agsauth "github.com/ngaut/agent-git-service/auth"
@@ -15,7 +13,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/ratelimit"
 	"github.com/ngaut/agent-git-service/internal/rest/respond"
 	"github.com/ngaut/agent-git-service/internal/service"
-	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 // EmbeddedIdentity is the shared trusted host-provided identity shape used
@@ -35,21 +32,17 @@ type EmbeddedAuthConfig struct {
 
 // TokenAuth returns middleware that validates GitHub-compatible auth headers.
 // Accepts "token <val>" or "Bearer <val>" with any non-empty value.
-//
-// When router is non-nil (control-plane mode), tokens are resolved through the
-// control plane and both ContextWithDB and ContextWithUser are injected.
-// When router is nil (single-DB mode), the current behavior is preserved.
-func TokenAuth(svc *service.Service, router TokenResolver) func(http.Handler) http.Handler {
-	return TokenAuthWithEmbeddedIdentity(svc, router, EmbeddedAuthConfig{})
+func TokenAuth(svc *service.Service) func(http.Handler) http.Handler {
+	return TokenAuthWithEmbeddedIdentity(svc, EmbeddedAuthConfig{})
 }
 
 // TokenAuthWithEmbeddedIdentity returns middleware that first attempts trusted
 // host-provided identity injection before falling back to token auth.
-func TokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenResolver, embedded EmbeddedAuthConfig) func(http.Handler) http.Handler {
+func TokenAuthWithEmbeddedIdentity(svc *service.Service, embedded EmbeddedAuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			applog.AddAttrs(r.Context(), slog.String("auth_scheme", authScheme(r.Header.Get("Authorization"))))
-			if ctx, handled := resolveEmbeddedIdentityAndInjectContext(w, r, router, svc, embedded, false); handled {
+			if ctx, handled := resolveEmbeddedIdentityAndInjectContext(w, r, svc, embedded, false); handled {
 				if ctx == nil {
 					return
 				}
@@ -63,7 +56,7 @@ func TokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenResolver, e
 				return
 			}
 
-			ctx, shouldReturn := resolveTokenAndInjectContext(w, r, token, router, svc)
+			ctx, shouldReturn := resolveTokenAndInjectContext(w, r, token, svc)
 			if shouldReturn {
 				return
 			}
@@ -78,21 +71,17 @@ func TokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenResolver, e
 
 // OptionalTokenAuth returns middleware that allows unauthenticated access
 // but rejects requests with invalid Authorization headers.
-//
-// When router is non-nil and an Authorization header is present, the token
-// is resolved through the control plane. When router is nil, current behavior
-// is preserved.
-func OptionalTokenAuth(svc *service.Service, router TokenResolver) func(http.Handler) http.Handler {
-	return OptionalTokenAuthWithEmbeddedIdentity(svc, router, EmbeddedAuthConfig{})
+func OptionalTokenAuth(svc *service.Service) func(http.Handler) http.Handler {
+	return OptionalTokenAuthWithEmbeddedIdentity(svc, EmbeddedAuthConfig{})
 }
 
 // OptionalTokenAuthWithEmbeddedIdentity returns middleware that first attempts
 // trusted host-provided identity injection before falling back to the
 // historical optional token path.
-func OptionalTokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenResolver, embedded EmbeddedAuthConfig) func(http.Handler) http.Handler {
+func OptionalTokenAuthWithEmbeddedIdentity(svc *service.Service, embedded EmbeddedAuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if ctx, handled := resolveEmbeddedIdentityAndInjectContext(w, r, router, svc, embedded, true); handled {
+			if ctx, handled := resolveEmbeddedIdentityAndInjectContext(w, r, svc, embedded, true); handled {
 				if ctx == nil {
 					return
 				}
@@ -116,7 +105,7 @@ func OptionalTokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenRes
 				return
 			}
 
-			ctx, shouldReturn := resolveTokenAndInjectContext(w, r, token, router, svc)
+			ctx, shouldReturn := resolveTokenAndInjectContext(w, r, token, svc)
 			if shouldReturn {
 				return
 			}
@@ -129,7 +118,7 @@ func OptionalTokenAuthWithEmbeddedIdentity(svc *service.Service, router TokenRes
 	}
 }
 
-func resolveEmbeddedIdentityAndInjectContext(w http.ResponseWriter, r *http.Request, router TokenResolver, svc *service.Service, embedded EmbeddedAuthConfig, _ bool) (context.Context, bool) {
+func resolveEmbeddedIdentityAndInjectContext(w http.ResponseWriter, r *http.Request, svc *service.Service, embedded EmbeddedAuthConfig, _ bool) (context.Context, bool) {
 	if embedded.Authenticator == nil {
 		return nil, false
 	}
@@ -141,11 +130,6 @@ func resolveEmbeddedIdentityAndInjectContext(w http.ResponseWriter, r *http.Requ
 	}
 	if !ok {
 		return nil, false
-	}
-	if hasTokenResolver(router) {
-		logAuthFailure(r.Context(), "embedded_identity_control_plane_unsupported", "", "embedded", nil)
-		respond.Error(w, http.StatusUnauthorized, "Bad credentials")
-		return nil, true
 	}
 	resolved := service.EmbeddedIdentity{
 		Provider:  identity.Provider,
@@ -264,29 +248,8 @@ func handleAuthError(w http.ResponseWriter, r *http.Request, token string, mode 
 
 // resolveTokenAndInjectContext resolves the token and injects user/DB context.
 // Returns (newContext, shouldReturn). If shouldReturn is true, the handler should return immediately.
-func resolveTokenAndInjectContext(w http.ResponseWriter, r *http.Request, token string, router TokenResolver, svc *service.Service) (context.Context, bool) {
-	if hasTokenResolver(router) {
-		// Control-plane mode: resolve token → tenant user + DB
-		user, tenantDB, err := router.ResolveToken(r.Context(), token)
-		if err != nil {
-			return nil, handleAuthError(w, r, token, "control_plane", classifyControlPlaneAuthError(err), err)
-		}
-		ctx := service.ContextWithDB(r.Context(), tenantDB)
-		ctx = service.ContextWithUser(ctx, user)
-		ctx = tenant.ContextWithTenant(ctx, user.Login)
-		ctx = service.ContextWithRepoCache(ctx)
-		if fingerprint := applog.TokenFingerprint(token); fingerprint != "" {
-			ctx = ratelimit.WithActor(ctx, "token:"+fingerprint)
-		}
-		applog.AddAttrs(ctx,
-			slog.String("auth_mode", "control_plane"),
-			slog.String("user_login", user.Login),
-			slog.String("tenant", user.Login),
-		)
-		return ctx, false
-	}
-
-	// Single-DB mode: validate and resolve user in a single pass to avoid
+func resolveTokenAndInjectContext(w http.ResponseWriter, r *http.Request, token string, svc *service.Service) (context.Context, bool) {
+	// Validate and resolve user in a single pass to avoid
 	// duplicate COUNT(*) and SELECT queries (see #1038).
 	u, failure, err := svc.ValidateAndResolveTokenDetailed(r.Context(), token)
 	if err != nil || failure != service.TokenValidationFailureNone {
@@ -303,20 +266,6 @@ func resolveTokenAndInjectContext(w http.ResponseWriter, r *http.Request, token 
 		slog.String("user_login", u.Login),
 	)
 	return singleCtx, false
-}
-
-func hasTokenResolver(router TokenResolver) bool {
-	if router == nil {
-		return false
-	}
-
-	v := reflect.ValueOf(router)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return !v.IsNil()
-	default:
-		return true
-	}
 }
 
 func authScheme(auth string) string {
@@ -349,15 +298,4 @@ func logAuthFailure(ctx context.Context, reason string, token string, mode strin
 		attrs = append(attrs, "error", err)
 	}
 	slog.WarnContext(ctx, "authentication failed", attrs...)
-}
-
-func classifyControlPlaneAuthError(err error) string {
-	switch {
-	case errors.Is(err, ErrUnknownToken):
-		return "unknown_token"
-	case errors.Is(err, ErrInactiveUser):
-		return "inactive_user"
-	default:
-		return "token_resolution_error"
-	}
 }

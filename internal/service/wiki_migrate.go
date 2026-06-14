@@ -243,8 +243,8 @@ func (s *Service) kickBackgroundWikiMigration(ctx context.Context, repo db.Repos
 	}
 
 	bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
-	if tenantDB, ok := DBFromContext(ctx); ok {
-		bgCtx = ContextWithDB(bgCtx, tenantDB)
+	if scopedDB, ok := DBFromContext(ctx); ok {
+		bgCtx = ContextWithDB(bgCtx, scopedDB)
 	}
 	if user, ok := UserFromContext(ctx); ok {
 		bgCtx = ContextWithUser(bgCtx, user)

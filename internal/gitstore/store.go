@@ -14,8 +14,6 @@ import (
 	git "github.com/go-git/go-git/v5"
 	gitcfg "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/storage/filesystem"
-
-	"github.com/ngaut/agent-git-service/internal/tenant"
 )
 
 const (
@@ -29,9 +27,7 @@ const (
 
 // Store provides access to bare git repositories on the local filesystem.
 type Store struct {
-	root          string
-	requireTenant bool
-	defaultTenant string
+	root string
 
 	repoLocks sync.Map // per-repo mutexes for write operations
 }
@@ -39,15 +35,6 @@ type Store struct {
 // repoLock returns a mutex for the given repo, creating one if needed.
 func (s *Store) repoLock(ctx context.Context, fullName string) *sync.Mutex {
 	lockKey := fullName
-	if s.requireTenant {
-		t, ok := tenant.FromContext(ctx)
-		if !ok {
-			t = s.defaultTenant
-		}
-		if t != "" {
-			lockKey = t + "/" + fullName
-		}
-	}
 	v, _ := s.repoLocks.LoadOrStore(lockKey, &sync.Mutex{})
 	return v.(*sync.Mutex)
 }
@@ -60,60 +47,12 @@ func (s *Store) WithRepoLock(ctx context.Context, fullName string, fn func() err
 	return fn()
 }
 
-// Option configures a Store.
-type Option func(*Store)
-
-// WithTenantIsolation makes the store resolve repositories under a per-tenant
-// subdirectory (GIT_REPO_DIR/{tenant}/...). When enabled, operations require a
-// tenant to be present in the context unless a default is configured via
-// WithDefaultTenant.
-func WithTenantIsolation() Option {
-	return func(s *Store) { s.requireTenant = true }
-}
-
-// WithDefaultTenant sets a fallback tenant identifier that is used when
-// WithTenantIsolation is enabled but the context does not carry a tenant.
-//
-// This is intended for single-tenant/local deployments (e.g. "default") so
-// unauthenticated or background contexts can still resolve a stable physical
-// repository root.
-func WithDefaultTenant(tenant string) Option {
-	return func(s *Store) { s.defaultTenant = tenant }
-}
-
 // New creates a Store rooted at dir, creating it if needed.
-func New(dir string, opts ...Option) (*Store, error) {
+func New(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("gitstore: mkdir %s: %w", dir, err)
 	}
-	s := &Store{root: dir}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(s)
-		}
-	}
-	if s.defaultTenant != "" {
-		if err := validateTenantSegment(s.defaultTenant); err != nil {
-			return nil, fmt.Errorf("gitstore: default tenant: %w", err)
-		}
-	}
-	return s, nil
-}
-
-func validateTenantSegment(t string) error {
-	if t == "" {
-		return errors.New("empty tenant")
-	}
-	if t == "." || t == ".." {
-		return fmt.Errorf("invalid tenant %q", t)
-	}
-	if strings.ContainsAny(t, `/\`) {
-		return fmt.Errorf("invalid tenant %q", t)
-	}
-	if strings.Contains(t, "\x00") {
-		return fmt.Errorf("invalid tenant %q", t)
-	}
-	return nil
+	return &Store{root: dir}, nil
 }
 
 // validateFullName validates the owner/repo fullName format to prevent path traversal.
@@ -150,40 +89,17 @@ func validateNameSegment(name string) error {
 	return nil
 }
 
-func (s *Store) rootForCtx(ctx context.Context) (string, error) {
-	if !s.requireTenant {
-		return s.root, nil
-	}
-	t, ok := tenant.FromContext(ctx)
-	if !ok {
-		t = s.defaultTenant
-	}
-	if t == "" {
-		return "", errors.New("gitstore: missing tenant in context")
-	}
-	if err := validateTenantSegment(t); err != nil {
-		return "", fmt.Errorf("gitstore: %w", err)
-	}
-	return filepath.Join(s.root, t), nil
-}
-
-// RepoRoot returns the filesystem root that contains bare repositories for the
-// active context. In single-DB mode this is the configured root. In multi-tenant
-// mode this is the per-tenant subdirectory (GIT_REPO_DIR/{tenant}).
+// RepoRoot returns the filesystem root that contains bare repositories.
 func (s *Store) RepoRoot(ctx context.Context) (string, error) {
-	return s.rootForCtx(ctx)
+	return s.root, nil
 }
 
 // repoPath returns the filesystem path for a repository's bare .git directory.
 func (s *Store) repoPath(ctx context.Context, fullName string) (string, error) {
-	root, err := s.rootForCtx(ctx)
-	if err != nil {
-		return "", err
-	}
 	if err := validateFullName(fullName); err != nil {
 		return "", err
 	}
-	return filepath.Join(root, fullName+".git"), nil
+	return filepath.Join(s.root, fullName+".git"), nil
 }
 
 // GetRepoPath returns the filesystem path for a repository's bare .git directory.
