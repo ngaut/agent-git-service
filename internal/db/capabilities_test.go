@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,7 @@ type fakeMySQLCapabilityConfig struct {
 	tidbVersion       string
 	versionErr        error
 	version           string
+	fullTextIndexErr  error
 	fullTextErr       error
 	fullTextScore     float64
 	vectorDistanceErr error
@@ -96,19 +98,35 @@ func (c *fakeMySQLCapabilityConn) QueryContext(_ context.Context, query string, 
 			value = float64(0)
 		}
 		return &singleValueRows{columns: []string{"COALESCE(VEC_COSINE_DISTANCE(?, ?), 0)"}, values: []driver.Value{value}}, nil
-	case "select fts_match_word(?, ?)":
-		if c.driver.cfg.fullTextErr != nil {
-			return nil, c.driver.cfg.fullTextErr
-		}
-		return &singleValueRows{columns: []string{"FTS_MATCH_WORD(?, ?)"}, values: []driver.Value{c.driver.cfg.fullTextScore}}, nil
 	default:
+		if strings.Contains(normalized, "fts_match_word('test', `body`)") &&
+			strings.Contains(normalized, "from `_ags_fts_probe_") {
+			if c.driver.cfg.fullTextErr != nil {
+				return nil, c.driver.cfg.fullTextErr
+			}
+			return &singleValueRows{columns: []string{"FTS_MATCH_WORD('test', `body`)"}, values: []driver.Value{c.driver.cfg.fullTextScore}}, nil
+		}
 		return nil, fmt.Errorf("unexpected query: %s", query)
 	}
 }
 
 func (c *fakeMySQLCapabilityConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	c.driver.record(query)
-	return nil, fmt.Errorf("unexpected exec: %s", query)
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	switch {
+	case strings.HasPrefix(normalized, "drop table if exists `_ags_fts_probe_"),
+		strings.HasPrefix(normalized, "create table `_ags_fts_probe_"),
+		strings.HasPrefix(normalized, "insert into `_ags_fts_probe_"):
+		return driver.RowsAffected(0), nil
+	case strings.HasPrefix(normalized, "alter table `_ags_fts_probe_") &&
+		strings.Contains(normalized, " add fulltext index "):
+		if c.driver.cfg.fullTextIndexErr != nil {
+			return nil, c.driver.cfg.fullTextIndexErr
+		}
+		return driver.RowsAffected(0), nil
+	default:
+		return nil, fmt.Errorf("unexpected exec: %s", query)
+	}
 }
 
 type singleValueRows struct {
@@ -211,21 +229,45 @@ func TestSupportsTiDBSearch_NonMySQLFalse(t *testing.T) {
 	}
 }
 
-func TestSupportsTiDBFullText_MySQLRequiresTiDBAndFunction(t *testing.T) {
+func TestDetectCapabilities_MySQL(t *testing.T) {
+	gdb, _ := openFakeMySQLCapabilityDB(t, fakeMySQLCapabilityConfig{
+		tidbVersion:    "Release Version: v8.5.0",
+		fullTextScore:  1,
+		vectorDistance: 0,
+	})
+
+	got := detectCapabilities(gdb)
+	if got.Dialect != "mysql" {
+		t.Fatalf("Dialect = %q, want mysql", got.Dialect)
+	}
+	if !got.TiDBSearch {
+		t.Fatal("expected TiDBSearch capability")
+	}
+	if !got.TiDBFullText {
+		t.Fatal("expected TiDBFullText capability")
+	}
+	if !got.VectorDistance {
+		t.Fatal("expected VectorDistance capability")
+	}
+}
+
+func TestSupportsTiDBFullText_MySQLRequiresTiDBAndIndexedColumnProbe(t *testing.T) {
 	tests := []struct {
 		name              string
 		cfg               fakeMySQLCapabilityConfig
 		want              bool
-		wantFullTextProbe bool
+		wantFullTextDDL   bool
+		wantFullTextQuery bool
 	}{
 		{
-			name: "tidb with fts_match_word",
+			name: "tidb with fulltext index and fts_match_word",
 			cfg: fakeMySQLCapabilityConfig{
 				tidbVersion:   "Release Version: v8.5.0",
 				fullTextScore: 1,
 			},
 			want:              true,
-			wantFullTextProbe: true,
+			wantFullTextDDL:   true,
+			wantFullTextQuery: true,
 		},
 		{
 			name: "tidb without fts_match_word",
@@ -234,7 +276,17 @@ func TestSupportsTiDBFullText_MySQLRequiresTiDBAndFunction(t *testing.T) {
 				fullTextErr: errors.New("function FTS_MATCH_WORD does not exist"),
 			},
 			want:              false,
-			wantFullTextProbe: true,
+			wantFullTextDDL:   true,
+			wantFullTextQuery: true,
+		},
+		{
+			name: "tidb without fulltext index support",
+			cfg: fakeMySQLCapabilityConfig{
+				tidbVersion:      "Release Version: v8.5.0",
+				fullTextIndexErr: errors.New("fulltext index unsupported"),
+			},
+			want:            false,
+			wantFullTextDDL: true,
 		},
 		{
 			name: "plain mysql skips fts probe",
@@ -253,17 +305,58 @@ func TestSupportsTiDBFullText_MySQLRequiresTiDBAndFunction(t *testing.T) {
 				t.Fatalf("SupportsTiDBFullText() = %v, want %v", got, tt.want)
 			}
 
-			sawFullTextProbe := false
+			sawFullTextDDL := false
+			sawFullTextQuery := false
 			for _, query := range fakeDriver.Queries() {
-				if strings.Contains(strings.ToUpper(query), "FTS_MATCH_WORD") {
-					sawFullTextProbe = true
+				upper := strings.ToUpper(query)
+				if strings.Contains(upper, "FTS_MATCH_WORD(?, ?)") {
+					t.Fatalf("full-text probe must use an indexed column, saw legacy query %q", query)
+				}
+				if strings.Contains(upper, "ADD FULLTEXT INDEX") {
+					sawFullTextDDL = true
+				}
+				if strings.Contains(upper, "FTS_MATCH_WORD") {
+					sawFullTextQuery = true
 				}
 			}
-			if sawFullTextProbe != tt.wantFullTextProbe {
-				t.Fatalf("full-text probe presence = %v, want %v; queries=%#v", sawFullTextProbe, tt.wantFullTextProbe, fakeDriver.Queries())
+			if sawFullTextDDL != tt.wantFullTextDDL {
+				t.Fatalf("full-text DDL probe presence = %v, want %v; queries=%#v", sawFullTextDDL, tt.wantFullTextDDL, fakeDriver.Queries())
+			}
+			if sawFullTextQuery != tt.wantFullTextQuery {
+				t.Fatalf("full-text query probe presence = %v, want %v; queries=%#v", sawFullTextQuery, tt.wantFullTextQuery, fakeDriver.Queries())
 			}
 		})
 	}
+}
+
+func TestSupportsTiDBFullText_TiDBProbe(t *testing.T) {
+	gdb := openFullTextProbeDB(t)
+	got := SupportsTiDBFullText(gdb)
+	if os.Getenv("TIDB_EXPECT_FULLTEXT") == "1" && !got {
+		t.Fatal("expected TiDB full-text support")
+	}
+	if !got {
+		t.Log("TiDB full-text support is unavailable in this environment")
+	}
+}
+
+func openFullTextProbeDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	dsn := strings.TrimSpace(os.Getenv("TIDB_FULLTEXT_TEST_DSN"))
+	if dsn == "" {
+		return openTiDB(t)
+	}
+
+	gdb, err := gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+	if err != nil {
+		t.Fatalf("open TiDB full-text test DSN: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	return gdb
 }
 
 func TestSupportsVectorDistance_MySQLRequiresTiDBAndFunction(t *testing.T) {

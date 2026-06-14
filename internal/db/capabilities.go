@@ -2,18 +2,52 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
 
+type capabilities struct {
+	Dialect        string
+	TiDBSearch     bool
+	TiDBFullText   bool
+	VectorDistance bool
+}
+
 var (
 	tidbSearchCapabilityCache     sync.Map
 	tidbFullTextCapabilityCache   sync.Map
 	vectorDistanceCapabilityCache sync.Map
+	tidbFullTextProbeSeq          atomic.Uint64
 )
+
+func detectCapabilities(database *gorm.DB) capabilities {
+	caps := capabilities{}
+	if database == nil || database.Dialector == nil {
+		return caps
+	}
+	caps.Dialect = database.Dialector.Name()
+	caps.TiDBSearch = SupportsTiDBSearch(database)
+	caps.TiDBFullText = SupportsTiDBFullText(database)
+	caps.VectorDistance = SupportsVectorDistance(database)
+	return caps
+}
+
+func logCapabilities(database *gorm.DB) {
+	caps := detectCapabilities(database)
+	slog.Info("db: capabilities detected",
+		"dialect", caps.Dialect,
+		"tidbSearch", caps.TiDBSearch,
+		"tidbFullText", caps.TiDBFullText,
+		"vectorDistance", caps.VectorDistance,
+	)
+}
 
 // SupportsTiDBSearch reports whether the database is TiDB rather than plain
 // MySQL. TiDB search paths use TiDB-only SQL such as FTS_MATCH_WORD, VECTOR,
@@ -32,7 +66,8 @@ func SupportsTiDBSearch(database *gorm.DB) bool {
 	return supported
 }
 
-// SupportsTiDBFullText reports whether TiDB's FTS_MATCH_WORD function is available.
+// SupportsTiDBFullText reports whether TiDB full-text indexes and
+// FTS_MATCH_WORD queries are available.
 func SupportsTiDBFullText(database *gorm.DB) bool {
 	if database == nil || database.Dialector.Name() != "mysql" || database.DryRun {
 		return false
@@ -108,9 +143,39 @@ func probeVectorDistance(database *gorm.DB) bool {
 
 func probeTiDBFullText(database *gorm.DB) bool {
 	database = quietCapabilityDB(database)
+	table := fmt.Sprintf("_ags_fts_probe_%d_%d", time.Now().UnixNano(), tidbFullTextProbeSeq.Add(1))
+	index := "idx_" + table + "_body"
+	tableIdent := mysqlIdent(table)
+
+	_ = database.Exec("DROP TABLE IF EXISTS " + tableIdent).Error
+	defer database.Exec("DROP TABLE IF EXISTS " + tableIdent)
+
+	if err := database.Exec(fmt.Sprintf("CREATE TABLE %s (`id` BIGINT PRIMARY KEY AUTO_RANDOM, `body` TEXT)", tableIdent)).Error; err != nil {
+		return false
+	}
+	if err := database.Exec(fmt.Sprintf("INSERT INTO %s (`body`) VALUES (?)", tableIdent), "this is a test document").Error; err != nil {
+		return false
+	}
+
+	for _, ddl := range fullTextIndexDDLs(table, index, "body") {
+		if err := database.Exec(ddl).Error; err != nil {
+			continue
+		}
+		if probeTiDBFullTextQuery(database, table) {
+			return true
+		}
+	}
+	return false
+}
+
+func probeTiDBFullTextQuery(database *gorm.DB, table string) bool {
 	var score float64
-	err := database.Raw("SELECT FTS_MATCH_WORD(?, ?)", "test", "test").Scan(&score).Error
-	return err == nil
+	tableIdent := mysqlIdent(table)
+	result := database.Raw(fmt.Sprintf(
+		"SELECT FTS_MATCH_WORD('test', `body`) FROM %s WHERE FTS_MATCH_WORD('test', `body`) LIMIT 1",
+		tableIdent,
+	)).Scan(&score)
+	return result.Error == nil && result.RowsAffected > 0
 }
 
 func quietCapabilityDB(database *gorm.DB) *gorm.DB {
