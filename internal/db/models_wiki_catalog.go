@@ -105,10 +105,10 @@ func (WikiRepoHead) TableName() string { return "wiki_repo_heads" }
 // recursive=false), prefix-collision detection, and future tree
 // synthesis without ever scanning the page table. See §6.4.
 type WikiDirIndex struct {
-	RepositoryID uint    `gorm:"primaryKey;autoIncrement:false"`
-	ParentDir    string  `gorm:"primaryKey;type:varbinary(1024)"` // "" = root
-	ChildName    string  `gorm:"primaryKey;type:varbinary(255)"`
-	ChildKind    string  `gorm:"type:char(8);not null"` // blob|tree
+	RepositoryID uint    `gorm:"primaryKey;autoIncrement:false;index:idx_wiki_dir_repo_parent_kind_name,priority:1"`
+	ParentDir    string  `gorm:"primaryKey;type:varbinary(1024);index:idx_wiki_dir_repo_parent_kind_name,priority:2"` // "" = root
+	ChildName    string  `gorm:"primaryKey;type:varbinary(255);index:idx_wiki_dir_repo_parent_kind_name,priority:4"`
+	ChildKind    string  `gorm:"type:char(8);not null;index:idx_wiki_dir_repo_parent_kind_name,priority:3,sort:desc"` // blob|tree
 	PageID       *uint64 // present iff ChildKind == blob
 }
 
