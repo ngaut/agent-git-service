@@ -45,6 +45,20 @@ Override base URL (if not on port 80) or curl flags:
 make test-e2e E2E_BASE_URL="https://github.localhost:8080"
 ```
 
+Run the aggregate API performance benchmark against any environment:
+
+```bash
+E2E_TOKEN="$TOKEN" make test-e2e SCRIPT=benchmark/client-aggregate-performance E2E_BASE_URL="http://127.0.0.1:8080"
+E2E_TOKEN="$TOKEN" make test-e2e SCRIPT=benchmark/client-aggregate-performance E2E_BASE_URL="https://github.example.com"
+```
+
+Optional benchmark inputs:
+- `E2E_PERF_REPO=owner/repo` chooses the repository target. Otherwise the first visible repo is used.
+- `E2E_PERF_ORG=org` chooses the org management target. Otherwise the first visible org is used.
+- `E2E_PERF_ISSUE_NUMBER=123` chooses the issue thread target. Otherwise the first issue in the repo is used.
+- `E2E_PERF_WIKI_SLUGS=home,guides/setup` chooses wiki pages for batch comparison. Otherwise the first wiki pages are discovered.
+- `E2E_PERF_ITERATIONS=10` changes measured iterations.
+
 ## Test Scripts
 
 | Script | Description | Mode |
@@ -64,3 +78,9 @@ make test-e2e E2E_BASE_URL="https://github.localhost:8080"
 | `token-api.sh` | User token API smoke flow | Existing server |
 | `token-lifecycle.sh` | User token lifecycle and revocation behavior | Existing server |
 | `vector-search-e2e.sh` | Vector and semantic search behavior with a mock embedding server | Self-contained TiDB |
+
+## Benchmark Scripts
+
+| Script | Description | Mode |
+|--------|-------------|------|
+| `benchmark/client-aggregate-performance.sh` | Wall-clock comparison between legacy client call chains and aggregate APIs | Existing server plus token |

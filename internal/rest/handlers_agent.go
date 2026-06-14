@@ -99,26 +99,30 @@ func (d *Deps) ListBoundAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]any, 0, len(agents))
 	for _, item := range agents {
-		var tokenStatus any
-		if item.TokenStatus.CreatedAt != nil {
-			tokenStatus = map[string]any{
-				"state":      item.TokenStatus.State,
-				"created_at": item.TokenStatus.CreatedAt.UTC().Format(time.RFC3339),
-			}
-		} else {
-			tokenStatus = map[string]any{"state": item.TokenStatus.State}
-		}
-		out = append(out, map[string]any{
-			"agent":        transform.User(item.Agent),
-			"bound_at":     item.BoundAt.UTC().Format(time.RFC3339),
-			"token_status": tokenStatus,
-			"access_summary": map[string]any{
-				"repos": item.AccessSummary.Repos,
-				"teams": item.AccessSummary.Teams,
-			},
-		})
+		out = append(out, boundAgentJSON(item))
 	}
 	respond.JSON(w, http.StatusOK, out)
+}
+
+func boundAgentJSON(item service.BoundAgent) map[string]any {
+	var tokenStatus any
+	if item.TokenStatus.CreatedAt != nil {
+		tokenStatus = map[string]any{
+			"state":      item.TokenStatus.State,
+			"created_at": item.TokenStatus.CreatedAt.UTC().Format(time.RFC3339),
+		}
+	} else {
+		tokenStatus = map[string]any{"state": item.TokenStatus.State}
+	}
+	return map[string]any{
+		"agent":        transform.User(item.Agent),
+		"bound_at":     item.BoundAt.UTC().Format(time.RFC3339),
+		"token_status": tokenStatus,
+		"access_summary": map[string]any{
+			"repos": item.AccessSummary.Repos,
+			"teams": item.AccessSummary.Teams,
+		},
+	}
 }
 
 // RenameBoundAgent handles PATCH /api/v3/agent-bindings/{agent_login}.

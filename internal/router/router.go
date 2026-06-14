@@ -329,6 +329,7 @@ func registerAgentBindingRoutes(r chi.Router, handlers *rest.Deps) {
 func registerUserScopedRoutes(r chi.Router, handlers *rest.Deps) {
 	// Current user
 	r.Get("/api/v3/user", handlers.GetAuthenticatedUser)
+	r.Get("/api/v3/viewer/summary", handlers.GetViewerSummary)
 	r.Post("/api/v3/user/repos", handlers.CreateUserRepo)
 	r.Get("/api/v3/user/repos", handlers.ListUserRepos)
 	r.Get("/api/v3/user/orgs", handlers.ListUserOrgs)
@@ -371,6 +372,7 @@ func registerUserScopedRoutes(r chi.Router, handlers *rest.Deps) {
 
 	// Notifications
 	r.Get("/api/v3/notifications", handlers.ListNotifications)
+	r.Get("/api/v3/notifications/summary", handlers.GetNotificationsSummary)
 	r.Put("/api/v3/notifications", handlers.MarkNotificationsRead)
 
 	// Repository Invitations (user-specific)
@@ -396,6 +398,7 @@ func registerUserLookupRoutes(r chi.Router, handlers *rest.Deps) {
 func registerOrgRoutes(r chi.Router, handlers *rest.Deps) {
 	// Orgs
 	r.Get("/api/v3/orgs/{org}", handlers.GetOrg)
+	r.Get("/api/v3/orgs/{org}/management-summary", handlers.GetOrgManagementSummary)
 	r.Get("/api/v3/orgs/{org}/members", handlers.ListOrgMembers)
 	r.Delete("/api/v3/orgs/{org}/members/{username}", handlers.DeleteOrgMember)
 	r.Put("/api/v3/orgs/{org}/memberships/{username}", handlers.SetOrgMembership)
@@ -457,12 +460,14 @@ func registerRepoWikiRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks", handlers.RepairWikiLocks)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/state", handlers.GetWikiState)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/tree", handlers.ListWikiTree)
+	r.Get("/api/v3/repos/{owner}/{repo}/wiki/catalog", handlers.GetWikiCatalog)
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/reconcile/request", handlers.RequestWikiReconcile)
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/reconcile", handlers.ReconcileWiki)
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/compact", handlers.CompactWikiHistory)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/compact/{jobID}", handlers.GetWikiCompactionJob)
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/move", handlers.MoveWikiPagePrefix)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages", handlers.ListWikiPages)
+	r.Post("/api/v3/repos/{owner}/{repo}/wiki/pages/batch", handlers.BatchGetWikiPages)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/search", handlers.SearchWikiPages)
 	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.ListWikiPageLabels)
 	r.Post("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.AddWikiPageLabels)
@@ -479,6 +484,7 @@ func registerRepoWikiRoutes(r chi.Router, handlers *rest.Deps) {
 
 func registerRepoCoreRoutes(r chi.Router, handlers *rest.Deps) {
 	// Repos
+	r.Get("/api/v3/repos/{owner}/{repo}/summary", handlers.GetRepoSummary)
 	r.Get("/api/v3/repos/{owner}/{repo}", handlers.GetRepo)
 	r.Patch("/api/v3/repos/{owner}/{repo}", handlers.UpdateRepo)
 	r.Delete("/api/v3/repos/{owner}/{repo}", handlers.DeleteRepo)
@@ -541,6 +547,7 @@ func registerIssueRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/repos/{owner}/{repo}/issues", handlers.CreateIssue)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/comments", handlers.ListRepoIssueComments)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/comments/{comment_id}", handlers.GetIssueComment)
+	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}/thread", handlers.GetIssueThread)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}", handlers.GetIssue)
 	r.Patch("/api/v3/repos/{owner}/{repo}/issues/{number}", handlers.UpdateIssue)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}/comments", handlers.ListIssueComments)

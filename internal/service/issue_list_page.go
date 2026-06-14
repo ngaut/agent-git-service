@@ -16,6 +16,8 @@ type IssueListPageFilter struct {
 	RepoFullName  string
 	State         string
 	Labels        string
+	Kind          string
+	TitlePrefix   string
 	Sort          string
 	Direction     string
 	Milestone     string
@@ -140,19 +142,29 @@ func (s *Service) countIssueListPageRows(ctx context.Context, repoID uint, filte
 }
 
 type normalizedIssueListPageFilter struct {
-	state     string
-	sort      string
-	direction string
-	milestone string
-	since     *time.Time
-	page      int
-	perPage   int
+	state       string
+	kind        string
+	titlePrefix string
+	sort        string
+	direction   string
+	milestone   string
+	since       *time.Time
+	page        int
+	perPage     int
 }
 
 func normalizeIssueListPageFilter(filter IssueListPageFilter) (normalizedIssueListPageFilter, error) {
 	state := strings.TrimSpace(filter.State)
 	if state == "" {
 		state = db.StateOpen
+	}
+	kind := strings.ToLower(strings.TrimSpace(filter.Kind))
+	switch kind {
+	case "", "all":
+		kind = "all"
+	case "issue", "pull":
+	default:
+		return normalizedIssueListPageFilter{}, fmt.Errorf("%w: kind must be one of: issue, pull, all", ErrValidation)
 	}
 	sortKey := strings.ToLower(strings.TrimSpace(filter.Sort))
 	switch sortKey {
@@ -186,13 +198,15 @@ func normalizeIssueListPageFilter(filter IssueListPageFilter) (normalizedIssueLi
 		since = &parsed
 	}
 	return normalizedIssueListPageFilter{
-		state:     state,
-		sort:      sortKey,
-		direction: direction,
-		milestone: strings.TrimSpace(filter.Milestone),
-		since:     since,
-		page:      page,
-		perPage:   perPage,
+		state:       state,
+		kind:        kind,
+		titlePrefix: strings.TrimSpace(filter.TitlePrefix),
+		sort:        sortKey,
+		direction:   direction,
+		milestone:   strings.TrimSpace(filter.Milestone),
+		since:       since,
+		page:        page,
+		perPage:     perPage,
 	}, nil
 }
 
@@ -243,10 +257,19 @@ func splitIssueListPageLabels(raw string) []string {
 }
 
 func buildIssueListPageQuery(repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, paginate bool, includeComments bool, limit int) (string, []any) {
-	issueSQL, issueArgs := buildIssueListPageEntitySQL("issue", "issues", repoID, filter, labelNames, labelIDsByName, includeComments)
-	prSQL, prArgs := buildIssueListPageEntitySQL("pr", "pull_requests", repoID, filter, labelNames, labelIDsByName, includeComments)
-	args := append(issueArgs, prArgs...)
-	unionSQL := issueSQL + " UNION ALL " + prSQL
+	parts := make([]string, 0, 2)
+	args := make([]any, 0)
+	if filter.kind == "all" || filter.kind == "issue" {
+		issueSQL, issueArgs := buildIssueListPageEntitySQL("issue", "issues", repoID, filter, labelNames, labelIDsByName, includeComments)
+		parts = append(parts, issueSQL)
+		args = append(args, issueArgs...)
+	}
+	if filter.kind == "all" || filter.kind == "pull" {
+		prSQL, prArgs := buildIssueListPageEntitySQL("pr", "pull_requests", repoID, filter, labelNames, labelIDsByName, includeComments)
+		parts = append(parts, prSQL)
+		args = append(args, prArgs...)
+	}
+	unionSQL := strings.Join(parts, " UNION ALL ")
 	if !paginate {
 		return "SELECT COUNT(*) FROM (" + unionSQL + ") AS combined", args
 	}
@@ -299,6 +322,10 @@ func buildIssueListPageEntitySQL(kind, table string, repoID uint, filter normali
 		where = append(where, table+".updated_at >= ?")
 		args = append(args, *filter.since)
 	}
+	if filter.titlePrefix != "" {
+		where = append(where, "LOWER("+table+".title) LIKE ? ESCAPE '\\'")
+		args = append(args, strings.ToLower(escapeSQLLike(filter.titlePrefix))+"%")
+	}
 	where, args = appendIssueListPageMilestoneWhere(where, args, table, repoID, filter.milestone)
 	where, args = appendIssueListPageLabelWhere(where, args, table, labelNames, labelIDsByName)
 
@@ -313,6 +340,13 @@ func buildIssueListPageEntitySQL(kind, table string, repoID uint, filter normali
 		"SELECT '%s' AS kind, %s.id AS id, %s.number AS number, %s.created_at AS created_at, %s.updated_at AS updated_at, %s AS comments FROM %s WHERE %s",
 		kind, table, table, table, table, commentsExpr, table, strings.Join(where, " AND "),
 	), args
+}
+
+func escapeSQLLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 func appendIssueListPageMilestoneWhere(where []string, args []any, table string, repoID uint, rawMilestone string) ([]string, []any) {
