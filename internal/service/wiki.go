@@ -111,6 +111,15 @@ type WikiTreeEntry struct {
 	Size  int64
 }
 
+type wikiCatalogTreeRow struct {
+	ChildName   string  `gorm:"column:child_name"`
+	ChildKind   string  `gorm:"column:child_kind"`
+	PageID      *uint64 `gorm:"column:page_id"`
+	Slug        *string `gorm:"column:slug"`
+	HeadBlobSHA *string `gorm:"column:head_blob_sha"`
+	BodySize    *int    `gorm:"column:body_size"`
+}
+
 // WikiBulkMoveEntry reports one source-to-destination wiki slug move.
 type WikiBulkMoveEntry struct {
 	From string
@@ -993,10 +1002,8 @@ func (s *Service) ListWikiTreeAtRef(ctx context.Context, repoFullName, dirPath, 
 }
 
 func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirPath string) ([]WikiTreeEntry, bool, error) {
-	var rows []db.WikiDirIndex
-	if err := s.DBForCtx(ctx).
-		Where("repository_id = ? AND parent_dir = ?", repoID, dirPath).
-		Find(&rows).Error; err != nil {
+	var rows []wikiCatalogTreeRow
+	if err := buildWikiTreeCatalogRowsQuery(s.DBForCtx(ctx), repoID, dirPath).Find(&rows).Error; err != nil {
 		if isMissingTableErr(err) {
 			return nil, false, nil
 		}
@@ -1013,25 +1020,6 @@ func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirP
 		return nil, false, nil
 	}
 
-	pageIDs := make([]uint64, 0, len(rows))
-	for _, row := range rows {
-		if row.ChildKind == "blob" && row.PageID != nil {
-			pageIDs = append(pageIDs, *row.PageID)
-		}
-	}
-	pagesByID := make(map[uint64]db.WikiPage, len(pageIDs))
-	if len(pageIDs) > 0 {
-		var pages []db.WikiPage
-		if err := s.DBForCtx(ctx).
-			Where("repository_id = ? AND page_id IN ? AND deleted_at IS NULL", repoID, pageIDs).
-			Find(&pages).Error; err != nil {
-			return nil, false, err
-		}
-		for _, page := range pages {
-			pagesByID[page.PageID] = page
-		}
-	}
-
 	out := make([]WikiTreeEntry, 0, len(rows))
 	for _, row := range rows {
 		childPath := row.ChildName
@@ -1046,21 +1034,26 @@ func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirP
 				Kind: "directory",
 			})
 		case "blob":
-			if row.PageID == nil {
+			if row.PageID == nil || row.Slug == nil {
 				continue
 			}
-			page, ok := pagesByID[*row.PageID]
-			if !ok {
-				continue
+			size := int64(0)
+			if row.BodySize != nil {
+				size = int64(*row.BodySize)
 			}
+			sha := ""
+			if row.HeadBlobSHA != nil {
+				sha = *row.HeadBlobSHA
+			}
+			slug := *row.Slug
 			out = append(out, WikiTreeEntry{
-				Path:  page.Slug,
-				Name:  titleFromSlug(lastWikiSlugSegment(page.Slug)),
+				Path:  slug,
+				Name:  titleFromSlug(lastWikiSlugSegment(slug)),
 				Kind:  "page",
-				Slug:  page.Slug,
-				Title: titleFromSlug(page.Slug),
-				SHA:   page.HeadBlobSHA,
-				Size:  int64(page.BodySize),
+				Slug:  slug,
+				Title: titleFromSlug(slug),
+				SHA:   sha,
+				Size:  size,
 			})
 		}
 	}
@@ -1071,6 +1064,19 @@ func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirP
 		return out[i].Kind < out[j].Kind
 	})
 	return out, true, nil
+}
+
+func buildWikiTreeCatalogRowsQuery(database *gorm.DB, repoID uint, dirPath string) *gorm.DB {
+	return database.
+		Table("wiki_dir_index AS d").
+		Select(
+			"d.child_name, d.child_kind, d.page_id, p.slug, p.head_blob_sha, p.body_size",
+		).
+		Joins(
+			"LEFT JOIN wiki_pages AS p ON p.repository_id = d.repository_id AND p.page_id = d.page_id AND p.deleted_at IS NULL",
+		).
+		Where("d.repository_id = ? AND d.parent_dir = ?", repoID, dirPath).
+		Order("d.child_kind DESC, d.child_name ASC")
 }
 
 func (s *Service) wikiCatalogHasHead(ctx context.Context, repoID uint) (bool, error) {

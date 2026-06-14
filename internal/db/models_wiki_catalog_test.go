@@ -56,6 +56,7 @@ func TestWikiCatalogAutoMigrate(t *testing.T) {
 		{"wiki_changesets", "idx_wiki_changesets_repo"},
 		{"wiki_changesets", "idx_wiki_changesets_parent"},
 		{"wiki_changesets", "idx_wiki_changesets_superseded"},
+		{"wiki_dir_index", "idx_wiki_dir_repo_parent_kind_name"},
 		{"wiki_page_links", "idx_wiki_links_dst_resolved"},
 		{"wiki_page_links", "idx_wiki_links_dst_string"},
 	}
