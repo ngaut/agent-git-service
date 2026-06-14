@@ -56,8 +56,11 @@ Its responsibilities are:
 - compile the vendored `cli/` tree and `cli/_go-gh-local` without turning the known-flaky full CLI suite into a blocking behavior gate
 - run the stable package tests listed in `scripts/regression_gate.list`
 - run `scripts/check-tenant-db.sh`
+- run `scripts/wiki_regression_gate.sh`, which protects the stale wiki tree/search/backlink projection class without promoting the full service package into the fast gate
 
 Promotion rule: when a bug fix or repaired area needs recurring protection, add a stable test to the package tree and then promote that package or script into `scripts/regression_gate.list`.
+
+Remote wiki console checks are not part of the deterministic local gate. Use `scripts/wiki_remote_integrity.sh` during deploy verification to crawl tree-emitted page URLs and validate search/backlink page URLs against the running service.
 
 ### Layer 2: Integration Tests
 

@@ -255,31 +255,28 @@ func TestSearchWikiSemanticANN_FallsBackWhenCandidateWindowMissesRepoDocs(t *tes
 	}
 }
 
-func TestBuildWikiTreeCatalogRowsQuery_UsesJoinWithoutLargeIN(t *testing.T) {
+func TestBuildWikiTreePageRowsQuery_UsesCurrentPagesWithoutLargeFields(t *testing.T) {
 	gdb := newWikiSearchDryRunMySQLDB(t)
 
 	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
-		var rows []wikiCatalogTreeRow
-		return buildWikiTreeCatalogRowsQuery(tx, 42, "guides/many").Find(&rows)
+		var rows []wikiTreePageRow
+		return buildWikiTreePageRowsQuery(tx, 42).Find(&rows)
 	})
 
-	if !strings.Contains(sql, "FROM wiki_dir_index AS d") {
-		t.Fatalf("expected wiki_dir_index alias in catalog tree query, got %q", sql)
+	if !strings.Contains(sql, "wiki_pages") {
+		t.Fatalf("expected wiki_pages in live tree query, got %q", sql)
 	}
-	if !strings.Contains(sql, "LEFT JOIN wiki_pages AS p") {
-		t.Fatalf("expected wiki_pages join in catalog tree query, got %q", sql)
+	if strings.Contains(sql, "wiki_dir_index") {
+		t.Fatalf("expected live tree query to avoid stale directory index rows, got %q", sql)
 	}
 	if strings.Contains(sql, "SELECT *") || strings.Contains(sql, "body_inline") {
-		t.Fatalf("expected catalog tree query to select only sidebar fields, got %q", sql)
+		t.Fatalf("expected live tree query to select only sidebar fields, got %q", sql)
 	}
 	if strings.Contains(sql, " IN ") {
-		t.Fatalf("expected catalog tree query to avoid page_id IN lists, got %q", sql)
+		t.Fatalf("expected live tree query to avoid page_id IN lists, got %q", sql)
 	}
-	if !strings.Contains(sql, "d.repository_id = 42 AND d.parent_dir = 'guides/many'") {
-		t.Fatalf("expected repo and parent_dir predicates, got %q", sql)
-	}
-	if !strings.Contains(sql, "ORDER BY d.child_kind DESC, d.child_name ASC") {
-		t.Fatalf("expected directory-friendly ordering, got %q", sql)
+	if !strings.Contains(sql, "repository_id = 42") || !strings.Contains(sql, "deleted_at IS NULL") {
+		t.Fatalf("expected repo and live-page predicates, got %q", sql)
 	}
 }
 

@@ -38,6 +38,8 @@ the implementation plan in
    - label parity
    - backlink parity
    - search parity
+   - remote tree/search/backlink link integrity with
+     `scripts/wiki_remote_integrity.sh`
 4. Confirm index rebuild from git completes successfully and document:
    - total duration
    - failure handling
@@ -61,11 +63,14 @@ the implementation plan in
    - page read at explicit `ref`
    - page list
    - tree endpoint
+   - tree-emitted page URLs, including explicit-ref page URLs
    - page history
    - search
+   - search-emitted page URLs
    - labels
    - single-page rename
    - prefix move
+   - backlink-emitted source page URLs
 6. Record the acceptance and e2e evidence bundle with the cutover ticket so the
    verification window has a fixed baseline.
 7. Monitor reconciler lag and error logs during the verification window.
@@ -76,6 +81,7 @@ Rollback immediately if any of the following occurs:
 
 - page content differs from pre-cutover expectations
 - history or tree reads fail for existing pages
+- tree, search, or backlink responses emit page URLs that return `404`
 - reconciler lag exceeds the accepted threshold without recovery
 - label/backlink/search parity fails in a user-visible way
 - direct git writes can bypass the intended validation path

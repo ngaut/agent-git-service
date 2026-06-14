@@ -129,50 +129,51 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 		wikiRepoLive = true
 	}
 	catalogSearchReady := false
-	if wikiRepoLive {
-		ready, readyErr := s.ensureWikiCatalogReadyForLiveHead(ctx, repoFullName, repo.ID)
-		if readyErr != nil {
-			slog.WarnContext(ctx, "wiki search catalog freshness check failed; falling back to git hydration", "repo", repo.FullName, "error", readyErr)
+	if s.WikiCatalog != nil {
+		if readyErr := s.ensureWikiCatalogCurrent(ctx, repoFullName); readyErr != nil {
+			slog.WarnContext(ctx, "wiki search catalog freshness check failed", "repo", repo.FullName, "error", readyErr)
 		}
-		catalogSearchReady = ready
+		hasCatalogState, stateErr := s.wikiCatalogHasLiveState(ctx, repo.ID)
+		if stateErr != nil {
+			return WikiSearchResponse{}, stateErr
+		}
+		catalogSearchReady = hasCatalogState
 	}
 
 	method := "substring"
 	var lexical []WikiSearchResult
-	if wikiRepoLive {
-		if catalogSearchReady {
-			catalogLexical, catalogErr := s.searchWikiLexicalFromCatalog(ctx, repo.ID, query, labelFilters, rankWindow)
-			if catalogErr != nil {
-				slog.WarnContext(ctx, "wiki search catalog lexical path failed", "repo", repo.FullName, "error", catalogErr)
-				indexedLexical, indexedErr := s.searchWikiLexical(ctx, repo.ID, query, labelFilters, rankWindow)
-				if indexedErr != nil {
-					return WikiSearchResponse{}, catalogErr
-				}
-				lexical = indexedLexical
-			} else {
-				lexical = catalogLexical
+	if catalogSearchReady {
+		catalogLexical, catalogErr := s.searchWikiLexicalFromCatalog(ctx, repo.ID, query, labelFilters, rankWindow)
+		if catalogErr != nil {
+			slog.WarnContext(ctx, "wiki search catalog lexical path failed", "repo", repo.FullName, "error", catalogErr)
+			indexedLexical, indexedErr := s.searchWikiLexical(ctx, repo.ID, query, labelFilters, rankWindow)
+			if indexedErr != nil {
+				return WikiSearchResponse{}, catalogErr
 			}
+			lexical = indexedLexical
 		} else {
-			gitLexical, gitErr := s.searchWikiLexicalFromGit(ctx, repoFullName, query, labelFilters, rankWindow)
-			if gitErr != nil {
-				indexedLexical, indexedErr := s.searchWikiLexical(ctx, repo.ID, query, labelFilters, rankWindow)
-				if indexedErr != nil {
-					return WikiSearchResponse{}, gitErr
-				}
-				slog.WarnContext(ctx, "wiki search git lexical path failed; falling back to indexed lexical path", "repo", repo.FullName, "error", gitErr)
-				lexical = indexedLexical
-			} else {
-				lexical = gitLexical
-			}
+			lexical = catalogLexical
 		}
-		if err := s.refreshWikiSearchTitlesForResults(ctx, repo.ID, lexical); err != nil {
-			return WikiSearchResponse{}, err
+	} else if wikiRepoLive {
+		gitLexical, gitErr := s.searchWikiLexicalFromGit(ctx, repoFullName, query, labelFilters, rankWindow)
+		if gitErr != nil {
+			indexedLexical, indexedErr := s.searchWikiLexical(ctx, repo.ID, query, labelFilters, rankWindow)
+			if indexedErr != nil {
+				return WikiSearchResponse{}, gitErr
+			}
+			slog.WarnContext(ctx, "wiki search git lexical path failed; falling back to indexed lexical path", "repo", repo.FullName, "error", gitErr)
+			lexical = indexedLexical
+		} else {
+			lexical = gitLexical
 		}
 	} else {
 		lexical, err = s.searchWikiLexical(ctx, repo.ID, query, labelFilters, 0)
 		if err != nil {
 			return WikiSearchResponse{}, err
 		}
+	}
+	if err := s.refreshWikiSearchTitlesForResults(ctx, repo.ID, lexical); err != nil {
+		return WikiSearchResponse{}, err
 	}
 	results := lexical
 	resultsAlreadyPaginated := false
