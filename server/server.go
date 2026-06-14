@@ -324,7 +324,7 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	}
 	deps.gqlSrv = graphql.NewServer(svcDeps)
 	deps.gitHandler = githttp.New(store, svcDeps)
-	deps.oauthHandler = oauth.New(svcDeps)
+	deps.oauthHandler = oauth.New(svcDeps, oauth.WithDeviceVerificationURL(cfg.OAuthDeviceVerificationURL))
 
 	return deps, nil
 }

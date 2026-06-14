@@ -76,7 +76,7 @@ func TestRequestDeviceCode(t *testing.T) {
 	}
 
 	// Must have required fields
-	for _, key := range []string{"device_code", "user_code", "verification_uri", "expires_in", "interval"} {
+	for _, key := range []string{"device_code", "user_code", "verification_uri", "verification_uri_complete", "expires_in", "interval"} {
 		if _, ok := body[key]; !ok {
 			t.Errorf("missing field %q in response", key)
 		}
@@ -96,6 +96,52 @@ func TestRequestDeviceCode(t *testing.T) {
 	verifyURI, _ := body["verification_uri"].(string)
 	if !strings.HasSuffix(verifyURI, "/login/device") {
 		t.Errorf("unexpected verification_uri: %q", verifyURI)
+	}
+	verifyComplete, _ := body["verification_uri_complete"].(string)
+	completeURL, err := url.Parse(verifyComplete)
+	if err != nil {
+		t.Fatalf("parse verification_uri_complete: %v", err)
+	}
+	if completeURL.Query().Get("user_code") != userCode {
+		t.Errorf("verification_uri_complete user_code = %q, want %q", completeURL.Query().Get("user_code"), userCode)
+	}
+}
+
+func TestRequestDeviceCode_ConfiguredVerificationURL(t *testing.T) {
+	svc := setupTestService(t)
+	h := oauth.New(svc, oauth.WithDeviceVerificationURL("https://console.example.com/device-login?tenant=one"))
+
+	r := httptest.NewRequest("POST", "/login/device/code", strings.NewReader("client_id=test&scope=repo"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.RequestDeviceCode(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	userCode, _ := body["user_code"].(string)
+	if body["verification_uri"] != "https://console.example.com/device-login?tenant=one" {
+		t.Fatalf("unexpected verification_uri: %v", body["verification_uri"])
+	}
+
+	verifyComplete, _ := body["verification_uri_complete"].(string)
+	completeURL, err := url.Parse(verifyComplete)
+	if err != nil {
+		t.Fatalf("parse verification_uri_complete: %v", err)
+	}
+	if completeURL.Scheme != "https" || completeURL.Host != "console.example.com" || completeURL.Path != "/device-login" {
+		t.Fatalf("unexpected verification_uri_complete target: %q", verifyComplete)
+	}
+	if completeURL.Query().Get("tenant") != "one" {
+		t.Fatalf("expected tenant query to be preserved, got %q", completeURL.Query().Get("tenant"))
+	}
+	if completeURL.Query().Get("user_code") != userCode {
+		t.Fatalf("expected user_code query %q, got %q", userCode, completeURL.Query().Get("user_code"))
 	}
 }
 

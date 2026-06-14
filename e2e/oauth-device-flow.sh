@@ -49,10 +49,11 @@ test_request_device_code() {
     -H "Content-Type: application/json" \
     -d '{"client_id":"test-client","scope":"repo"}')"
   
-  local device_code user_code verification_uri expires_in interval
+  local device_code user_code verification_uri verification_uri_complete expires_in interval
   device_code="$(json_get device_code <<<"$response")"
   user_code="$(json_get user_code <<<"$response")"
   verification_uri="$(json_get verification_uri <<<"$response")"
+  verification_uri_complete="$(json_get verification_uri_complete <<<"$response")"
   expires_in="$(json_get expires_in <<<"$response")"
   interval="$(json_get interval <<<"$response")"
   
@@ -60,6 +61,7 @@ test_request_device_code() {
   assert_re "$device_code" '^[a-f0-9]{32,64}$'
   assert_re "$user_code" '^[A-F0-9]{4}-[A-F0-9]{4}$'
   assert_re "$verification_uri" '^https?://.+/login/device$'
+  assert_re "$verification_uri_complete" '^https?://.+/login/device\?.*user_code='
   assert_eq "$expires_in" "900"
   assert_eq "$interval" "5"
   
@@ -118,12 +120,13 @@ test_poll_pending_code() {
   device_code="$(json_get device_code <<<"$response")"
   user_code="$(json_get user_code <<<"$response")"
   
-  # Approve the device code via the verification endpoint
+  # Approve the device code via the headless console API
   local approve_code
   approve_code="$(curl -ksS -w "%{http_code}" -o /dev/null \
-    -X POST "$BASE_URL/login/device" \
+    -X POST "$BASE_URL/api/v3/oauth/device/approve" \
     -H "Authorization: token $ADMIN_TOKEN" \
-    -d "user_code=$user_code")"
+    -H "Content-Type: application/json" \
+    -d "{\"user_code\":\"$user_code\"}")"
   
   assert_eq "$approve_code" "200"
   ok "Device code approved successfully"

@@ -6,11 +6,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/ngaut/agent-git-service/internal/db"
-	applog "github.com/ngaut/agent-git-service/internal/logging"
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/ngaut/agent-git-service/internal/db"
+	applog "github.com/ngaut/agent-git-service/internal/logging"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -131,7 +132,7 @@ func (s *Service) CreateAuthorizationCode(ctx context.Context, code *db.Authoriz
 func (s *Service) GetDeviceCodeByUserCode(ctx context.Context, userCode string) (*db.DeviceCode, error) {
 	var code db.DeviceCode
 	if err := s.DBForCtx(ctx).First(&code, "user_code = ?", userCode).Error; err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &code, nil
 }
@@ -190,7 +191,7 @@ func (s *Service) ApproveDeviceCode(ctx context.Context, deviceCode string, user
 
 		// Must be in pending state to approve
 		if code.State != db.DeviceCodeStatePending {
-			return fmt.Errorf("device code not in pending state: %s", code.State)
+			return fmt.Errorf("%w: device code not in pending state: %s", ErrConflict, code.State)
 		}
 
 		now := time.Now().UTC()
@@ -229,13 +230,38 @@ func (s *Service) ApproveDeviceCode(ctx context.Context, deviceCode string, user
 
 // RejectDeviceCode rejects a device code, preventing token issuance.
 func (s *Service) RejectDeviceCode(ctx context.Context, deviceCode string, userID uint, userLogin, reason string) error {
+	if userID == 0 {
+		return ErrUnauthorized
+	}
+
 	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		var rejecter db.User
+		if err := tx.Select("id", "login", "type", "status").First(&rejecter, "id = ?", userID).Error; err != nil {
+			return wrapErr(err)
+		}
+		if rejecter.Type != db.TypeUser {
+			return ErrUnauthorized
+		}
+		if !isUserStatusActive(rejecter.Status) {
+			return ErrForbidden
+		}
+
 		var code db.DeviceCode
 		if err := tx.First(&code, "device_code = ?", deviceCode).Error; err != nil {
 			return ErrNotFound
 		}
 
 		now := time.Now().UTC()
+		if now.After(code.ExpiresAt) {
+			tx.Model(&code).Updates(map[string]any{
+				"state": db.DeviceCodeStateExpired,
+			})
+			return ErrDeviceCodeExpired
+		}
+		if code.State != db.DeviceCodeStatePending {
+			return fmt.Errorf("%w: device code not in pending state: %s", ErrConflict, code.State)
+		}
+
 		if err := tx.Model(&code).Updates(map[string]any{
 			"state": db.DeviceCodeStateRejected,
 		}).Error; err != nil {
@@ -247,8 +273,8 @@ func (s *Service) RejectDeviceCode(ctx context.Context, deviceCode string, userI
 			DeviceCodeID: code.ID,
 			DeviceCode:   code.DeviceCode,
 			Event:        "rejected",
-			UserID:       &userID,
-			UserLogin:    userLogin,
+			UserID:       &rejecter.ID,
+			UserLogin:    rejecter.Login,
 			Details:      reason,
 			CreatedAt:    now,
 		}

@@ -120,6 +120,84 @@ func TestApproveDeviceCode_RejectsInactiveApprovers(t *testing.T) {
 	}
 }
 
+// --- RejectDeviceCode ---
+
+func TestRejectDeviceCode_UsesPersistedRejecterIdentity(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	rejecter := db.User{Login: "rejecter", Type: db.TypeUser}
+	if err := svc.DB.Create(&rejecter).Error; err != nil {
+		t.Fatalf("create rejecter: %v", err)
+	}
+
+	if err := svc.DB.Create(&db.DeviceCode{
+		DeviceCode: "dev-reject",
+		UserCode:   "WXYZ-0001",
+		State:      db.DeviceCodeStatePending,
+		ExpiresAt:  time.Now().UTC().Add(15 * time.Minute),
+	}).Error; err != nil {
+		t.Fatalf("create device code: %v", err)
+	}
+
+	if err := svc.RejectDeviceCode(context.Background(), "dev-reject", rejecter.ID, "spoofed-login", "user declined"); err != nil {
+		t.Fatalf("RejectDeviceCode returned error: %v", err)
+	}
+
+	var code db.DeviceCode
+	if err := svc.DB.First(&code, "device_code = ?", "dev-reject").Error; err != nil {
+		t.Fatalf("load device code: %v", err)
+	}
+	if code.State != db.DeviceCodeStateRejected {
+		t.Fatalf("device code state = %q, want %q", code.State, db.DeviceCodeStateRejected)
+	}
+
+	var audit db.DeviceCodeAuditLog
+	if err := svc.DB.First(&audit, "device_code = ? AND event = ?", "dev-reject", "rejected").Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if audit.UserID == nil || *audit.UserID != rejecter.ID {
+		t.Fatalf("audit UserID = %v, want %d", audit.UserID, rejecter.ID)
+	}
+	if audit.UserLogin != rejecter.Login {
+		t.Fatalf("audit UserLogin = %q, want %q", audit.UserLogin, rejecter.Login)
+	}
+	if audit.Details != "user declined" {
+		t.Fatalf("audit Details = %q, want user declined", audit.Details)
+	}
+}
+
+func TestRejectDeviceCode_RejectsInactiveUsers(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	rejecter := db.User{Login: "inactive-rejecter", Type: db.TypeUser, Status: db.UserStatusSuspended}
+	if err := svc.DB.Create(&rejecter).Error; err != nil {
+		t.Fatalf("create rejecter: %v", err)
+	}
+	if err := svc.DB.Create(&db.DeviceCode{
+		DeviceCode: "dev-inactive-reject",
+		UserCode:   "WXYZ-0002",
+		State:      db.DeviceCodeStatePending,
+		ExpiresAt:  time.Now().UTC().Add(15 * time.Minute),
+	}).Error; err != nil {
+		t.Fatalf("create device code: %v", err)
+	}
+
+	err := svc.RejectDeviceCode(context.Background(), "dev-inactive-reject", rejecter.ID, rejecter.Login, "user declined")
+	if !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("RejectDeviceCode error = %v, want ErrForbidden", err)
+	}
+
+	var code db.DeviceCode
+	if err := svc.DB.First(&code, "device_code = ?", "dev-inactive-reject").Error; err != nil {
+		t.Fatalf("load device code: %v", err)
+	}
+	if code.State != db.DeviceCodeStatePending {
+		t.Fatalf("device code state = %q, want %q", code.State, db.DeviceCodeStatePending)
+	}
+}
+
 func TestExchangeAuthorizationCode_ValidatesPKCE(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()

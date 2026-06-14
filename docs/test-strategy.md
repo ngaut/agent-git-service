@@ -128,8 +128,8 @@ These gates cover the higher-fidelity compatibility and shell E2E paths that are
 `e2e/oauth-device-flow.sh` is the merge-blocking shell regression for the live OAuth device bootstrap path.
 It keeps the runtime contract executable across the full device flow:
 
-- `POST /login/device/code` returns a device code, user code, verification URI, and the expected `expires_in` and `interval` polling metadata
-- `POST /login/device` approval plus `POST /login/oauth/access_token` exchange yields a usable bearer token, with an optional `gh auth` verification step when the CLI is installed
+- `POST /login/device/code` returns a device code, user code, verification URI, complete verification URI, and the expected `expires_in` and `interval` polling metadata
+- authenticated device approval through both the headless console API and built-in `/login/device` fallback plus `POST /login/oauth/access_token` exchange yields a usable bearer token, with an optional `gh auth` verification step when the CLI is installed
 - `GET /login/oauth/authorize` accepts same-origin and loopback redirect URIs while rejecting cross-origin callbacks
 - malformed, missing, and form-encoded device-code exchange requests fail or recover in the expected way, including repeated polling after approval
 - success and error payloads do not leak issued access tokens or device codes

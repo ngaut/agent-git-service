@@ -150,6 +150,8 @@ func registerOAuthRoutes(r chi.Router, oauthHandler *oauth.Handler, embeddedAuth
 	deviceVerificationRateLimit := srvmiddleware.RateLimit(5, time.Minute)
 	r.With(deviceVerificationRateLimit, authMW).Get("/login/device", oauthHandler.DeviceCodeVerification)
 	r.With(deviceVerificationRateLimit, authMW).Post("/login/device", oauthHandler.DeviceCodeVerification)
+	r.With(deviceVerificationRateLimit, authMW).Post("/api/v3/oauth/device/approve", oauthHandler.ApproveDeviceCode)
+	r.With(deviceVerificationRateLimit, authMW).Post("/api/v3/oauth/device/reject", oauthHandler.RejectDeviceCode)
 }
 
 func registerPublicAuthRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw func(http.Handler) http.Handler) {

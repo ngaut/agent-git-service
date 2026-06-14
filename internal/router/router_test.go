@@ -387,7 +387,7 @@ func TestOAuth_DeviceCodeThroughRouter(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, key := range []string{"device_code", "user_code", "verification_uri", "expires_in", "interval"} {
+	for _, key := range []string{"device_code", "user_code", "verification_uri", "verification_uri_complete", "expires_in", "interval"} {
 		if _, ok := body[key]; !ok {
 			t.Errorf("missing field %q", key)
 		}
@@ -421,6 +421,127 @@ func TestOAuth_DeviceVerificationRateLimited(t *testing.T) {
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOAuth_DeviceApproveAPIThroughRouter(t *testing.T) {
+	_, mux := setupRouterTest(t)
+
+	r1 := httptest.NewRequest(http.MethodPost, "/login/device/code", nil)
+	w1 := httptest.NewRecorder()
+	mux.ServeHTTP(w1, r1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("device code: expected 200, got %d: %s", w1.Code, w1.Body.String())
+	}
+	var codeResp map[string]any
+	if err := json.NewDecoder(w1.Body).Decode(&codeResp); err != nil {
+		t.Fatalf("decode device response: %v", err)
+	}
+	deviceCode := codeResp["device_code"].(string)
+	userCode := codeResp["user_code"].(string)
+
+	approveBody, _ := json.Marshal(map[string]string{"user_code": userCode})
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/approve", bytes.NewReader(approveBody))
+	approveReq.Header.Set("Authorization", "token test-token")
+	approveReq.Header.Set("Content-Type", "application/json")
+	approveW := httptest.NewRecorder()
+	mux.ServeHTTP(approveW, approveReq)
+	if approveW.Code != http.StatusOK {
+		t.Fatalf("approve: expected 200, got %d: %s", approveW.Code, approveW.Body.String())
+	}
+	var approveResp map[string]any
+	if err := json.NewDecoder(approveW.Body).Decode(&approveResp); err != nil {
+		t.Fatalf("decode approve response: %v", err)
+	}
+	if approveResp["status"] != "approved" {
+		t.Fatalf("approve status = %v, want approved", approveResp["status"])
+	}
+
+	exchangeBody, _ := json.Marshal(map[string]string{"device_code": deviceCode})
+	exchangeReq := httptest.NewRequest(http.MethodPost, "/login/oauth/access_token", bytes.NewReader(exchangeBody))
+	exchangeReq.Header.Set("Content-Type", "application/json")
+	exchangeW := httptest.NewRecorder()
+	mux.ServeHTTP(exchangeW, exchangeReq)
+	if exchangeW.Code != http.StatusOK {
+		t.Fatalf("exchange: expected 200, got %d: %s", exchangeW.Code, exchangeW.Body.String())
+	}
+}
+
+func TestOAuth_DeviceApproveAPIThroughRouter_InvalidJSON(t *testing.T) {
+	_, mux := setupRouterTest(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/approve", strings.NewReader(`{"user_code"`))
+	req.Header.Set("Authorization", "token test-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOAuth_DeviceRejectAPIThroughRouter(t *testing.T) {
+	_, mux := setupRouterTest(t)
+
+	r1 := httptest.NewRequest(http.MethodPost, "/login/device/code", nil)
+	w1 := httptest.NewRecorder()
+	mux.ServeHTTP(w1, r1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("device code: expected 200, got %d: %s", w1.Code, w1.Body.String())
+	}
+	var codeResp map[string]any
+	if err := json.NewDecoder(w1.Body).Decode(&codeResp); err != nil {
+		t.Fatalf("decode device response: %v", err)
+	}
+	deviceCode := codeResp["device_code"].(string)
+	userCode := codeResp["user_code"].(string)
+
+	rejectBody, _ := json.Marshal(map[string]string{"user_code": userCode, "reason": "user declined"})
+	rejectReq := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/reject", bytes.NewReader(rejectBody))
+	rejectReq.Header.Set("Authorization", "token test-token")
+	rejectReq.Header.Set("Content-Type", "application/json")
+	rejectW := httptest.NewRecorder()
+	mux.ServeHTTP(rejectW, rejectReq)
+	if rejectW.Code != http.StatusOK {
+		t.Fatalf("reject: expected 200, got %d: %s", rejectW.Code, rejectW.Body.String())
+	}
+	var rejectResp map[string]any
+	if err := json.NewDecoder(rejectW.Body).Decode(&rejectResp); err != nil {
+		t.Fatalf("decode reject response: %v", err)
+	}
+	if rejectResp["status"] != "rejected" {
+		t.Fatalf("reject status = %v, want rejected", rejectResp["status"])
+	}
+
+	exchangeBody, _ := json.Marshal(map[string]string{"device_code": deviceCode})
+	exchangeReq := httptest.NewRequest(http.MethodPost, "/login/oauth/access_token", bytes.NewReader(exchangeBody))
+	exchangeReq.Header.Set("Content-Type", "application/json")
+	exchangeW := httptest.NewRecorder()
+	mux.ServeHTTP(exchangeW, exchangeReq)
+	if exchangeW.Code != http.StatusBadRequest {
+		t.Fatalf("exchange: expected 400, got %d: %s", exchangeW.Code, exchangeW.Body.String())
+	}
+	var exchangeResp map[string]any
+	if err := json.NewDecoder(exchangeW.Body).Decode(&exchangeResp); err != nil {
+		t.Fatalf("decode exchange response: %v", err)
+	}
+	if exchangeResp["error"] != "access_denied" {
+		t.Fatalf("exchange error = %v, want access_denied", exchangeResp["error"])
+	}
+}
+
+func TestOAuth_DeviceRejectAPIThroughRouter_InvalidJSON(t *testing.T) {
+	_, mux := setupRouterTest(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/reject", strings.NewReader(`{"user_code"`))
+	req.Header.Set("Authorization", "token test-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -661,6 +782,8 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 	protectedAuthChecks := map[string][]string{
 		"/api/v3/agent-invites":                            {http.MethodPost},
 		"/api/v3/agent-bindings/confirm":                   {http.MethodPost},
+		"/api/v3/oauth/device/approve":                     {http.MethodPost},
+		"/api/v3/oauth/device/reject":                      {http.MethodPost},
 		"/api/v3/presence/heartbeat":                       {http.MethodPost},
 		"/api/v3/issues/{issue_id}/presence":               {http.MethodGet},
 		"/api/v3/user/tokens":                              {http.MethodGet, http.MethodPost, http.MethodDelete},
@@ -685,6 +808,10 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 		{route: "/api/v3/agent-bindings/confirm", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"invite_token"}},
 		{route: "/api/v3/oidc/session", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"device_code"}},
 		{route: "/api/v3/oidc/callback", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"id_token"}},
+		{route: "/api/v3/oauth/device/approve", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"user_code"}},
+		{route: "/api/v3/oauth/device/approve", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", required: true, requiredFields: []string{"user_code"}},
+		{route: "/api/v3/oauth/device/reject", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"user_code"}},
+		{route: "/api/v3/oauth/device/reject", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", required: true, requiredFields: []string{"user_code"}},
 		{route: "/api/v3/presence/heartbeat", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"issue_id"}},
 		{route: "/api/v3/user/presence/privacy", method: http.MethodPut, contentType: "application/json", required: true, requiredFields: []string{"hide"}},
 		{route: "/api/v3/user/tokens", method: http.MethodPost, contentType: "application/json", required: true},
@@ -729,6 +856,8 @@ func requiresOpenAPIDoc(route string) bool {
 	case strings.HasPrefix(route, "/api/v3/agent-bindings/"):
 		return true
 	case strings.HasPrefix(route, "/api/v3/oidc/"):
+		return true
+	case strings.HasPrefix(route, "/api/v3/oauth/"):
 		return true
 	case route == "/api/v3/presence/heartbeat":
 		return true
