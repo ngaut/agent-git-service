@@ -153,17 +153,6 @@ func (s *Service) GetLatestRelease(ctx context.Context, repoFullName string) (db
 	return rel, wrapErr(err)
 }
 
-// GetReleaseByTagInRepo fetches a release by repo ID and tag (used for archive downloads).
-func (s *Service) GetReleaseByTagInRepo(ctx context.Context, repoFullName, tag string) (db.Release, error) {
-	rep, err := s.GetRepo(ctx, repoFullName)
-	if err != nil {
-		return db.Release{}, err
-	}
-	var rel db.Release
-	err = s.DBForCtx(ctx).Preload("Assets").Where("repository_id = ? AND tag_name = ?", rep.ID, tag).First(&rel).Error
-	return rel, wrapErr(err)
-}
-
 // GetReleaseForArchive fetches a release by ID with assets preloaded (for archive download).
 func (s *Service) GetReleaseForArchive(ctx context.Context, id uint) (db.Release, error) {
 	var rel db.Release

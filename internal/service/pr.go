@@ -14,11 +14,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// nextPRNumber returns the next sequential PR number within a repo.
-func (s *Service) nextPRNumber(ctx context.Context, repoID uint) (int, error) {
-	return nextIssueOrPRNumber(s, ctx, repoID)
-}
-
 // CountPRsByRepoID returns the count of open PRs for a repo by ID.
 func (s *Service) CountPRsByRepoID(ctx context.Context, repoID uint) int {
 	var count int64

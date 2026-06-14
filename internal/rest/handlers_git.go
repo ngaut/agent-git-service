@@ -49,7 +49,7 @@ func (d *Deps) ListBranches(w http.ResponseWriter, r *http.Request) {
 
 // GetBranch handles GET /api/v3/repos/{owner}/{repo}/branches/{branch}
 // It also handles GET /api/v3/repos/{owner}/{repo}/branches/{branch}/protection
-// by detecting the /protection suffix and delegating to GetBranchProtection.
+// by detecting the /protection suffix and using the branch protection response path.
 func (d *Deps) GetBranch(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	// Wildcard captures everything after /branches/, including slashes
