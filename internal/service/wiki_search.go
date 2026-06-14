@@ -1428,23 +1428,7 @@ func (s *Service) searchWikiSemanticANN(ctx context.Context, repoID uint, query 
 		return nil, false, nil
 	}
 
-	var eligibleCount int64
-	if err := filteredQ.Count(&eligibleCount).Error; err != nil {
-		return nil, false, err
-	}
-	if eligibleCount == 0 {
-		return nil, false, nil
-	}
-
 	q := filteredQ.Where("wiki_search_documents.id IN ?", candidateIDs)
-	var filteredCandidateCount int64
-	if err := q.Count(&filteredCandidateCount).Error; err != nil {
-		return nil, false, err
-	}
-	if filteredCandidateCount < eligibleCount {
-		return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters, exactWindow, paginateBeforeHydration)
-	}
-
 	rows, err := s.scanWikiSemanticDBRows(q, query, vecLiteral, exactWindow, 0, 0)
 	if err != nil {
 		return nil, false, err
