@@ -1,33 +1,16 @@
 package db
 
-import (
-	"path/filepath"
-	"testing"
+import "testing"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
-)
-
-func TestMigrateIssueCommentPinningColumns_SQLite(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "issue-comment-pinning.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: gormlogger.Discard,
-	})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
-
+func TestMigrateIssueCommentPinningColumns_TiDB(t *testing.T) {
+	gdb := openTiDB(t)
 	if err := gdb.Exec(`
 		CREATE TABLE issue_comments (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			repository_id INTEGER,
-			issue_number INTEGER,
+			id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+			repository_id BIGINT UNSIGNED,
+			issue_number BIGINT,
 			body TEXT,
-			author_id INTEGER,
+			author_id BIGINT UNSIGNED,
 			created_at DATETIME,
 			updated_at DATETIME
 		)

@@ -14,8 +14,12 @@ E2E_BASE_URL ?= http://$(TEST_HOST)
 TIDB_TAG    = gh-server
 DB_NAME     = gh-server
 TEST_DB_DSN ?= root:@tcp(127.0.0.1:4000)/$(DB_NAME)?parseTime=true&timeout=10s
+GO_TEST_TIMEOUT ?= 90m
+GO_TEST_PKG_PARALLELISM ?= 1
+GO_TEST_PACKAGES ?= ./...
 TIDB_TMP_DIR ?= /mnt/gh-server-tidb-tmp
 TIDB_CONFIG_FILE ?= /tmp/gh-server-tidb.toml
+TIDB_SCREEN_SESSION ?= gh-server-tidb-playground
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 
@@ -115,25 +119,35 @@ db-check: ## Verify DB_DSN points at an external TiDB/MySQL-compatible database
 
 .PHONY: test-db-start
 test-db-start: ## Start test-only TiDB via tiup playground
-	@if tiup playground display --tag $(TIDB_TAG) 2>/dev/null | grep -q 'tidb'; then \
+	@if tiup playground display --tag $(TIDB_TAG) 2>/dev/null | grep -q 'tidb' && mysql -h 127.0.0.1 -P 4000 -u root -e "SELECT 1" >/dev/null 2>&1; then \
 		echo "✓ TiDB already running"; \
 	else \
 		echo "Starting TiDB playground..."; \
-		tmp_dir="$(TIDB_TMP_DIR)"; \
-		parent_dir="$$(dirname "$$tmp_dir")"; \
-		if [ ! -d "$$tmp_dir" ] || [ ! -w "$$tmp_dir" ]; then \
-			if command -v sudo >/dev/null 2>&1; then \
-				sudo mkdir -p "$$tmp_dir"; \
-				sudo chown "$$(id -u):$$(id -g)" "$$tmp_dir"; \
+		base_tmp_dir="$(TIDB_TMP_DIR)"; \
+		if [ ! -d "$$base_tmp_dir" ]; then \
+			mkdir -p "$$base_tmp_dir" 2>/dev/null || true; \
+		fi; \
+		if [ ! -d "$$base_tmp_dir" ] || [ ! -w "$$base_tmp_dir" ]; then \
+			if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then \
+				sudo -n mkdir -p "$$base_tmp_dir"; \
+				sudo -n chown "$$(id -u):$$(id -g)" "$$base_tmp_dir"; \
 			fi; \
 		fi; \
-		if [ ! -d "$$tmp_dir" ] || [ ! -w "$$tmp_dir" ]; then \
-			tmp_dir="/tmp/gh-server-tidb-tmp"; \
+		if [ ! -d "$$base_tmp_dir" ] || [ ! -w "$$base_tmp_dir" ]; then \
+			base_tmp_dir="/tmp/gh-server-tidb-tmp"; \
 		fi; \
-		mkdir -p "$$tmp_dir"; \
-		printf 'temp-dir = "%s"\n' "$$tmp_dir" > "$(TIDB_CONFIG_FILE)"; \
+		mkdir -p "$$base_tmp_dir"; \
+		tmp_dir="$$(mktemp -d "$$base_tmp_dir/tidb.XXXXXX")"; \
+		printf 'temp-dir = "%s"\ntmp-storage-path = "%s"\n' "$$tmp_dir" "$$tmp_dir" > "$(TIDB_CONFIG_FILE)"; \
 		tiup clean $(TIDB_TAG) 2>/dev/null || true; \
-		setsid tiup playground --tag $(TIDB_TAG) --db 1 --pd 1 --kv 1 --tiflash 0 --without-monitor --db.config "$(TIDB_CONFIG_FILE)" > /tmp/tiup-playground.log 2>&1 < /dev/null & \
+		if command -v setsid >/dev/null 2>&1; then \
+			setsid tiup playground --tag $(TIDB_TAG) --db 1 --pd 1 --kv 1 --tiflash 0 --without-monitor --db.port 4000 --pd.port 2379 --kv.port 20160 --db.config "$(TIDB_CONFIG_FILE)" > /tmp/tiup-playground.log 2>&1 < /dev/null & \
+		elif command -v screen >/dev/null 2>&1; then \
+			screen -S "$(TIDB_SCREEN_SESSION)" -X quit >/dev/null 2>&1 || true; \
+			screen -dmS "$(TIDB_SCREEN_SESSION)" sh -lc 'tiup playground --tag "$(TIDB_TAG)" --db 1 --pd 1 --kv 1 --tiflash 0 --without-monitor --db.port 4000 --pd.port 2379 --kv.port 20160 --db.config "$(TIDB_CONFIG_FILE)" > /tmp/tiup-playground.log 2>&1'; \
+		else \
+			nohup tiup playground --tag $(TIDB_TAG) --db 1 --pd 1 --kv 1 --tiflash 0 --without-monitor --db.port 4000 --pd.port 2379 --kv.port 20160 --db.config "$(TIDB_CONFIG_FILE)" > /tmp/tiup-playground.log 2>&1 < /dev/null & \
+		fi; \
 		echo "Waiting for TiDB to be ready..."; \
 		for i in $$(seq 1 30); do \
 			if mysql -h 127.0.0.1 -P 4000 -u root -e "SELECT 1" >/dev/null 2>&1; then \
@@ -204,10 +218,20 @@ test-db-stop: ## Stop test-only TiDB playground
 		echo "✗ Failed to stop TiDB (tiup clean failed)"; \
 		exit 1; \
 	fi
+	@screen -S "$(TIDB_SCREEN_SESSION)" -X quit >/dev/null 2>&1 || true
 
 .PHONY: test-db-status
 test-db-status: ## Show test-only TiDB playground status
 	@tiup playground display --tag $(TIDB_TAG) 2>/dev/null || echo "TiDB not running"
+
+.PHONY: test-db-clean-schemas
+test-db-clean-schemas: ## Drop leftover per-test TiDB schemas created by the Go test harness
+	@mysql -h 127.0.0.1 -P 4000 -u root -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'ags\\_%' ESCAPE '\\\\'" | \
+	while IFS= read -r schema; do \
+		[ -n "$$schema" ] || continue; \
+		mysql -h 127.0.0.1 -P 4000 -u root -e "DROP DATABASE IF EXISTS \`$$schema\`" >/dev/null; \
+	done
+	@echo "✓ Removed leftover Go test schemas"
 
 .PHONY: certs
 certs: ## Generate self-signed TLS certificates for github.localhost
@@ -398,12 +422,19 @@ test: test-preflight ## Run acceptance tests (requires running server)
 		go test -tags acceptance ./acceptance/ -count=1 -v -timeout 300s
 
 .PHONY: test-unit
-test-unit: ## Run all unit tests
-	go test -v ./...
+test-unit: test-deps test-db-start test-db-clean-schemas ## Run all unit tests against local TiDB playground
+	@status=0; \
+	TEST_DB_DSN="$(TEST_DB_DSN)" go test -p $(GO_TEST_PKG_PARALLELISM) -timeout $(GO_TEST_TIMEOUT) -v $(GO_TEST_PACKAGES) || status=$$?; \
+	$(MAKE) --no-print-directory test-db-clean-schemas >/dev/null || true; \
+	exit $$status
 
 .PHONY: test-integration
 test-integration: ## Run stable real-router integration packages
 	bash scripts/integration_tests.sh
+
+.PHONY: test-migrate-tidb
+test-migrate-tidb: test-deps test-db-start ## Smoke-test service bootstrap and migrations against local TiDB playground
+	bash scripts/tidb_migration_smoke.sh
 
 .PHONY: test-all
 test-all: test-unit test ## Run all unit and acceptance tests

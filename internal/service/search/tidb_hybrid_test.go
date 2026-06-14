@@ -190,7 +190,7 @@ func TestBuildIssueLexicalTokenQuery_PhraseFallsBackToLike(t *testing.T) {
 	if strings.Contains(got[0].where, "FTS_MATCH_WORD") {
 		t.Fatalf("expected phrase query to avoid FTS, got %q", got[0].where)
 	}
-	if !strings.Contains(got[0].where, "issues.title LIKE ? OR issues.body LIKE ?") {
+	if !strings.Contains(got[0].where, "LOWER(issues.title) LIKE LOWER(?) OR LOWER(issues.body) LIKE LOWER(?)") {
 		t.Fatalf("expected LIKE fallback for phrase token, got %q", got[0].where)
 	}
 }

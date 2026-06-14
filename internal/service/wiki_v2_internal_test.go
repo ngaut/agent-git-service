@@ -3,12 +3,8 @@ package service
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
@@ -139,23 +135,10 @@ func newWikiV2InternalTestService(t *testing.T) (*Service, func()) {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	gdb, dbCleanup := openMigratedServiceTestDB(t)
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		t.Fatalf("sql.DB: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("journal_mode: %v", err)
-	}
-	if err := db.Migrate(gdb); err != nil {
-		t.Fatalf("db.Migrate: %v", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
@@ -179,7 +162,7 @@ func newWikiV2InternalTestService(t *testing.T) (*Service, func()) {
 	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
 
 	return svc, func() {
-		_ = sqlDB.Close()
+		dbCleanup()
 		_ = os.RemoveAll(tmpDir)
 	}
 }

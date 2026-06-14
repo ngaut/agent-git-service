@@ -1,15 +1,10 @@
 package db
 
-import (
-	"path/filepath"
-	"testing"
-
-	"gorm.io/gorm"
-)
+import "testing"
 
 func TestMigrateWikiSlugColumns_CleansCatalogSlugCI(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "wiki-slug-cleanup.db"))
-	if err := gdb.Exec("CREATE TABLE wiki_pages (page_id integer primary key, repository_id integer, slug text, slug_ci_v1 text)").Error; err != nil {
+	gdb := openTiDB(t)
+	if err := gdb.Exec("CREATE TABLE wiki_pages (page_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, repository_id BIGINT UNSIGNED, slug VARBINARY(1024), slug_ci_v1 VARBINARY(1024))").Error; err != nil {
 		t.Fatalf("create wiki_pages: %v", err)
 	}
 	if err := gdb.Exec("CREATE UNIQUE INDEX idx_wiki_pages_repo_slug_ci ON wiki_pages (repository_id, slug_ci_v1)").Error; err != nil {
@@ -31,14 +26,16 @@ func TestMigrateWikiSlugColumns_CleansCatalogSlugCI(t *testing.T) {
 	if !gdb.Migrator().HasIndex("wiki_pages", "idx_wiki_pages_repo_prefix") {
 		t.Fatal("expected idx_wiki_pages_repo_prefix to be rebuilt")
 	}
-	if cols := sqliteIndexColumns(t, gdb, "idx_wiki_pages_repo_prefix"); len(cols) != 2 || cols[0] != "repository_id" || cols[1] != "slug" {
+	if cols, err := mysqlIndexColumns(gdb, "wiki_pages", "idx_wiki_pages_repo_prefix"); err != nil {
+		t.Fatalf("read idx_wiki_pages_repo_prefix columns: %v", err)
+	} else if len(cols) != 2 || cols[0] != "repository_id" || cols[1] != "slug" {
 		t.Fatalf("idx_wiki_pages_repo_prefix columns = %v, want [repository_id slug]", cols)
 	}
 }
 
 func TestMigrateWikiSlugColumnsBeforeAutoMigrate_RenamesLinkDstSlug(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "wiki-link-slug-rename.db"))
-	if err := gdb.Exec("CREATE TABLE wiki_page_links (repository_id integer, src_page_id integer, dst_slug_ci text, dst_page_id integer, primary key (src_page_id, dst_slug_ci))").Error; err != nil {
+	gdb := openTiDB(t)
+	if err := gdb.Exec("CREATE TABLE wiki_page_links (repository_id BIGINT UNSIGNED, src_page_id BIGINT UNSIGNED, dst_slug_ci VARBINARY(384), dst_page_id BIGINT UNSIGNED, primary key (src_page_id, dst_slug_ci))").Error; err != nil {
 		t.Fatalf("create wiki_page_links: %v", err)
 	}
 	if err := gdb.Exec("INSERT INTO wiki_page_links (repository_id, src_page_id, dst_slug_ci) VALUES (1, 10, 'home')").Error; err != nil {
@@ -61,19 +58,4 @@ func TestMigrateWikiSlugColumnsBeforeAutoMigrate_RenamesLinkDstSlug(t *testing.T
 	if dst != "home" {
 		t.Fatalf("dst_slug = %q, want home", dst)
 	}
-}
-
-func sqliteIndexColumns(t *testing.T, gdb *gorm.DB, indexName string) []string {
-	t.Helper()
-	var rows []struct {
-		Name string `gorm:"column:name"`
-	}
-	if err := gdb.Raw("PRAGMA index_info(" + indexName + ")").Scan(&rows).Error; err != nil {
-		t.Fatalf("PRAGMA index_info(%s): %v", indexName, err)
-	}
-	cols := make([]string, 0, len(rows))
-	for _, row := range rows {
-		cols = append(cols, row.Name)
-	}
-	return cols
 }

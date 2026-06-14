@@ -217,7 +217,8 @@ func TestWebhookCreateInvalidPayload(t *testing.T) {
 		t.Fatalf("failed to find repo: %v", err)
 	}
 
-	// Test with invalid JSON in EventsJSON - GORM/SQLite may accept it as text
+	// Test with invalid JSON in EventsJSON. The service layer currently stores
+	// the payload text and leaves API validation to handlers.
 	// but we test that the service accepts/rejects appropriately
 	hook := &db.Webhook{
 		RepositoryID: repo.ID,

@@ -58,9 +58,8 @@ type Catalog struct {
 	// testForceCASLoss is a test-only injection point. When set, each
 	// applyOnce attempt consults it before the in-tx CAS update and,
 	// if it returns true, rolls back as if the CAS lost. Used to
-	// exercise the retry budget deterministically — SQLite's WAL
-	// serializes external writers behind the catalog's transaction,
-	// which makes a real concurrent racer impossible to script.
+	// exercise the retry budget deterministically without depending on
+	// database scheduler timing.
 	testForceCASLoss func() bool
 }
 

@@ -344,17 +344,19 @@ func TestDeleteRepoCascade_FullCascade(t *testing.T) {
 	if err := svc.DB.Create(&workflowRun).Error; err != nil {
 		t.Fatalf("create workflow run: %v", err)
 	}
-	if err := svc.DB.Create(&db.WorkflowRunJob{RunID: workflowRun.ID, Name: "build"}).Error; err != nil {
+	workflowJob := testWorkflowRunJob(workflowRun.ID, "build")
+	if err := svc.DB.Create(&workflowJob).Error; err != nil {
 		t.Fatalf("create workflow job: %v", err)
 	}
 	if err := svc.DB.Create(&db.Artifact{RunID: workflowRun.ID, Name: "artifact", SizeInBytes: 10}).Error; err != nil {
 		t.Fatalf("create artifact: %v", err)
 	}
-	if err := svc.DB.Create(&db.ActionCache{RepositoryID: repo.ID, Key: "cache", Ref: "refs/heads/main", Version: "v1"}).Error; err != nil {
+	actionCache := testActionCache(repo.ID, "cache", "refs/heads/main", "v1")
+	if err := svc.DB.Create(&actionCache).Error; err != nil {
 		t.Fatalf("create action cache: %v", err)
 	}
 
-	milestone := db.Milestone{RepositoryID: repo.ID, Number: 1, Title: "v1"}
+	milestone := db.Milestone{RepositoryID: repo.ID, Number: 1, Title: "v1", CreatorID: owner.ID}
 	if err := svc.DB.Create(&milestone).Error; err != nil {
 		t.Fatalf("create milestone: %v", err)
 	}
@@ -568,7 +570,8 @@ func TestDeleteRepoCascade_RollbackOnError(t *testing.T) {
 	if err := svc.DB.Create(&workflowRun).Error; err != nil {
 		t.Fatalf("create workflow run: %v", err)
 	}
-	if err := svc.DB.Create(&db.WorkflowRunJob{RunID: workflowRun.ID, Name: "build"}).Error; err != nil {
+	workflowJob := testWorkflowRunJob(workflowRun.ID, "build")
+	if err := svc.DB.Create(&workflowJob).Error; err != nil {
 		t.Fatalf("create workflow job: %v", err)
 	}
 

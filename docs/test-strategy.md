@@ -86,15 +86,21 @@ Run with:
 
 ```bash
 bash scripts/backend_smoke.sh
+make test-migrate-tidb
 ```
 
 These gates prove the built server still works as a real process, not just as isolated packages.
 
 - `scripts/backend_smoke.sh` is the low-dependency startup smoke:
-  - boot the server binary with SQLite
+  - boot the server binary with a fresh TiDB playground database
   - verify `/readyz`, `/api/v3/`, `/api/v3/meta`, and `/api/v3/rate_limit`
   - create a repository through the REST API
   - verify authenticated Git Smart HTTP against the live server
+- `make test-migrate-tidb` is the TiDB migration smoke:
+  - start the test-only TiDB playground
+  - create a fresh temporary TiDB database
+  - boot the server against that TiDB DSN and wait for `/readyz`
+  - fail early on TiDB-incompatible migration or bootstrap DDL
 
 The smoke layer should stay small enough to run on every PR, but realistic enough to catch wiring and startup regressions the regression gate cannot see.
 
@@ -204,6 +210,7 @@ Workflow execution sandbox coverage was added in 2026 with:
 The repo also has focused shell end-to-end coverage under `e2e/`, including org collaboration governance and code search. Keep those flows in the normal regression toolbox when a change spans multiple endpoints and is awkward to express through one package test. The code search flow also creates repository contents through the GitHub-compatible Contents API, so it should keep asserting the GitHub create status contract while protecting repository-scoped search boundaries.
 
 The main CI gate now makes the full backend `go test ./...` inventory merge-blocking via `make test-unit`.
+CI shards that inventory with `GO_TEST_PACKAGES` so each shard has an isolated TiDB playground instead of forcing the slowest database-backed packages to contend for one local TiDB instance.
 The vendored `cli/` inventory is still not merge-blocking, because that surface remains slower and is more environment-heavy than the backend unit-test lane.
 The correct pattern is:
 
@@ -235,10 +242,9 @@ The repo already has useful helpers such as:
 
 - `internal/testharness/service_fixture.go:NewService` — the canonical
   service-layer fixture. Returns a bare `*service.Service` wired to an
-  isolated SQLite database migrated via `db.Migrate` (production parity)
+  isolated TiDB playground database migrated via `db.Migrate` (production parity)
   and an isolated gitstore. Accepts `ServiceConfig` with knobs for
-  foreign-key enforcement, connection caps, a custom `OpenDB` escape hatch
-  (for tests that need a bespoke driver), and a custom `Embedder`.
+  connection caps and a custom `Embedder`.
 - `internal/service/service_test.go:setupTestService` — 1-line wrapper
   over `testharness.NewService{}`, kept for call-site compatibility across
   hundreds of existing service-layer tests.
@@ -246,7 +252,7 @@ The repo already has useful helpers such as:
 - `internal/gitstore/store_test.go` temp-repo setup patterns
 
 New tests should call `testharness.NewService` directly or go through
-`setupTestService`; avoid re-rolling SQLite+migration bootstrap inline.
+`setupTestService`; avoid re-rolling TiDB+migration bootstrap inline.
 
 ### First Batch
 
@@ -333,7 +339,7 @@ REST handlers and auth middleware are currently wired to a concrete `*service.Se
 That means mock-first handler tests are not the shortest or most honest path today.
 Until REST and router are refactored to depend on injected interfaces, the recommended path is:
 
-- SQLite in-memory DB
+- isolated TiDB playground database
 - temp gitstore
 - real `service.Service`
 - real `router.RegisterRoutes`
@@ -344,7 +350,7 @@ Until REST and router are refactored to depend on injected interfaces, the recom
 
 The `internal/testharness` package provides a production-ready HTTP integration test harness. `testharness.New` builds on top of `testharness.NewService` (the shared service-layer fixture) and adds the full HTTP dispatch:
 
-1. an isolated SQLite database migrated via `db.Migrate` (production parity)
+1. an isolated TiDB playground database migrated via `db.Migrate` (production parity)
 2. a temp gitstore
 3. a real `service.Service`
 4. REST, GraphQL, Git HTTP, and OAuth handlers

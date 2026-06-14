@@ -1,24 +1,12 @@
 package db
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
 func TestWikiV2Migrate_Idempotent(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "wiki-v2.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
+	gdb := openTiDB(t)
 
 	if err := Migrate(gdb); err != nil {
 		t.Fatalf("first Migrate: %v", err)
@@ -54,11 +42,7 @@ func TestWikiV2Migrate_Idempotent(t *testing.T) {
 }
 
 func TestWikiV2RoundTrip(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "wiki-v2-roundtrip.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	gdb := openTiDB(t)
 	if err := Migrate(gdb); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

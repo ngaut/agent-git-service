@@ -136,7 +136,7 @@ CreateIssue(ctx, repoFullName, fields)
           → lockRepoForNumbering (SELECT ... FOR UPDATE on repo row)
           → nextIssueOrPRNumberTx (MAX(number) across issues and PRs + 1)
           → INSERT issue with allocated number
-      → on duplicate key or SQLite lock: sleep(retryDelay) and retry
+      → on duplicate key: sleep(retryDelay) and retry
   → reload with preloads
 ```
 
@@ -163,7 +163,7 @@ GetIssueTimeline(ctx, repoFullName, number)
 - **Service owns collaboration policy.** Org membership, org invitations, outside-collaborator reconciliation, and effective repository permission resolution all live in `service`, not in REST or GraphQL handlers.
 - **Sentinel errors for surface mapping.** `errors.go` defines `ErrNotFound`, `ErrConflict`, `ErrInvalidState`, `ErrValidation`, `ErrUnauthorized`, `ErrDuplicate`, `ErrInvalidRequest`, and `ErrAlreadyCollaborator`. REST maps these to HTTP status codes via `respond.ServiceError`; GraphQL maps them to error payloads.
 - **`wrapErr` normalizes GORM errors.** GORM's `ErrRecordNotFound` is converted to `ErrNotFound` for consistent HTTP 404 mapping.
-- **Retry with backoff for concurrent number allocation.** Issue and PR creation retry up to 5 times on duplicate key or SQLite lock errors, with exponential backoff via `retryDelay`.
+- **Retry with backoff for concurrent number allocation.** Issue and PR creation retry up to 5 times on duplicate key errors, with exponential backoff via `retryDelay`.
 - **Preload chains for consistent association loading.** `preload.go` defines reusable GORM preload helpers (`preloadIssue`, `preloadPRFull`, etc.) to prevent N+1 queries and ensure surfaces receive fully-loaded objects.
 - **The concrete service is the primary wiring seam.** Production code passes `*Service`; introduce narrower interfaces only for a specific, tested boundary.
 

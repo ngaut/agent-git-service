@@ -2,29 +2,21 @@ package db
 
 import (
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestMigrateWikiSearch_NonTiDBEnsuresEmbeddingTextColumn(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "wiki-search.db"))
-	if err := gdb.Exec("CREATE TABLE wiki_search_documents (id integer primary key, title text, body text)").Error; err != nil {
+func TestMigrateWikiSearch_TiDBTables(t *testing.T) {
+	gdb := openTiDB(t)
+	if err := gdb.Exec("CREATE TABLE wiki_search_documents (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, title TEXT, body TEXT)").Error; err != nil {
 		t.Fatalf("create wiki_search_documents: %v", err)
 	}
 
-	sink := captureLogs(t)
 	if err := MigrateWikiSearch(gdb); err != nil {
 		t.Fatalf("MigrateWikiSearch: %v", err)
 	}
-	if !gdb.Migrator().HasColumn("wiki_search_documents", "embedding") {
-		t.Fatal("expected MigrateWikiSearch to add wiki_search_documents.embedding")
-	}
-	entries := sink.Entries()
-	for _, entry := range entries {
-		if entry.level == slog.LevelWarn {
-			t.Fatalf("expected no warnings for non-TiDB embedding column migration, got %#v", entries)
-		}
+	if gdb.Migrator().HasColumn("wiki_search_documents", "embedding") {
+		t.Fatal("expected TiDB MigrateWikiSearch to leave embedding for InitVector")
 	}
 }
 
@@ -36,8 +28,8 @@ func TestWikiSearchDDLBuilders(t *testing.T) {
 	if !strings.Contains(fullText, "WITH PARSER MULTILINGUAL") {
 		t.Fatalf("expected multilingual parser in wiki full-text DDL, got %q", fullText)
 	}
-	if !strings.Contains(fullText, "ADD_COLUMNAR_REPLICA_ON_DEMAND") {
-		t.Fatalf("expected on-demand columnar replica in wiki full-text DDL, got %q", fullText)
+	if strings.Contains(fullText, "ADD_COLUMNAR_REPLICA_ON_DEMAND") {
+		t.Fatalf("expected playground-compatible wiki full-text DDL, got %q", fullText)
 	}
 
 	textColumn := wikiSearchAddTextEmbeddingDDL(nil)
@@ -57,8 +49,11 @@ func TestWikiSearchDDLBuilders(t *testing.T) {
 	}
 }
 
-func TestInitVector_WikiSearchEmbeddingTextColumnIsLeftOnSQLite(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "wiki-search-vector.db"))
+func TestInitVector_WikiSearchEmbeddingColumnUsesTiDBVector(t *testing.T) {
+	gdb := openTiDB(t)
+	if !SupportsVectorDistance(gdb) {
+		t.Skip("TiDB playground does not support VEC_COSINE_DISTANCE")
+	}
 	if err := gdb.AutoMigrate(&WikiSearchDocument{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
@@ -76,16 +71,19 @@ func TestInitVector_WikiSearchEmbeddingTextColumnIsLeftOnSQLite(t *testing.T) {
 	if !gdb.Migrator().HasColumn("wiki_search_documents", "embedding") {
 		t.Fatal("expected wiki_search_documents.embedding to remain present")
 	}
+	if !wikiSearchEmbeddingColumnIsVector(gdb) {
+		t.Fatal("expected wiki_search_documents.embedding to use TiDB VECTOR")
+	}
 	for _, entry := range entries {
 		if entry.level == slog.LevelWarn && entry.attrs["table"] == "wiki_search_documents" {
-			t.Fatalf("expected no wiki vector warning on SQLite, got %#v", entries)
+			t.Fatalf("expected no wiki vector warning on TiDB, got %#v", entries)
 		}
 	}
 }
 
 func TestMigrateWikiSlugColumns_DropsSearchSlugCIColumnAndIndex(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "wiki-search-slug-cleanup.db"))
-	if err := gdb.Exec("CREATE TABLE wiki_search_documents (id integer primary key, repository_id integer, slug text, slug_ci_v1 text, title text, body text, revision_sha text, created_at datetime, updated_at datetime)").Error; err != nil {
+	gdb := openTiDB(t)
+	if err := gdb.Exec("CREATE TABLE wiki_search_documents (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, repository_id BIGINT UNSIGNED, slug VARCHAR(255), slug_ci_v1 VARCHAR(255), title TEXT, body TEXT, revision_sha VARCHAR(64), created_at DATETIME, updated_at DATETIME)").Error; err != nil {
 		t.Fatalf("create wiki_search_documents: %v", err)
 	}
 	if err := gdb.Exec("CREATE INDEX idx_wiki_search_repo_slug_ci ON wiki_search_documents (repository_id, slug_ci_v1)").Error; err != nil {

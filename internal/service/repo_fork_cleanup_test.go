@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/gitstore"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -22,29 +20,11 @@ func setupCleanupForkRepoService(t *testing.T) (*Service, func()) {
 		t.Fatalf("create temp dir: %v", err)
 	}
 
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("set busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("set journal_mode: %v", err)
-	}
-	if err := gdb.AutoMigrate(&db.User{}, &db.Repository{}, &db.Label{}, &db.Issue{}, &db.Attachment{}); err != nil {
-		t.Fatalf("auto-migrate: %v", err)
-	}
+	gdb, dbCleanup := openMigratedServiceTestDB(t)
 
 	store, err := gitstore.New(tmpDir)
 	if err != nil {
 		t.Fatalf("gitstore new: %v", err)
-	}
-
-	sqlDB, err := gdb.DB()
-	if err != nil {
-		t.Fatalf("get sql db: %v", err)
 	}
 
 	svc := &Service{
@@ -54,7 +34,7 @@ func setupCleanupForkRepoService(t *testing.T) (*Service, func()) {
 	}
 
 	cleanup := func() {
-		_ = sqlDB.Close()
+		dbCleanup()
 		_ = os.RemoveAll(tmpDir)
 	}
 

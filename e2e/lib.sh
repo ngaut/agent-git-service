@@ -75,6 +75,50 @@ assert_eq() {
 note() { echo "==> $*"; }
 ok() { echo "OK: $*"; }
 
+tidb_mysql() {
+  local host="${TIDB_HOST:-127.0.0.1}"
+  local port="${TIDB_PORT:-4000}"
+  local user="${TIDB_USER:-root}"
+  local password="${TIDB_PASSWORD:-}"
+  local args=(-h "$host" -P "$port" -u "$user")
+  if [[ -n "$password" ]]; then
+    args+=("-p$password")
+  fi
+  mysql "${args[@]}" "$@"
+}
+
+tidb_validate_db_name() {
+  local db_name="$1"
+  if ! [[ "$db_name" =~ ^[A-Za-z0-9_]+$ ]]; then
+    echo "invalid TiDB database name: $db_name" >&2
+    exit 1
+  fi
+}
+
+tidb_dsn_for_database() {
+  local db_name="$1"
+  tidb_validate_db_name "$db_name"
+  local host="${TIDB_HOST:-127.0.0.1}"
+  local port="${TIDB_PORT:-4000}"
+  local user="${TIDB_USER:-root}"
+  local password="${TIDB_PASSWORD:-}"
+  echo "$user:$password@tcp($host:$port)/$db_name?parseTime=true&timeout=10s"
+}
+
+tidb_create_database() {
+  local db_name="$1"
+  tidb_validate_db_name "$db_name"
+  tidb_mysql -e "DROP DATABASE IF EXISTS \`$db_name\`; CREATE DATABASE \`$db_name\`;"
+}
+
+tidb_drop_database() {
+  local db_name="$1"
+  if [[ -n "$db_name" ]]; then
+    tidb_validate_db_name "$db_name"
+    tidb_mysql -e "DROP DATABASE IF EXISTS \`$db_name\`;" >/dev/null 2>&1 || true
+  fi
+}
+
 ensure_org_exists() {
   # Usage: ensure_org_exists <base_url> <token> <org_login> [default_repository_permission]
   local base_url="$1"

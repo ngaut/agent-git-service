@@ -685,7 +685,7 @@ func TestListIssuesByLabels(t *testing.T) {
 		RepoFullName: "lluser/llrepo", Title: "No Labels", AuthorLogin: "lluser",
 	})
 
-	// Direct SQL insert (SQLite-compatible, no INSERT IGNORE)
+	// Direct SQL insert keeps the test independent of INSERT IGNORE semantics.
 	for _, pair := range [][2]uint{{iss1.ID, bugLabel.ID}, {iss1.ID, featLabel.ID}, {iss2.ID, bugLabel.ID}} {
 		if err := svc.DB.Exec("INSERT INTO issue_labels (issue_id, label_id) VALUES (?, ?)", pair[0], pair[1]).Error; err != nil {
 			t.Fatalf("insert issue_labels: %v", err)
@@ -832,6 +832,10 @@ func TestFindPRsClosingIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get repo: %v", err)
 	}
+	var author db.User
+	if err := svc.DB.First(&author, "login = ?", "closinguser").Error; err != nil {
+		t.Fatalf("get author: %v", err)
+	}
 
 	// Create PRs with different closing reference formats by direct DB insert
 	prs := []struct {
@@ -846,14 +850,15 @@ func TestFindPRsClosingIssue(t *testing.T) {
 
 	for i, pr := range prs {
 		svc.DB.Create(&db.PullRequest{
-			RepositoryID: repo.ID,
-			Number:       i + 1,
-			Title:        pr.title,
-			Body:         db.LargeText(pr.body),
-			HeadRef:      "branch-" + issueNum,
-			BaseRef:      "main",
-			State:        "open",
-			AuthorID:     1, // closinguser
+			RepositoryID:     repo.ID,
+			HeadRepositoryID: repo.ID,
+			Number:           i + 1,
+			Title:            pr.title,
+			Body:             db.LargeText(pr.body),
+			HeadRef:          "branch-" + issueNum,
+			BaseRef:          "main",
+			State:            "open",
+			AuthorID:         author.ID,
 		})
 	}
 

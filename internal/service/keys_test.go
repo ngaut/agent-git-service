@@ -25,7 +25,6 @@ VwEA6F2FeetcP51EyKyQGTp3GpmZgk0uCGJa1G5uqT+9mgc=
 
 // TestDeployKeyCRUD tests the CRUD lifecycle for deploy keys.
 func TestDeployKeyCRUD(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -83,7 +82,6 @@ func TestDeployKeyCRUD(t *testing.T) {
 
 // TestCreateDeployKey_DuplicateKey verifies duplicate deploy keys are allowed for a repo.
 func TestCreateDeployKey_DuplicateKey(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -124,7 +122,6 @@ func TestCreateDeployKey_DuplicateKey(t *testing.T) {
 
 // TestSSHKeyCRUD tests the CRUD lifecycle for SSH keys.
 func TestSSHKeyCRUD(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -174,7 +171,6 @@ func TestSSHKeyCRUD(t *testing.T) {
 
 // TestCreateSSHKey_DuplicateKey verifies duplicate SSH keys are allowed for a user.
 func TestCreateSSHKey_DuplicateKey(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -205,7 +201,6 @@ func TestCreateSSHKey_DuplicateKey(t *testing.T) {
 
 // TestCreateSSHKey_InvalidFormat verifies malformed SSH keys are stored as-is.
 func TestCreateSSHKey_InvalidFormat(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -227,7 +222,6 @@ func TestCreateSSHKey_InvalidFormat(t *testing.T) {
 
 // TestSSHSigningKeyCRUD tests the CRUD lifecycle for SSH signing keys.
 func TestSSHSigningKeyCRUD(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -277,7 +271,6 @@ func TestSSHSigningKeyCRUD(t *testing.T) {
 
 // TestGPGKeyCRUD tests the CRUD lifecycle for GPG keys.
 func TestGPGKeyCRUD(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -326,7 +319,6 @@ func TestGPGKeyCRUD(t *testing.T) {
 
 // TestCreateGPGKey_InvalidArmoredKey tests edge case with invalid armored key.
 func TestCreateGPGKey_InvalidArmoredKey(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -353,7 +345,6 @@ func TestCreateGPGKey_InvalidArmoredKey(t *testing.T) {
 
 // TestCreateDeployKey_EmptyTitle tests that empty title falls back to SSH key comment.
 func TestCreateDeployKey_EmptyTitle(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -389,7 +380,6 @@ func TestCreateDeployKey_EmptyTitle(t *testing.T) {
 
 // TestCreateDeployKey_NoComment tests fallback when SSH key has no comment.
 func TestCreateDeployKey_NoComment(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -422,7 +412,6 @@ func TestCreateDeployKey_NoComment(t *testing.T) {
 
 // TestGetSSHKey_NotFound tests error handling for non-existent SSH key.
 func TestGetSSHKey_NotFound(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -435,7 +424,6 @@ func TestGetSSHKey_NotFound(t *testing.T) {
 
 // TestGetSSHSigningKey_NotFound tests error handling for non-existent SSH signing key.
 func TestGetSSHSigningKey_NotFound(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -448,7 +436,6 @@ func TestGetSSHSigningKey_NotFound(t *testing.T) {
 
 // TestDeleteDeployKey_NotFound tests error handling for non-existent deploy key.
 func TestDeleteDeployKey_NotFound(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -461,7 +448,6 @@ func TestDeleteDeployKey_NotFound(t *testing.T) {
 
 // TestDeleteSSHKey_NotFound tests error handling for non-existent SSH key.
 func TestDeleteSSHKey_NotFound(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -474,7 +460,6 @@ func TestDeleteSSHKey_NotFound(t *testing.T) {
 
 // TestDeleteSSHSigningKey_NotFound tests error handling for non-existent SSH signing key.
 func TestDeleteSSHSigningKey_NotFound(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -487,7 +472,6 @@ func TestDeleteSSHSigningKey_NotFound(t *testing.T) {
 
 // TestDeleteGPGKey_NotFound tests error handling for non-existent GPG key.
 func TestDeleteGPGKey_NotFound(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -500,7 +484,6 @@ func TestDeleteGPGKey_NotFound(t *testing.T) {
 
 // TestListDeployKeys_NonExistentRepo tests listing deploy keys for non-existent repo.
 func TestListDeployKeys_NonExistentRepo(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -513,7 +496,6 @@ func TestListDeployKeys_NonExistentRepo(t *testing.T) {
 
 // TestCreateDeployKey_NonExistentRepo tests creating deploy key for non-existent repo.
 func TestCreateDeployKey_NonExistentRepo(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -526,7 +508,6 @@ func TestCreateDeployKey_NonExistentRepo(t *testing.T) {
 
 // TestSSHKey_MultipleKeys tests listing multiple SSH keys for a user.
 func TestSSHKey_MultipleKeys(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -556,7 +537,6 @@ func TestSSHKey_MultipleKeys(t *testing.T) {
 
 // TestGPGKey_MultipleKeys tests listing multiple GPG keys for a user.
 func TestGPGKey_MultipleKeys(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()

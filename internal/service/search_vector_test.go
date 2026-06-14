@@ -26,7 +26,7 @@ func (m *mockEmbedder) Dimensions() int {
 }
 
 // TestSearchIssues_EmbeddingFailureGracefulDegradation tests that search falls back to LIKE
-// when embedding API fails or is unavailable. This is the primary test for SQLite environments.
+// when embedding API fails or is unavailable.
 func TestSearchIssues_EmbeddingFailureGracefulDegradation(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()

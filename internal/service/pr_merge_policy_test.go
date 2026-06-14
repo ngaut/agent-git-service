@@ -191,7 +191,7 @@ func TestAutoMerge_BranchProtectionWithoutBypassKeepsPROpen(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
-	pr, authCtx, _ := setupProtectedPR(t, svc, "auto-review-user", "auto-review-repo", true)
+	pr, authCtx, user := setupProtectedPR(t, svc, "auto-review-user", "auto-review-repo", true)
 	protectBranch(t, svc, pr.RepositoryID, pr.BaseRef, `{"contexts":["CI"]}`, `{"required_approving_review_count":1}`, true)
 
 	if _, err := svc.SetPRAutoMerge(authCtx, pr.ID, service.SetPRAutoMergeInput{
@@ -207,6 +207,7 @@ func TestAutoMerge_BranchProtectionWithoutBypassKeepsPROpen(t *testing.T) {
 		CommitSHA:    pr.HeadSHA,
 		State:        "success",
 		Context:      "CI",
+		CreatorID:    user.ID,
 	}
 	if err := svc.CreateCommitStatus(authCtx, status); err != nil {
 		t.Fatalf("CreateCommitStatus: %v", err)

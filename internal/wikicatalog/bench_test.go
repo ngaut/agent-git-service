@@ -2,36 +2,23 @@ package wikicatalog
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
 // applyBenchEnv mirrors applyTestEnv but accepts testing.TB so it can
-// be used from benchmarks. The SQLite database is on disk (not :memory:)
-// so the benchmark includes local file-backed SQLite costs instead of an
-// unrealistically cheap in-memory setup.
+// be used from benchmarks.
 func applyBenchEnv(tb testing.TB) (*Catalog, uint, *gorm.DB) {
 	tb.Helper()
-	dbPath := filepath.Join(tb.TempDir(), "catalog.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
-	if err != nil {
-		tb.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		tb.Cleanup(func() { _ = sqlDB.Close() })
-	}
-	if err := db.Migrate(gdb); err != nil {
-		tb.Fatalf("migrate: %v", err)
-	}
+	gdb, cleanup := wikicatalogTemplatePool(tb).Open(tb)
+	tb.Cleanup(cleanup)
 	user := db.User{Login: "alice", Type: "User", Email: "a@example.com"}
 	if err := gdb.Create(&user).Error; err != nil {
 		tb.Fatalf("seed user: %v", err)
@@ -83,9 +70,8 @@ func preloadPages(tb testing.TB, cat *Catalog, repoID uint, n int) {
 // pages into the catalog in a single changeset. This is the path
 // MigrateWiki uses; the user's "1.5s/page" pain came from the legacy
 // per-page git commit path, so this benchmark exercises the catalog's
-// bulk-write path on the SQLite test backend. Absolute numbers will
-// not transfer to TiDB; the scaling shape (linear in N, no super-linear
-// drift) is what this benchmark guards.
+// bulk-write path on the TiDB test backend. The scaling shape (linear in N,
+// no super-linear drift) is what this benchmark guards.
 func BenchmarkApplyChangeSet_BulkLoad(b *testing.B) {
 	for _, n := range []int{100, 1000, 3000} {
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
@@ -170,9 +156,8 @@ func BenchmarkApplyChangeSet_SingleUpdateAtFill(b *testing.B) {
 // benchmark should be rewritten to call it. The numbers therefore time
 // the index path, not the production end-to-end HTTP path.
 //
-// SQLite-on-disk only; absolute numbers do not transfer to TiDB. What
-// this benchmark guards is the scaling shape: linear in N (every live
-// page is in the result set), no super-linear drift.
+// This benchmark guards the scaling shape: linear in N (every live page is in
+// the result set), no super-linear drift.
 func BenchmarkListPagesByRepo(b *testing.B) {
 	for _, n := range []int{100, 1000, 3000, 10000} {
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
@@ -195,18 +180,17 @@ func BenchmarkListPagesByRepo(b *testing.B) {
 	}
 }
 
-// TestCatalogListQuery_UsesIndexedPlan keeps a deterministic regression
-// check on the underlying indexed repo-wide slug query at N=10 000
-// pages. Rather than asserting wall-clock latency in the default unit
-// test lane, it verifies the SQLite planner still takes the
-// repository_id + slug index path for the list query shape that
-// the future ListWikiPages cutover will rely on.
-func TestCatalogListQuery_UsesIndexedPlan(t *testing.T) {
+// TestCatalogListQuery_UsesIndexedPlan keeps a deterministic regression check
+// on the underlying indexed repo-wide slug query. Rather than asserting
+// wall-clock latency in the default unit test lane, it verifies TiDB still
+// takes a repository_id + slug index path for the list query shape that the
+// future ListWikiPages cutover will rely on.
+func TestCatalogListQuery_UsesTiDBIndexedPlan(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping 10k-page preload in -short mode")
+		t.Skip("skipping indexed-plan integration check in -short mode")
 	}
-	cat, repoID, gdb := applyTestEnv(t)
-	preloadPages(t, cat, repoID, 10_000)
+	_, repoID, gdb := applyTestEnv(t)
+	seedWikiPagesForPlan(t, gdb, repoID, 10_000)
 
 	var slugs []string
 	if err := gdb.Model(&db.WikiPage{}).
@@ -219,37 +203,77 @@ func TestCatalogListQuery_UsesIndexedPlan(t *testing.T) {
 		t.Fatalf("got %d slugs, want 10000", len(slugs))
 	}
 
-	type queryPlanRow struct {
-		Detail string `gorm:"column:detail"`
-	}
-	var plan []queryPlanRow
-	if err := gdb.Raw(
-		"EXPLAIN QUERY PLAN SELECT slug FROM wiki_pages WHERE repository_id = ? AND deleted_at IS NULL ORDER BY slug",
-		repoID,
-	).Scan(&plan).Error; err != nil {
-		t.Fatalf("explain query plan: %v", err)
-	}
-	if len(plan) == 0 {
-		t.Fatalf("explain query plan returned no rows")
-	}
-	var sawOrderedIndex bool
-	for _, row := range plan {
-		detail := strings.ToUpper(row.Detail)
-		if strings.Contains(detail, "TEMP") && strings.Contains(detail, "ORDER BY") {
-			t.Fatalf("expected repo-wide slug listing to avoid a temp ORDER BY sort, got plan: %#v", plan)
-		}
-		if !strings.Contains(detail, "WIKI_PAGES") || !strings.Contains(detail, "INDEX") {
-			continue
-		}
-		if strings.Contains(detail, "IDX_WIKI_PAGES_REPO_PREFIX") ||
-			strings.Contains(detail, "IDX_WIKI_PAGES_REPO_SLUG") {
-			sawOrderedIndex = true
-		}
-	}
-	if sawOrderedIndex {
+	plan := explainPlanText(t, gdb, "EXPLAIN SELECT slug FROM wiki_pages WHERE repository_id = ? AND deleted_at IS NULL ORDER BY slug", repoID)
+	upperPlan := strings.ToUpper(plan)
+	if strings.Contains(upperPlan, "IDX_WIKI_PAGES_REPO_PREFIX") ||
+		strings.Contains(upperPlan, "IDX_WIKI_PAGES_REPO_SLUG") {
 		return
 	}
-	t.Fatalf("expected SQLite to use a (repository_id, slug) index for repo-wide slug listing, got plan: %#v", plan)
+	t.Fatalf("expected TiDB to use a (repository_id, slug) index for repo-wide slug listing, got plan:\n%s", plan)
+}
+
+func seedWikiPagesForPlan(t testing.TB, gdb *gorm.DB, repoID uint, n int) {
+	t.Helper()
+
+	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	pages := make([]db.WikiPage, 0, n)
+	for i := 0; i < n; i++ {
+		slug := fmt.Sprintf("page-%05d", i)
+		pages = append(pages, db.WikiPage{
+			RepositoryID:    repoID,
+			Slug:            slug,
+			Title:           slug,
+			HeadBlobSHA:     fmt.Sprintf("%040d", i),
+			BodySize:        len(slug),
+			BodyInline:      []byte(slug),
+			HeadRevisionID:  uint64(i + 1),
+			HeadChangesetID: uint64(i + 1),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		})
+	}
+	if err := gdb.CreateInBatches(pages, 500).Error; err != nil {
+		t.Fatalf("seed wiki pages: %v", err)
+	}
+}
+
+func explainPlanText(t testing.TB, gdb *gorm.DB, query string, args ...any) string {
+	t.Helper()
+	rows, err := gdb.Raw(query, args...).Rows()
+	if err != nil {
+		t.Fatalf("explain query: %v", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("explain columns: %v", err)
+	}
+	var lines []string
+	for rows.Next() {
+		values := make([]sql.NullString, len(cols))
+		scan := make([]any, len(cols))
+		for i := range values {
+			scan[i] = &values[i]
+		}
+		if err := rows.Scan(scan...); err != nil {
+			t.Fatalf("scan explain row: %v", err)
+		}
+		parts := make([]string, 0, len(cols))
+		for i, value := range values {
+			if value.Valid {
+				parts = append(parts, cols[i]+"="+value.String)
+			}
+		}
+		lines = append(lines, strings.Join(parts, " "))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("explain rows: %v", err)
+	}
+	if len(lines) == 0 {
+		t.Fatal("explain returned no rows")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // BenchmarkReadPageBySlug measures the indexed point lookup that will
@@ -258,10 +282,9 @@ func TestCatalogListQuery_UsesIndexedPlan(t *testing.T) {
 // the read hot path.
 //
 // As with BenchmarkListPagesByRepo, the catalog does not yet export a
-// Read API and this benchmark issues a GORM query in the shape the
-// future handler will use. SQLite-on-disk only; absolute numbers do
-// not transfer to TiDB. The scaling shape this benchmark guards is
-// O(log N) on a B-tree index — flat per-lookup cost regardless of N.
+// Read API and this benchmark issues a GORM query in the shape the future
+// handler will use. The scaling shape this benchmark guards is O(log N) on a
+// B-tree index — flat per-lookup cost regardless of N.
 func BenchmarkReadPageBySlug(b *testing.B) {
 	for _, n := range []int{100, 1000, 3000, 10000} {
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {

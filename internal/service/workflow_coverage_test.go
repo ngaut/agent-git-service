@@ -526,12 +526,7 @@ func createWorkflowRun(t *testing.T, svc *service.Service, repoID, workflowID ui
 
 func createWorkflowJob(t *testing.T, svc *service.Service, runID uint, name string) db.WorkflowRunJob {
 	t.Helper()
-	job := db.WorkflowRunJob{
-		RunID:      runID,
-		Name:       name,
-		Status:     db.RunCompleted,
-		Conclusion: db.ConclusionSuccess,
-	}
+	job := testWorkflowRunJob(runID, name)
 	if err := svc.DB.Create(&job).Error; err != nil {
 		t.Fatalf("create workflow job: %v", err)
 	}
@@ -555,12 +550,7 @@ func createArtifact(t *testing.T, svc *service.Service, runID uint, name string)
 
 func createActionCache(t *testing.T, svc *service.Service, repoID uint, key, ref, version string) db.ActionCache {
 	t.Helper()
-	cache := db.ActionCache{
-		RepositoryID: repoID,
-		Key:          key,
-		Ref:          ref,
-		Version:      version,
-	}
+	cache := testActionCache(repoID, key, ref, version)
 	if err := svc.DB.Create(&cache).Error; err != nil {
 		t.Fatalf("create action cache: %v", err)
 	}

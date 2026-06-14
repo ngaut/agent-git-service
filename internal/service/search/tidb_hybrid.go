@@ -34,7 +34,7 @@ const commentLexicalScoreWeight = 0.25
 const auxiliaryLexicalScoreWeight = 0.5
 
 func supportsTiDBFullText(database *gorm.DB) bool {
-	return modeldb.SupportsTiDBSearch(database)
+	return modeldb.SupportsTiDBFullText(database)
 }
 
 func supportsTiDBANN(database *gorm.DB) bool {

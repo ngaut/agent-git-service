@@ -67,25 +67,12 @@ func wrapErrf(err error, format string, args ...any) error {
 }
 
 // isDuplicateErr reports whether err is a duplicate-key violation.
-// Works with both MySQL ("Duplicate entry") and SQLite ("UNIQUE constraint").
 func isDuplicateErr(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "Duplicate entry") || strings.Contains(msg, "UNIQUE constraint")
-}
-
-// isSQLiteLockErr reports transient SQLite lock/busy errors that are retryable.
-func isSQLiteLockErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "database is locked") ||
-		strings.Contains(msg, "database table is locked") ||
-		strings.Contains(msg, "database schema is locked") ||
-		strings.Contains(msg, "sqlite_busy")
 }
 
 // retryDelay returns a small linear backoff delay for transient DB retries.

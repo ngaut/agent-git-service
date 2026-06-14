@@ -2,36 +2,49 @@ package db
 
 import (
 	"log/slog"
-	"path/filepath"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
+
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
-func openSQLiteDB(t *testing.T, dsn string) *gorm.DB {
+func openTiDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: gormlogger.Discard,
-	})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
+	gdb, cleanup := testdb.OpenRaw(t, "db")
+	t.Cleanup(cleanup)
 	return gdb
 }
 
 func createVectorTables(t *testing.T, gdb *gorm.DB) {
 	t.Helper()
-	if err := gdb.Exec("CREATE TABLE issues (id integer primary key)").Error; err != nil {
+	if err := gdb.Exec("CREATE TABLE issues (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT)").Error; err != nil {
 		t.Fatalf("create issues: %v", err)
 	}
-	if err := gdb.Exec("CREATE TABLE pull_requests (id integer primary key)").Error; err != nil {
+	if err := gdb.Exec("CREATE TABLE pull_requests (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT)").Error; err != nil {
 		t.Fatalf("create pull_requests: %v", err)
 	}
+}
+
+func mysqlIndexColumns(gdb *gorm.DB, tableName, indexName string) ([]string, error) {
+	var rows []struct {
+		ColumnName string `gorm:"column:column_name"`
+	}
+	if err := gdb.Raw(`
+		SELECT COLUMN_NAME AS column_name
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+			AND TABLE_NAME = ?
+			AND INDEX_NAME = ?
+		ORDER BY SEQ_IN_INDEX
+	`, tableName, indexName).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	cols := make([]string, 0, len(rows))
+	for _, row := range rows {
+		cols = append(cols, row.ColumnName)
+	}
+	return cols, nil
 }
 
 func assertLogEntry(t *testing.T, entries []logEntry, level slog.Level, message string, attrKey string, attrValue any) {
@@ -53,35 +66,8 @@ func assertLogEntry(t *testing.T, entries []logEntry, level slog.Level, message 
 	t.Fatalf("expected log level %s message %q with %s=%v, got %#v", level, message, attrKey, attrValue, entries)
 }
 
-func TestInitVector_UnsupportedBackendLogsWarning(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "vector-readonly.db")
-	writerDB := openSQLiteDB(t, dbPath)
-	createVectorTables(t, writerDB)
-	if sqlDB, err := writerDB.DB(); err == nil {
-		if err := sqlDB.Close(); err != nil {
-			t.Fatalf("close sqlite: %v", err)
-		}
-	}
-
-	readOnlyDB := openSQLiteDB(t, "file:"+dbPath+"?mode=ro")
-
-	sink := captureLogs(t)
-	InitVector(readOnlyDB, 3)
-	entries := sink.Entries()
-
-	assertLogEntry(t, entries, slog.LevelWarn, "db: InitVector: issues", "", nil)
-	assertLogEntry(t, entries, slog.LevelWarn, "db: InitVector: pull_requests", "", nil)
-
-	if readOnlyDB.Migrator().HasColumn("issues", "embedding") {
-		t.Fatal("expected issues.embedding to remain absent on read-only database")
-	}
-	if readOnlyDB.Migrator().HasColumn("pull_requests", "embedding") {
-		t.Fatal("expected pull_requests.embedding to remain absent on read-only database")
-	}
-}
-
-func TestInitVector_DuplicateColumnLogsInfo(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "vector-dup.db"))
+func TestInitVector_DuplicateColumnLogsDebug(t *testing.T) {
+	gdb := openTiDB(t)
 	createVectorTables(t, gdb)
 
 	if err := gdb.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {
@@ -95,8 +81,8 @@ func TestInitVector_DuplicateColumnLogsInfo(t *testing.T) {
 	InitVector(gdb, 3)
 	entries := sink.Entries()
 
-	assertLogEntry(t, entries, slog.LevelInfo, "db: InitVector: embedding column already exists", "table", "issues")
-	assertLogEntry(t, entries, slog.LevelInfo, "db: InitVector: embedding column already exists", "table", "pull_requests")
+	assertLogEntry(t, entries, slog.LevelDebug, "db: InitVector: embedding column already exists", "table", "issues")
+	assertLogEntry(t, entries, slog.LevelDebug, "db: InitVector: embedding column already exists", "table", "pull_requests")
 	for _, entry := range entries {
 		if entry.level == slog.LevelWarn {
 			t.Fatalf("expected no warn logs, got %#v", entries)
@@ -105,7 +91,7 @@ func TestInitVector_DuplicateColumnLogsInfo(t *testing.T) {
 }
 
 func TestInitVector_InvalidDimensionsNoOp(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "vector-invalid.db"))
+	gdb := openTiDB(t)
 	createVectorTables(t, gdb)
 
 	sink := captureLogs(t)

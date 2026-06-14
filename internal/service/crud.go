@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/ngaut/agent-git-service/internal/db"
 
 	"gorm.io/gorm"
@@ -42,8 +44,83 @@ func nextIssueOrPRNumber(s *Service, ctx context.Context, repoID uint) (int, err
 }
 
 // nextIssueOrPRNumberTx is the tx-aware variant of nextIssueOrPRNumber.
-// Combines both MAX queries into a single round-trip using cross-database compatible SQL.
+// Issue and PR numbers share one repository-scoped namespace, so allocation
+// must use a single row instead of independent MAX(number) queries.
 func nextIssueOrPRNumberTx(tx *gorm.DB, repoID uint) (int, error) {
+	if err := ensureIssuePRNumberCounterTx(tx, repoID); err != nil {
+		return 0, fmt.Errorf("nextIssueOrPRNumber: ensure counter: %w", err)
+	}
+
+	now := time.Now().UTC()
+	switch tx.Dialector.Name() {
+	case "mysql":
+		res := tx.Exec(
+			"UPDATE issue_pr_number_counters SET next_number = LAST_INSERT_ID(next_number + 1), updated_at = ? WHERE repository_id = ?",
+			now, repoID,
+		)
+		if res.Error != nil {
+			return 0, fmt.Errorf("nextIssueOrPRNumber: advance counter: %w", res.Error)
+		}
+		if res.RowsAffected != 1 {
+			return 0, ErrNotFound
+		}
+		var nextAfter int
+		if err := tx.Raw("SELECT LAST_INSERT_ID()").Scan(&nextAfter).Error; err != nil {
+			return 0, fmt.Errorf("nextIssueOrPRNumber: read counter: %w", err)
+		}
+		return nextAfter - 1, nil
+	default:
+		var counter db.IssuePRNumberCounter
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&counter, "repository_id = ?", repoID).Error; err != nil {
+			return 0, err
+		}
+		number := counter.NextNumber
+		if err := tx.Model(&db.IssuePRNumberCounter{}).
+			Where("repository_id = ?", repoID).
+			Updates(map[string]any{
+				"next_number": number + 1,
+				"updated_at":  now,
+			}).Error; err != nil {
+			return 0, fmt.Errorf("nextIssueOrPRNumber: advance counter: %w", err)
+		}
+		return number, nil
+	}
+}
+
+func ensureIssuePRNumberCounterTx(tx *gorm.DB, repoID uint) error {
+	maxNum, err := maxIssueOrPRNumberTx(tx, repoID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	counter := db.IssuePRNumberCounter{
+		RepositoryID: repoID,
+		NextNumber:   maxNum + 1,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&counter).Error; err != nil {
+		return err
+	}
+
+	var persisted db.IssuePRNumberCounter
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		First(&persisted, "repository_id = ?", repoID).Error; err != nil {
+		return err
+	}
+	if persisted.NextNumber > maxNum {
+		return nil
+	}
+	return tx.Model(&db.IssuePRNumberCounter{}).
+		Where("repository_id = ?", repoID).
+		Updates(map[string]any{
+			"next_number": maxNum + 1,
+			"updated_at":  now,
+		}).Error
+}
+
+func maxIssueOrPRNumberTx(tx *gorm.DB, repoID uint) (int, error) {
 	var maxNum int
 	err := tx.Raw(
 		"SELECT CASE WHEN "+
@@ -51,11 +128,11 @@ func nextIssueOrPRNumberTx(tx *gorm.DB, repoID uint) (int, error) {
 			"COALESCE((SELECT MAX(number) FROM pull_requests WHERE repository_id = ?), 0) "+
 			"THEN COALESCE((SELECT MAX(number) FROM issues WHERE repository_id = ?), 0) "+
 			"ELSE COALESCE((SELECT MAX(number) FROM pull_requests WHERE repository_id = ?), 0) "+
-			"END + 1",
+			"END",
 		repoID, repoID, repoID, repoID,
 	).Scan(&maxNum).Error
 	if err != nil {
-		return 0, fmt.Errorf("nextIssueOrPRNumber: %w", err)
+		return 0, fmt.Errorf("maxIssueOrPRNumber: %w", err)
 	}
 	return maxNum, nil
 }
@@ -65,9 +142,7 @@ func nextIssueOrPRNumberTx(tx *gorm.DB, repoID uint) (int, error) {
 func lockRepoForNumbering(tx *gorm.DB, repoID uint) error {
 	var repo db.Repository
 	q := tx.Select("id")
-	if tx.Dialector.Name() != "sqlite" {
-		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
-	}
+	q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 	return q.First(&repo, repoID).Error
 }
 

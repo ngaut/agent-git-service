@@ -845,11 +845,14 @@ func TestService_completeRun_MarksRunAndJobs(t *testing.T) {
 	svc.DB.Create(&run)
 
 	// Create a job.
+	now := time.Now()
 	job := db.WorkflowRunJob{
-		RunID:      run.ID,
-		Name:       "build",
-		Status:     db.RunInProgress,
-		Conclusion: "",
+		RunID:       run.ID,
+		Name:        "build",
+		Status:      db.RunInProgress,
+		Conclusion:  "",
+		StartedAt:   now,
+		CompletedAt: now,
 	}
 	svc.DB.Create(&job)
 

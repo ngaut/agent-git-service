@@ -617,6 +617,7 @@ func TestPublicRepoAnonymousAccess(t *testing.T) {
 		RepoFullName: "testuser/public-anon",
 		Title:        "hello",
 		Body:         "world",
+		AuthorLogin:  h.User.Login,
 	})
 	require.NoError(t, err)
 

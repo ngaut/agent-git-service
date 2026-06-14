@@ -3,13 +3,14 @@ package service_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
-// setupTestService builds a bare service backed by SQLite + temp gitstore.
+// setupTestService builds a bare service backed by TiDB + temp gitstore.
 // Thin wrapper over testharness.NewService to preserve the existing call-site
 // signature across hundreds of service-layer tests.
 func setupTestService(t testing.TB) (*service.Service, func()) {
@@ -30,5 +31,27 @@ func setupRepoForTest(t testing.TB, svc *service.Service, login, repoName string
 	_, err := svc.CreateRepo(context.Background(), service.CreateRepoInput{OwnerLogin: login, Name: repoName})
 	if err != nil {
 		t.Fatalf("setupRepoForTest failed: %v", err)
+	}
+}
+
+func testWorkflowRunJob(runID uint, name string) db.WorkflowRunJob {
+	now := time.Now()
+	return db.WorkflowRunJob{
+		RunID:       runID,
+		Name:        name,
+		Status:      db.RunCompleted,
+		Conclusion:  db.ConclusionSuccess,
+		StartedAt:   now,
+		CompletedAt: now,
+	}
+}
+
+func testActionCache(repoID uint, key, ref, version string) db.ActionCache {
+	return db.ActionCache{
+		RepositoryID:   repoID,
+		Key:            key,
+		Ref:            ref,
+		Version:        version,
+		LastAccessedAt: time.Now(),
 	}
 }

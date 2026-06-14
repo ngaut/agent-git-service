@@ -2,50 +2,43 @@ package testharness
 
 import (
 	"os"
-	"path/filepath"
+	"sync"
 	"testing"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
+	"gorm.io/gorm"
 )
 
-// ServiceConfig tunes the bare-service fixture produced by NewService. A zero
-// value yields the same defaults that the current service-package test files
-// use: file-backed SQLite with WAL, no foreign-key enforcement, a single DB
-// connection, and the NopEmbedder. Set fields to opt into stricter modes.
-type ServiceConfig struct {
-	// ForeignKeys enables PRAGMA foreign_keys=ON. Required for tests that
-	// assert cascade-delete behaviour; default is off because SQLite's default
-	// behaviour matches what TiDB does on delete.
-	ForeignKeys bool
+var serviceSchemaTemplate struct {
+	once sync.Once
+	name string
+	pool *testdb.SchemaPool
+	err  error
+}
 
-	// MaxOpenConns pins the SQL pool to at most N connections. The default test
-	// fixture uses 1 because SQLite PRAGMAs such as busy_timeout and WAL are
-	// connection-local, and unrestricted pools reintroduce flaky "database is
-	// locked" failures when background goroutines open fresh writers.
-	// Zero means "use the fixture default".
+// ServiceConfig tunes the bare-service fixture produced by NewService. A zero
+// value yields an isolated migrated TiDB database, an isolated gitstore, and the
+// NopEmbedder.
+type ServiceConfig struct {
+	// MaxOpenConns optionally overrides the default TiDB test connection pool
+	// limit for tests that need stricter concurrency behavior.
 	MaxOpenConns int
 
 	// Embedder overrides the default NopEmbedder. Most tests want the default;
 	// only tests exercising the embedding code path set this.
 	Embedder embedding.Embedder
-
-	// OpenDB overrides how the underlying SQLite connection is opened. Used
-	// by tests that need a custom driver (e.g. a vector-extension shim).
-	// When nil, the default sqlite.Open(dbPath) is used.
-	OpenDB func(dbPath string) (*gorm.DB, error)
 }
 
-// NewService builds a bare *service.Service wired to an isolated SQLite
-// database under tb.TempDir() and an isolated gitstore in the same dir. The
-// returned cleanup func closes the database and removes the temp directory.
-// Migrations are run through db.Migrate so the test schema matches production.
+// NewService builds a bare *service.Service wired to an isolated TiDB database
+// and an isolated gitstore under a temp directory. The
+// returned cleanup func resets the database and removes the temp directory.
+// A package-level template is migrated through db.Migrate once, then test
+// databases are pooled and data-reset between tests.
 //
 // Callers that need the full HTTP surface should keep using testharness.New;
 // this fixture is for service-layer tests that never touch the router.
@@ -56,45 +49,16 @@ func NewService(tb testing.TB, cfg ServiceConfig) (*service.Service, func()) {
 	if err != nil {
 		tb.Fatalf("testharness: mkdir temp: %v", err)
 	}
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
 
-	open := cfg.OpenDB
-	if open == nil {
-		open = func(p string) (*gorm.DB, error) { return gorm.Open(sqlite.Open(p), &gorm.Config{}) }
-	}
-	gdb, err := open(dbPath)
-	if err != nil {
-		tb.Fatalf("testharness: open sqlite: %v", err)
-	}
+	gdb, dbCleanup := serviceTemplatePool(tb).Open(tb)
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		tb.Fatalf("testharness: get underlying sql.DB: %v", err)
 	}
-	if cfg.ForeignKeys {
-		if err := gdb.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
-			tb.Fatalf("testharness: foreign_keys=ON: %v", err)
-		}
+	if cfg.MaxOpenConns > 0 {
+		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+		sqlDB.SetMaxIdleConns(cfg.MaxOpenConns)
 	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		tb.Fatalf("testharness: busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		tb.Fatalf("testharness: journal_mode: %v", err)
-	}
-
-	if err := db.Migrate(gdb); err != nil {
-		tb.Fatalf("testharness: migrate: %v", err)
-	}
-
-	// Apply MaxOpenConns AFTER migrations — db.Migrate runs PRAGMA queries that
-	// can open a second connection transiently, which would deadlock under
-	// MaxOpenConns=1.
-	maxOpenConns := cfg.MaxOpenConns
-	if maxOpenConns <= 0 {
-		maxOpenConns = 1
-	}
-	sqlDB.SetMaxOpenConns(maxOpenConns)
-	sqlDB.SetMaxIdleConns(maxOpenConns)
 
 	store, err := gitstore.New(tmpDir)
 	if err != nil {
@@ -129,8 +93,50 @@ func NewService(tb testing.TB, cfg ServiceConfig) (*service.Service, func()) {
 	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
 
 	cleanup := func() {
-		_ = sqlDB.Close()
+		dbCleanup()
 		_ = os.RemoveAll(tmpDir)
 	}
 	return svc, cleanup
+}
+
+// OpenServiceDB returns an isolated migrated TiDB database from the same schema
+// pool used by NewService. It is for tests that need a tenant DB or bare DB
+// without another gitstore-backed Service fixture.
+func OpenServiceDB(tb testing.TB) (*gorm.DB, func()) {
+	tb.Helper()
+	return serviceTemplatePool(tb).Open(tb)
+}
+
+func serviceTemplatePool(tb testing.TB) *testdb.SchemaPool {
+	tb.Helper()
+	serviceSchemaTemplate.once.Do(func() {
+		gdb, cleanup := testdb.OpenRaw(tb, "service_template")
+		_ = cleanup
+		if err := gdb.Raw("SELECT DATABASE()").Scan(&serviceSchemaTemplate.name).Error; err != nil {
+			serviceSchemaTemplate.err = err
+			return
+		}
+		if err := db.Migrate(gdb); err != nil {
+			serviceSchemaTemplate.err = err
+			return
+		}
+		db.InitVector(gdb, 3)
+		serviceSchemaTemplate.pool = &testdb.SchemaPool{
+			TemplateDB: serviceSchemaTemplate.name,
+			Prefix:     "service",
+		}
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if serviceSchemaTemplate.err != nil {
+		tb.Fatalf("testharness: prepare service schema template: %v", serviceSchemaTemplate.err)
+	}
+	if serviceSchemaTemplate.name == "" {
+		tb.Fatalf("testharness: service schema template has no database name")
+	}
+	if serviceSchemaTemplate.pool == nil {
+		tb.Fatalf("testharness: service schema pool was not initialized")
+	}
+	return serviceSchemaTemplate.pool
 }

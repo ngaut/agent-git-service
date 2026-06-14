@@ -305,13 +305,14 @@ func TestMergePRRecord_NoGitStore(t *testing.T) {
 	repo := db.Repository{Name: "nogs-repo", FullName: "nogs-user/nogs-repo", OwnerID: user.ID}
 	svc.DB.Create(&repo)
 	pr := db.PullRequest{
-		Number:       1,
-		RepositoryID: repo.ID,
-		Title:        "no git pr",
-		State:        db.StateOpen,
-		HeadRef:      "feature",
-		BaseRef:      "main",
-		AuthorID:     user.ID,
+		Number:           1,
+		RepositoryID:     repo.ID,
+		HeadRepositoryID: repo.ID,
+		Title:            "no git pr",
+		State:            db.StateOpen,
+		HeadRef:          "feature",
+		BaseRef:          "main",
+		AuthorID:         user.ID,
 	}
 	svc.DB.Create(&pr)
 

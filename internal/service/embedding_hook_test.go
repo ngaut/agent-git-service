@@ -10,7 +10,6 @@ import (
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -38,23 +37,39 @@ func TestEmbedHook_NopEmbedderShortCircuit(t *testing.T) {
 	}
 }
 
+func openEmbeddingTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	gdb, cleanup := openVectorServiceTestDB(t)
+	t.Cleanup(cleanup)
+	if !gdb.Migrator().HasColumn("issues", "embedding") || !gdb.Migrator().HasColumn("pull_requests", "embedding") {
+		t.Skip("TiDB playground does not support VECTOR columns")
+	}
+	return gdb
+}
+
+func seedEmbeddingRepo(t *testing.T, gdb *gorm.DB) (db.User, db.Repository) {
+	t.Helper()
+
+	owner := db.User{Login: "testuser", Name: "Test User", Type: db.TypeUser}
+	if err := gdb.Create(&owner).Error; err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
+	repo := db.Repository{
+		Name:          "embedding",
+		FullName:      "testuser/embedding",
+		OwnerID:       owner.ID,
+		DefaultBranch: "main",
+		Visibility:    "public",
+	}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	return owner, repo
+}
+
 // TestEmbedHook_SuccessfulEmbedding tests that embedding is stored in DB.
 func TestEmbedHook_SuccessfulEmbedding(t *testing.T) {
-	// Setup in-memory SQLite DB
-	tmpDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
-	}
-
-	// Run migrations for issues table
-	if err := db.Migrate(tmpDB); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-
-	// Add embedding column (normally done by InitVector for TiDB)
-	if err := tmpDB.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("failed to add embedding column: %v", err)
-	}
+	tmpDB := openEmbeddingTestDB(t)
 
 	svc := &Service{
 		DB:       tmpDB,
@@ -63,15 +78,14 @@ func TestEmbedHook_SuccessfulEmbedding(t *testing.T) {
 	}
 
 	// Create a test issue
+	author, repo := seedEmbeddingRepo(t, svc.DB)
 	issue := db.Issue{
-		Number: 1,
-		Title:  "Test Issue",
-		Body:   "Test Body",
-		State:  "open",
-		Author: db.User{Login: "testuser"},
-	}
-	if err := svc.DB.Create(&issue.Author).Error; err != nil {
-		t.Fatalf("failed to create author: %v", err)
+		Number:       1,
+		RepositoryID: repo.ID,
+		Title:        "Test Issue",
+		Body:         "Test Body",
+		State:        "open",
+		AuthorID:     author.ID,
 	}
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("failed to create issue: %v", err)
@@ -79,8 +93,8 @@ func TestEmbedHook_SuccessfulEmbedding(t *testing.T) {
 
 	t.Logf("Created issue with ID: %d", issue.ID)
 
-	// Verify we can manually update the embedding column
-	if err := svc.DB.Exec("UPDATE issues SET embedding = ? WHERE id = ?", "[manual]", issue.ID).Error; err != nil {
+	// Verify TiDB accepts a valid VECTOR literal through the embedding column.
+	if err := svc.DB.Exec("UPDATE issues SET embedding = ? WHERE id = ?", "[0.9,0.8,0.7]", issue.ID).Error; err != nil {
 		t.Fatalf("manual update failed: %v", err)
 	}
 	var checkEmbedding string
@@ -126,18 +140,7 @@ func TestEmbedHook_SuccessfulEmbedding(t *testing.T) {
 
 // TestEmbedHook_EmbedFailureLeavesNull tests that embed failure leaves column NULL.
 func TestEmbedHook_EmbedFailureLeavesNull(t *testing.T) {
-	tmpDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
-	}
-
-	if err := db.Migrate(tmpDB); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-
-	if err := tmpDB.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("failed to add embedding column: %v", err)
-	}
+	tmpDB := openEmbeddingTestDB(t)
 
 	fakeEmbedder := &FakeEmbedder{Vec: nil, Err: errors.New("embed failed")}
 	svc := &Service{
@@ -147,15 +150,14 @@ func TestEmbedHook_EmbedFailureLeavesNull(t *testing.T) {
 	}
 
 	// Create a test issue
+	author, repo := seedEmbeddingRepo(t, svc.DB)
 	issue := db.Issue{
-		Number: 1,
-		Title:  "Test Issue",
-		Body:   "Test Body",
-		State:  "open",
-		Author: db.User{Login: "testuser"},
-	}
-	if err := svc.DB.Create(&issue.Author).Error; err != nil {
-		t.Fatalf("failed to create author: %v", err)
+		Number:       1,
+		RepositoryID: repo.ID,
+		Title:        "Test Issue",
+		Body:         "Test Body",
+		State:        "open",
+		AuthorID:     author.ID,
 	}
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("failed to create issue: %v", err)
@@ -185,18 +187,7 @@ func TestEmbedHook_EmbedFailureLeavesNull(t *testing.T) {
 
 // TestEmbedHook_TextTruncation tests that text is truncated by embedding tokens.
 func TestEmbedHook_TextTruncation(t *testing.T) {
-	tmpDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
-	}
-
-	if err := db.Migrate(tmpDB); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-
-	if err := tmpDB.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("failed to add embedding column: %v", err)
-	}
+	tmpDB := openEmbeddingTestDB(t)
 
 	fakeEmbedder := &FakeEmbedder{Vec: []float32{0.1, 0.2, 0.3}}
 	svc := &Service{
@@ -206,15 +197,14 @@ func TestEmbedHook_TextTruncation(t *testing.T) {
 	}
 
 	// Create a test issue
+	author, repo := seedEmbeddingRepo(t, svc.DB)
 	issue := db.Issue{
-		Number: 1,
-		Title:  "Test",
-		Body:   "Test",
-		State:  "open",
-		Author: db.User{Login: "testuser"},
-	}
-	if err := svc.DB.Create(&issue.Author).Error; err != nil {
-		t.Fatalf("failed to create author: %v", err)
+		Number:       1,
+		RepositoryID: repo.ID,
+		Title:        "Test",
+		Body:         "Test",
+		State:        "open",
+		AuthorID:     author.ID,
 	}
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("failed to create issue: %v", err)
@@ -254,18 +244,7 @@ func TestEmbedHook_TextTruncation(t *testing.T) {
 
 // TestEmbedHook_ReEmbedOnUpdate tests that updating title/body triggers re-embedding.
 func TestEmbedHook_ReEmbedOnUpdate(t *testing.T) {
-	tmpDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
-	}
-
-	if err := db.Migrate(tmpDB); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-
-	if err := tmpDB.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("failed to add embedding column: %v", err)
-	}
+	tmpDB := openEmbeddingTestDB(t)
 
 	fakeEmbedder := &FakeEmbedder{Vec: []float32{0.1, 0.2, 0.3}}
 	svc := &Service{
@@ -275,18 +254,16 @@ func TestEmbedHook_ReEmbedOnUpdate(t *testing.T) {
 	}
 
 	// Create a test user
-	user := db.User{Login: "testuser"}
-	if err := svc.DB.Create(&user).Error; err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
+	user, repo := seedEmbeddingRepo(t, svc.DB)
 
 	// Create a test issue
 	issue := db.Issue{
-		Number:   1,
-		Title:    "Original Title",
-		Body:     "Original Body",
-		State:    "open",
-		AuthorID: user.ID,
+		Number:       1,
+		RepositoryID: repo.ID,
+		Title:        "Original Title",
+		Body:         "Original Body",
+		State:        "open",
+		AuthorID:     user.ID,
 	}
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("failed to create issue: %v", err)
@@ -314,18 +291,7 @@ func TestEmbedHook_ReEmbedOnUpdate(t *testing.T) {
 
 // TestEmbedHook_NoReEmbedOnStateChange tests that updating state only doesn't trigger re-embedding.
 func TestEmbedHook_NoReEmbedOnStateChange(t *testing.T) {
-	tmpDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
-	}
-
-	if err := db.Migrate(tmpDB); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-
-	if err := tmpDB.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("failed to add embedding column: %v", err)
-	}
+	tmpDB := openEmbeddingTestDB(t)
 
 	fakeEmbedder := &FakeEmbedder{Vec: []float32{0.1, 0.2, 0.3}}
 	svc := &Service{
@@ -335,18 +301,16 @@ func TestEmbedHook_NoReEmbedOnStateChange(t *testing.T) {
 	}
 
 	// Create a test user
-	user := db.User{Login: "testuser"}
-	if err := svc.DB.Create(&user).Error; err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
+	user, repo := seedEmbeddingRepo(t, svc.DB)
 
 	// Create a test issue
 	issue := db.Issue{
-		Number:   1,
-		Title:    "Test Title",
-		Body:     "Test Body",
-		State:    "open",
-		AuthorID: user.ID,
+		Number:       1,
+		RepositoryID: repo.ID,
+		Title:        "Test Title",
+		Body:         "Test Body",
+		State:        "open",
+		AuthorID:     user.ID,
 	}
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("failed to create issue: %v", err)
@@ -373,18 +337,7 @@ func TestEmbedHook_NoReEmbedOnStateChange(t *testing.T) {
 
 // TestEmbedHook_EmbedPR tests EmbedPR function.
 func TestEmbedHook_EmbedPR(t *testing.T) {
-	tmpDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
-	}
-
-	if err := db.Migrate(tmpDB); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-
-	if err := tmpDB.Exec("ALTER TABLE pull_requests ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("failed to add embedding column: %v", err)
-	}
+	tmpDB := openEmbeddingTestDB(t)
 
 	fakeEmbedder := &FakeEmbedder{Vec: []float32{0.1, 0.2, 0.3}}
 	svc := &Service{
@@ -394,17 +347,17 @@ func TestEmbedHook_EmbedPR(t *testing.T) {
 	}
 
 	// Create a test PR
+	author, repo := seedEmbeddingRepo(t, svc.DB)
 	pr := db.PullRequest{
-		Number:  1,
-		Title:   "Test PR",
-		Body:    "Test Body",
-		State:   "open",
-		HeadRef: "feature",
-		BaseRef: "main",
-		Author:  db.User{Login: "testuser"},
-	}
-	if err := svc.DB.Create(&pr.Author).Error; err != nil {
-		t.Fatalf("failed to create author: %v", err)
+		Number:           1,
+		RepositoryID:     repo.ID,
+		HeadRepositoryID: repo.ID,
+		Title:            "Test PR",
+		Body:             "Test Body",
+		State:            "open",
+		HeadRef:          "feature",
+		BaseRef:          "main",
+		AuthorID:         author.ID,
 	}
 	if err := svc.DB.Create(&pr).Error; err != nil {
 		t.Fatalf("failed to create PR: %v", err)
