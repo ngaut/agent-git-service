@@ -5,8 +5,7 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-// LargeText keeps issue/PR-style body fields dialect-aware:
-// MySQL/TiDB gets MEDIUMTEXT, other backends use TEXT.
+// LargeText keeps issue/PR-style body fields large enough for TiDB/MySQL.
 type LargeText string
 
 func (LargeText) GormDataType() string {

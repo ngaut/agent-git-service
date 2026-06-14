@@ -32,11 +32,17 @@ var wikiSearchVectorIndex = wikiSearchVectorIndexSpec{
 // MigrateWikiSearch provisions TiDB-native search structures for wiki search.
 //
 // This is intentionally best-effort, matching MigrateIssueSearch: non-TiDB
-// backends continue to use fallback search paths, and individual DDL failures
-// are logged without blocking startup.
+// backends continue to use fallback search paths, and TiDB variants only run
+// FTS/vector DDL after the matching capability probe succeeds.
 func MigrateWikiSearch(database *gorm.DB) error {
 	if !IsTiDB(database) {
 		ensureWikiSearchEmbeddingTextColumn(database)
+		return nil
+	}
+	if !SupportsVectorDistance(database) {
+		ensureWikiSearchEmbeddingTextColumn(database)
+	}
+	if !SupportsTiDBFullText(database) {
 		return nil
 	}
 	for _, idx := range wikiSearchFullTextIndexes {
@@ -96,7 +102,7 @@ func ensureWikiFullTextIndex(database *gorm.DB, idx wikiSearchFullTextIndex) {
 }
 
 func ensureWikiSearchVector(database *gorm.DB, dims int) {
-	if dims <= 0 || !IsTiDB(database) {
+	if dims <= 0 || !SupportsVectorDistance(database) {
 		return
 	}
 	migrator := database.Migrator()
@@ -170,7 +176,7 @@ func wikiSearchEmbeddingColumnIsVector(database *gorm.DB) bool {
 }
 
 func ensureWikiSearchVectorIndex(database *gorm.DB) {
-	if !IsTiDB(database) {
+	if !SupportsVectorDistance(database) {
 		return
 	}
 	migrator := database.Migrator()
@@ -197,9 +203,6 @@ func wikiFullTextIndexDDL(idx wikiSearchFullTextIndex) string {
 }
 
 func wikiSearchAddTextEmbeddingDDL(database *gorm.DB) string {
-	if database != nil && database.Dialector != nil && database.Dialector.Name() == "postgres" {
-		return `ALTER TABLE "wiki_search_documents" ADD COLUMN "embedding" TEXT`
-	}
 	return "ALTER TABLE `wiki_search_documents` ADD COLUMN `embedding` TEXT"
 }
 
