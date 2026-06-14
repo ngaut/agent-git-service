@@ -1831,7 +1831,7 @@ func TestWikiSearchUpdateClearsStaleEmbeddingOnEmbedFailure(t *testing.T) {
 	}
 }
 
-func TestWikiSearchSelfHealsStaleStoredTitlesFromSlug(t *testing.T) {
+func TestWikiSearchUsesStoredTitleAndReindexRepairsStaleTitle(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
 	ctx := context.Background()
@@ -1876,15 +1876,26 @@ func TestWikiSearchSelfHealsStaleStoredTitlesFromSlug(t *testing.T) {
 		t.Fatalf("results = %#v, want guides/plain-page", resp.Results)
 	}
 	if resp.Results[0].Title != "Plain Page" {
-		t.Fatalf("result title = %q, want Plain Page", resp.Results[0].Title)
+		t.Fatalf("result title = %q, want slug-derived title without search-time writeback", resp.Results[0].Title)
 	}
 
 	var stored db.WikiSearchDocument
 	if err := svc.DB.Where("repository_id = ? AND slug = ?", repo.ID, "guides/plain-page").First(&stored).Error; err != nil {
 		t.Fatalf("reload stored doc: %v", err)
 	}
+	if stored.Title != "Legacy Heading" {
+		t.Fatalf("stored title = %q, want search not to write back title normalization", stored.Title)
+	}
+
+	if _, err := svc.ReindexWikiSearch(ctx, full); err != nil {
+		t.Fatalf("ReindexWikiSearch: %v", err)
+	}
+	stored = db.WikiSearchDocument{}
+	if err := svc.DB.Where("repository_id = ? AND slug = ?", repo.ID, "guides/plain-page").First(&stored).Error; err != nil {
+		t.Fatalf("reload stored doc after reindex: %v", err)
+	}
 	if stored.Title != "Plain Page" {
-		t.Fatalf("stored title = %q, want Plain Page", stored.Title)
+		t.Fatalf("stored title after reindex = %q, want Plain Page", stored.Title)
 	}
 }
 
