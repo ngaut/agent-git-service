@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -117,6 +118,23 @@ func (s *Service) RemoveAllWikiPageLabels(ctx context.Context, repoFullName, slu
 func (s *Service) ensureWikiPageForLabels(ctx context.Context, repoFullName, slug string) error {
 	if err := validateReadableWikiSlug(slug); err != nil {
 		return ErrNotFound
+	}
+	if rep, err := s.getRepoBase(ctx, repoFullName); err == nil && s.WikiCatalog != nil {
+		if refreshErr := s.ensureWikiCatalogCurrent(ctx, repoFullName); refreshErr != nil {
+			slog.WarnContext(ctx, "wiki label page catalog refresh failed; falling back to git", "repo", repoFullName, "slug", slug, "error", refreshErr)
+		} else if ready, readyErr := s.wikiCatalogMatchesLiveHead(ctx, repoFullName, rep.ID); readyErr != nil {
+			slog.WarnContext(ctx, "wiki label page catalog freshness check failed; falling back to git", "repo", repoFullName, "slug", slug, "error", readyErr)
+		} else if ready {
+			if _, err := s.loadLiveWikiPage(ctx, rep.ID, slug); err == nil {
+				return nil
+			} else if errors.Is(err, ErrNotFound) {
+				return ErrNotFound
+			} else {
+				return err
+			}
+		}
+	} else if err != nil {
+		return err
 	}
 	if s.Git == nil {
 		return fmt.Errorf("git store unavailable")

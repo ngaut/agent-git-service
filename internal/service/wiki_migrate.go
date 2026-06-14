@@ -177,6 +177,36 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 	return nil
 }
 
+func (s *Service) ensureWikiCatalogReadyForLiveHead(ctx context.Context, repoFullName string, repoID uint) (bool, error) {
+	if s.Git == nil || s.WikiCatalog == nil {
+		return false, nil
+	}
+	full := wikiRepoFullName(repoFullName)
+	if !s.Git.Exists(ctx, full) {
+		return false, nil
+	}
+	last, err := s.loadLatestWikiChangesetState(ctx, repoID)
+	if err != nil {
+		return false, fmt.Errorf("read catalog head for %q: %w", repoFullName, err)
+	}
+	headSHA, err := s.Git.ResolveContentCommit(ctx, full, wikiDefaultBranch)
+	if err != nil || strings.TrimSpace(headSHA) == "" {
+		if ensureErr := s.ensureWikiCatalogCurrent(ctx, repoFullName); ensureErr != nil {
+			return false, ensureErr
+		}
+		return false, nil
+	}
+	headSHA = strings.ToLower(strings.TrimSpace(headSHA))
+	if strings.EqualFold(last.CommitSHA, headSHA) {
+		return true, nil
+	}
+	if last.CommitSHA != "" && !last.allowGitBackfillReset() {
+		return false, nil
+	}
+	s.kickBackgroundWikiMigration(ctx, db.Repository{ID: repoID, FullName: repoFullName})
+	return false, nil
+}
+
 // KickBackgroundWikiMigration schedules an asynchronous repo-scoped wiki
 // migration using the caller context for repo identity lookup and the server
 // lifecycle context for the background worker. Only one background migration
