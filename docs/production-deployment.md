@@ -182,11 +182,14 @@ Set the console URL and allowed browser origins:
 
 ```env
 CONSOLE_BASE_URL=https://console.example.com
+OAUTH_DEVICE_VERIFICATION_URL=https://console.example.com/device-login
 CORS_ALLOWED_ORIGINS=https://console.example.com
 ```
 
 When `CORS_ALLOWED_ORIGINS` is empty, the server derives local development
 origins from `CONSOLE_BASE_URL`.
+When `OAUTH_DEVICE_VERIFICATION_URL` is set, device-flow clients show that
+external console URL instead of AGS's built-in `/login/device` fallback page.
 
 Allowed browser origins can also read the `X-Request-Id` response header via
 `Access-Control-Expose-Headers` so frontend and API clients can correlate

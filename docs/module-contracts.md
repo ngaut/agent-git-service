@@ -56,7 +56,7 @@ The public import surface is intentionally small:
 | `mentions` | mention parsing and extraction helpers | stdlib | persistence or auth |
 | `metrics` | Prometheus collectors and recorder facade | Prometheus client, stdlib | business-rule ownership |
 | `middleware` | auth extraction, current-user context, request guards | `service`, `db` model types, logging/metrics helpers | transport handlers |
-| `oauth` | OAuth device-flow endpoints | `service`, middleware-compatible auth context | REST transform helpers |
+| `oauth` | OAuth device-flow endpoints and headless device approval API | `service`, middleware-compatible auth context | REST transform helpers |
 | `oidc` | OIDC discovery, device flow, token verification | HTTP helpers, stdlib | service persistence |
 | `randutil` | shared random-hex generation | crypto/rand, stdlib | callers' persistence rules |
 | `ratelimit` | GitHub-compatible rate-limit snapshots | stdlib | transport handlers |

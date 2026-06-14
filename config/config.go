@@ -86,6 +86,9 @@ type Config struct {
 
 	// ConsoleBaseURL is the base URL of the console frontend used for browser redirects.
 	ConsoleBaseURL string
+	// OAuthDeviceVerificationURL is the optional external console URL shown to
+	// device-flow users. When empty, the built-in /login/device fallback is used.
+	OAuthDeviceVerificationURL string
 
 	// Workflow execution sandbox configuration. Execution is fail-closed by
 	// default and only enabled when ENABLE_WORKFLOW_EXEC is set.
@@ -106,6 +109,7 @@ func New() (Config, error) {
 		Port:                                    os.Getenv("PORT"),
 		BaseURL:                                 os.Getenv("BASE_URL"),
 		ConsoleBaseURL:                          os.Getenv("CONSOLE_BASE_URL"),
+		OAuthDeviceVerificationURL:              os.Getenv("OAUTH_DEVICE_VERIFICATION_URL"),
 		DBdsn:                                   os.Getenv("DB_DSN"),
 		GitRepoDir:                              os.Getenv("GIT_REPO_DIR"),
 		ListenMode:                              os.Getenv("LISTEN_MODE"),
@@ -189,6 +193,7 @@ func Normalize(cfg Config) (Config, error) {
 	cfg.Port = firstNonEmpty(cfg.Port, "8080")
 	cfg.BaseURL = firstNonEmpty(cfg.BaseURL, "http://localhost:8080")
 	cfg.ConsoleBaseURL = firstNonEmpty(cfg.ConsoleBaseURL, "http://localhost:5173")
+	cfg.OAuthDeviceVerificationURL = strings.TrimSpace(cfg.OAuthDeviceVerificationURL)
 	cfg.GitRepoDir = firstNonEmpty(cfg.GitRepoDir, "gitrepos")
 	cfg.ListenMode = firstNonEmpty(cfg.ListenMode, "development")
 	cfg.Environment = strings.ToLower(strings.TrimSpace(firstNonEmpty(cfg.Environment, "production")))
@@ -234,6 +239,15 @@ func Normalize(cfg Config) (Config, error) {
 	}
 	if cfg.WorkflowExecNoFile <= 0 {
 		return Config{}, fmt.Errorf("invalid WORKFLOW_EXEC_NOFILE %d: must be a positive integer", cfg.WorkflowExecNoFile)
+	}
+	if cfg.OAuthDeviceVerificationURL != "" {
+		parsed, err := url.Parse(cfg.OAuthDeviceVerificationURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return Config{}, fmt.Errorf("invalid OAUTH_DEVICE_VERIFICATION_URL %q: must be an absolute HTTP(S) URL", cfg.OAuthDeviceVerificationURL)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return Config{}, fmt.Errorf("invalid OAUTH_DEVICE_VERIFICATION_URL %q: must use http or https", cfg.OAuthDeviceVerificationURL)
+		}
 	}
 	if strings.TrimSpace(cfg.OIDCProvider) == "" && (cfg.OIDCIssuer != "" || cfg.OIDCDiscoveryURL != "" || cfg.OIDCClientID != "") {
 		cfg.OIDCProvider = defaultOIDCProvider(cfg.OIDCIssuer, cfg.OIDCDiscoveryURL)

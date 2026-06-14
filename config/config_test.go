@@ -28,6 +28,9 @@ func TestNewDefaults(t *testing.T) {
 	if cfg.ConsoleBaseURL != "http://localhost:5173" {
 		t.Errorf("expected default ConsoleBaseURL, got %q", cfg.ConsoleBaseURL)
 	}
+	if cfg.OAuthDeviceVerificationURL != "" {
+		t.Errorf("expected default OAuthDeviceVerificationURL empty, got %q", cfg.OAuthDeviceVerificationURL)
+	}
 	if cfg.GitRepoDir != "gitrepos" {
 		t.Errorf("expected default GitRepoDir=gitrepos, got %q", cfg.GitRepoDir)
 	}
@@ -65,6 +68,7 @@ func TestNewOverrides(t *testing.T) {
 	t.Setenv("PORT", "9090")
 	t.Setenv("BASE_URL", "https://example.com")
 	t.Setenv("CONSOLE_BASE_URL", "https://console.example.com")
+	t.Setenv("OAUTH_DEVICE_VERIFICATION_URL", "https://console.example.com/device-login")
 	t.Setenv("GIT_REPO_DIR", "/tmp/repos")
 	t.Setenv("ENABLE_WORKFLOW_EXEC", "1")
 	t.Setenv("WORKFLOW_EXEC_IMAGE", "custom/bash:latest")
@@ -92,6 +96,9 @@ func TestNewOverrides(t *testing.T) {
 	}
 	if cfg.ConsoleBaseURL != "https://console.example.com" {
 		t.Errorf("expected ConsoleBaseURL=https://console.example.com, got %q", cfg.ConsoleBaseURL)
+	}
+	if cfg.OAuthDeviceVerificationURL != "https://console.example.com/device-login" {
+		t.Errorf("expected OAuthDeviceVerificationURL override, got %q", cfg.OAuthDeviceVerificationURL)
 	}
 	if cfg.GitRepoDir != "/tmp/repos" {
 		t.Errorf("expected GitRepoDir=/tmp/repos, got %q", cfg.GitRepoDir)
@@ -170,6 +177,36 @@ func TestNewLoadsConnectedLoginConfig(t *testing.T) {
 	if cfg.ConnectedLoginSubjectNamespaceClaim != "workspace_id" {
 		t.Fatalf("ConnectedLoginSubjectNamespaceClaim: got %q", cfg.ConnectedLoginSubjectNamespaceClaim)
 	}
+}
+
+func TestOAuthDeviceVerificationURLValidation(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
+
+	t.Run("trims valid url", func(t *testing.T) {
+		t.Setenv("OAUTH_DEVICE_VERIFICATION_URL", " https://console.example.com/device?tenant=one ")
+		cfg, err := New()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.OAuthDeviceVerificationURL != "https://console.example.com/device?tenant=one" {
+			t.Fatalf("unexpected OAuthDeviceVerificationURL: %q", cfg.OAuthDeviceVerificationURL)
+		}
+	})
+
+	t.Run("rejects invalid urls", func(t *testing.T) {
+		for _, raw := range []string{"console.example.com/device", "ftp://console.example.com/device", "https:///device"} {
+			t.Run(raw, func(t *testing.T) {
+				t.Setenv("OAUTH_DEVICE_VERIFICATION_URL", raw)
+				_, err := New()
+				if err == nil {
+					t.Fatalf("expected OAUTH_DEVICE_VERIFICATION_URL=%q to fail", raw)
+				}
+				if !strings.Contains(err.Error(), "OAUTH_DEVICE_VERIFICATION_URL") {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			})
+		}
+	})
 }
 
 func TestNewRejectsPartialConnectedLoginConfig(t *testing.T) {

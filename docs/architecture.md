@@ -54,7 +54,7 @@ full-text and vector-backed search behavior.
 | `internal/gitstore` | Bare-repository operations on disk |
 | `internal/githttp` | Smart HTTP bridge to `git-http-backend` |
 | `internal/middleware` | Auth and request-size middleware |
-| `internal/oauth` | OAuth device-flow endpoints |
+| `internal/oauth` | OAuth device-flow endpoints and headless device approval API |
 | `internal/oidc` | Generic OIDC discovery, device flow, and ID token verification client |
 | `internal/connectedlogin` | Configurable OAuth-style browser-login client for code exchange and userinfo |
 | `internal/embedding` | Optional embedding-backed search support |

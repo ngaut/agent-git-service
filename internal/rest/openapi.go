@@ -119,6 +119,17 @@ func buildRESTOpenAPIPaths() map[string]any {
 				"id_token": stringSchema("OIDC ID token to validate and map to a local user."),
 			}, []string{"id_token"}), nil, response(200, "Identity resolved")),
 		},
+		"/api/v3/oauth/device/approve": map[string]any{
+			"post": operation("approveOAuthDeviceCode", "Approve an OAuth device code for the authenticated human user.", auth(), jsonAndFormBody(true, map[string]any{
+				"user_code": stringSchema("User code displayed to the human during the OAuth device flow."),
+			}, []string{"user_code"}), nil, response(200, "Device code approved")),
+		},
+		"/api/v3/oauth/device/reject": map[string]any{
+			"post": operation("rejectOAuthDeviceCode", "Reject an OAuth device code for the authenticated human user.", auth(), jsonAndFormBody(true, map[string]any{
+				"user_code": stringSchema("User code displayed to the human during the OAuth device flow."),
+				"reason":    stringSchema("Optional rejection reason recorded in the device-code audit log."),
+			}, []string{"user_code"}), nil, response(200, "Device code rejected")),
+		},
 		"/auth/connected/login": map[string]any{
 			"get": operation("startConnectedLogin", "Redirect the browser to the configured connected login provider.", nil, nil, nil, response(302, "Redirect to connected login")),
 		},
@@ -461,6 +472,27 @@ func jsonBody(required bool, properties map[string]any, requiredProps []string) 
 		"required": required,
 		"content": map[string]any{
 			"application/json": map[string]any{
+				"schema": schema,
+			},
+		},
+	}
+}
+
+func jsonAndFormBody(required bool, properties map[string]any, requiredProps []string) map[string]any {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+	}
+	if len(requiredProps) > 0 {
+		schema["required"] = requiredProps
+	}
+	return map[string]any{
+		"required": required,
+		"content": map[string]any{
+			"application/json": map[string]any{
+				"schema": schema,
+			},
+			"application/x-www-form-urlencoded": map[string]any{
 				"schema": schema,
 			},
 		},

@@ -5,6 +5,7 @@ package oauth
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,10 +24,22 @@ const connectedLoginVerifierCookieName = "connected_login_verifier"
 
 // Handler holds the service dependency for OAuth endpoints.
 type Handler struct {
-	Svc *service.Service
+	Svc                   *service.Service
+	DeviceVerificationURL string
 }
 
 var pkceS256ChallengePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43,128}$`)
+
+// Option customizes OAuth handler behavior.
+type Option func(*Handler)
+
+// WithDeviceVerificationURL sets an external device verification page URL.
+// When unset, RequestDeviceCode falls back to the built-in /login/device page.
+func WithDeviceVerificationURL(raw string) Option {
+	return func(h *Handler) {
+		h.DeviceVerificationURL = strings.TrimSpace(raw)
+	}
+}
 
 type accessTokenRequest struct {
 	DeviceCode   string `json:"device_code"`
@@ -34,9 +47,18 @@ type accessTokenRequest struct {
 	CodeVerifier string `json:"code_verifier"`
 }
 
+type deviceCodeDecisionRequest struct {
+	UserCode string `json:"user_code"`
+	Reason   string `json:"reason"`
+}
+
 // New creates a new OAuth handler.
-func New(svc *service.Service) *Handler {
-	return &Handler{Svc: svc}
+func New(svc *service.Service, opts ...Option) *Handler {
+	h := &Handler{Svc: svc}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // RequestDeviceCode handles POST /login/device/code
@@ -60,19 +82,15 @@ func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
 
 	// Audit log the creation
 	h.Svc.LogDeviceCodeAudit(r.Context(), code.ID, code.DeviceCode, "created", 0, "", r.RemoteAddr)
-	base := r.Header.Get("X-Forwarded-Proto")
-	scheme := "http"
-	if base != "" {
-		scheme = base
-	}
-	host := r.Host
+	verificationURI := h.deviceVerificationURL(r)
 
 	respond.JSON(w, 200, map[string]any{
-		"device_code":      code.DeviceCode,
-		"user_code":        code.UserCode,
-		"verification_uri": scheme + "://" + host + "/login/device",
-		"expires_in":       900, // 15 minutes
-		"interval":         5,
+		"device_code":               code.DeviceCode,
+		"user_code":                 code.UserCode,
+		"verification_uri":          verificationURI,
+		"verification_uri_complete": verificationURIWithUserCode(verificationURI, code.UserCode),
+		"expires_in":                900, // 15 minutes
+		"interval":                  5,
 	})
 }
 
@@ -236,6 +254,144 @@ func parseAccessTokenRequest(r *http.Request) (accessTokenRequest, error) {
 	return req, nil
 }
 
+func (h *Handler) deviceVerificationURL(r *http.Request) string {
+	if h.DeviceVerificationURL != "" {
+		return h.DeviceVerificationURL
+	}
+	return requestScheme(r) + "://" + r.Host + "/login/device"
+}
+
+func requestScheme(r *http.Request) string {
+	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		return strings.TrimSpace(strings.Split(proto, ",")[0])
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func verificationURIWithUserCode(rawURL, userCode string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	query.Set("user_code", userCode)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func parseDeviceCodeDecisionRequest(w http.ResponseWriter, r *http.Request) (deviceCodeDecisionRequest, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req deviceCodeDecisionRequest
+
+	ct := r.Header.Get("Content-Type")
+	if strings.Contains(ct, "application/json") {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return deviceCodeDecisionRequest{}, fmt.Errorf("invalid device decision JSON body: %w", service.ErrBadRequest)
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			return deviceCodeDecisionRequest{}, fmt.Errorf("invalid device decision form body: %w", service.ErrBadRequest)
+		}
+		req.UserCode = r.FormValue("user_code")
+		req.Reason = r.FormValue("reason")
+	}
+	req.UserCode = normalizeUserCode(req.UserCode)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.UserCode == "" {
+		return deviceCodeDecisionRequest{}, service.ErrBadRequest
+	}
+	return req, nil
+}
+
+func normalizeUserCode(userCode string) string {
+	return strings.ToUpper(strings.TrimSpace(userCode))
+}
+
+func (h *Handler) approveDeviceCodeByUserCode(r *http.Request, user db.User, userCode string) (*db.DeviceCode, error) {
+	code, err := h.Svc.GetDeviceCodeByUserCode(r.Context(), userCode)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := h.Svc.ApproveDeviceCode(r.Context(), code.DeviceCode, user.ID, user.Login); err != nil {
+		return nil, err
+	}
+	return code, nil
+}
+
+func (h *Handler) rejectDeviceCodeByUserCode(r *http.Request, user db.User, userCode, reason string) (*db.DeviceCode, error) {
+	code, err := h.Svc.GetDeviceCodeByUserCode(r.Context(), userCode)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.Svc.RejectDeviceCode(r.Context(), code.DeviceCode, user.ID, user.Login, reason); err != nil {
+		return nil, err
+	}
+	return code, nil
+}
+
+func respondDeviceDecisionError(r *http.Request, w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrNotFound):
+		respond.Error(w, http.StatusNotFound, "invalid user code")
+	case errors.Is(err, service.ErrBadRequest):
+		respond.Error(w, http.StatusBadRequest, "user code required")
+	case errors.Is(err, service.ErrDeviceCodeExpired):
+		respond.Error(w, http.StatusUnprocessableEntity, "device code expired")
+	case errors.Is(err, service.ErrConflict):
+		respond.ServiceErrorRequest(r, w, err)
+	case errors.Is(err, service.ErrUnauthorized), errors.Is(err, service.ErrForbidden):
+		respond.ServiceErrorRequest(r, w, err)
+	default:
+		slog.ErrorContext(r.Context(), "device code decision failed", "error", err)
+		respond.Error(w, http.StatusInternalServerError, "device code decision failed")
+	}
+}
+
+// ApproveDeviceCode handles the headless API used by external consoles.
+func (h *Handler) ApproveDeviceCode(w http.ResponseWriter, r *http.Request) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok || user.ID == 0 {
+		respond.Unauthorized(w, "Authentication required")
+		return
+	}
+	req, err := parseDeviceCodeDecisionRequest(w, r)
+	if err != nil {
+		respondDeviceDecisionError(r, w, err)
+		return
+	}
+	if _, err := h.approveDeviceCodeByUserCode(r, user, req.UserCode); err != nil {
+		respondDeviceDecisionError(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"status": "approved",
+	})
+}
+
+// RejectDeviceCode handles the headless API used by external consoles.
+func (h *Handler) RejectDeviceCode(w http.ResponseWriter, r *http.Request) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok || user.ID == 0 {
+		respond.Unauthorized(w, "Authentication required")
+		return
+	}
+	req, err := parseDeviceCodeDecisionRequest(w, r)
+	if err != nil {
+		respondDeviceDecisionError(r, w, err)
+		return
+	}
+	if _, err := h.rejectDeviceCodeByUserCode(r, user, req.UserCode, req.Reason); err != nil {
+		respondDeviceDecisionError(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"status": "rejected",
+	})
+}
+
 // DeviceCodeVerification handles GET/POST /login/device
 // GET: Shows the device code verification page
 // POST: Verifies user code and approves/rejects the device code
@@ -269,25 +425,29 @@ func (h *Handler) DeviceCodeVerification(w http.ResponseWriter, r *http.Request)
 			respond.Error(w, 400, "invalid form data")
 			return
 		}
-		userCode := strings.ToUpper(strings.TrimSpace(r.FormValue("user_code")))
+		userCode := normalizeUserCode(r.FormValue("user_code"))
 		if userCode == "" {
 			respond.Error(w, 400, "user code required")
 			return
 		}
 
-		// Look up device code by user code
-		code, err := h.Svc.GetDeviceCodeByUserCode(r.Context(), userCode)
-		if err != nil {
-			respond.Error(w, 404, "invalid user code")
-			return
-		}
-
-		// Approve the device code
-		_, err = h.Svc.ApproveDeviceCode(r.Context(), code.DeviceCode, user.ID, user.Login)
+		code, err := h.approveDeviceCodeByUserCode(r, user, userCode)
 		if err != nil {
 			slog.Error("device code approval failed", "error", err)
+			if errors.Is(err, service.ErrNotFound) {
+				respond.Error(w, 404, "invalid user code")
+				return
+			}
 			if errors.Is(err, service.ErrForbidden) || errors.Is(err, service.ErrUnauthorized) {
 				respond.Error(w, http.StatusForbidden, "approval forbidden")
+				return
+			}
+			if errors.Is(err, service.ErrDeviceCodeExpired) {
+				respond.Error(w, http.StatusUnprocessableEntity, "device code expired")
+				return
+			}
+			if errors.Is(err, service.ErrConflict) {
+				respond.Error(w, http.StatusConflict, "device code already decided")
 				return
 			}
 			respond.Error(w, 500, "approval failed")
