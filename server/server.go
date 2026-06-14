@@ -145,16 +145,6 @@ func embeddedAuthConfig(opts options) srvmiddleware.EmbeddedAuthConfig {
 	}
 }
 
-func initCoreDeps() (coreDeps, error) {
-	var deps coreDeps
-
-	cfg, err := config.New()
-	if err != nil {
-		return deps, fmt.Errorf("config: %w", err)
-	}
-	return initCoreDepsFromConfig(cfg)
-}
-
 func initCoreDepsFromConfig(cfg config.Config) (coreDeps, error) {
 	var deps coreDeps
 	deps.cfg = cfg

@@ -29,10 +29,6 @@ const (
 	wikiCompactionJobStaleAfter        = 5 * time.Minute
 )
 
-func wikiCompactionDisabledError() error {
-	return fmt.Errorf("%w: wiki compaction is temporarily disabled until the catalog corruption incident is resolved", ErrConflict)
-}
-
 func (s *Service) StartWikiCompaction(ctx context.Context, repoFullName string) (db.WikiCompactionJob, error) {
 	return s.startWikiCompactionEnabled(ctx, repoFullName)
 }
