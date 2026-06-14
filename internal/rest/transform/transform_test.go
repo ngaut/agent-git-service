@@ -8,6 +8,7 @@ import (
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
+	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 const testBase = "http://test.local"
@@ -555,6 +556,25 @@ func TestBranch(t *testing.T) {
 	}
 	if commit["url"] != testBase+"/api/v3/repos/alice/myrepo/commits/abc123" {
 		t.Errorf("unexpected commit url: %v", commit["url"])
+	}
+}
+
+func TestWikiTreeEntryCarriesRefInPageURLs(t *testing.T) {
+	result := transform.WikiTreeEntry("alice/myrepo", service.WikiTreeEntry{
+		Path:  "docs/old",
+		Name:  "Old",
+		Kind:  "page",
+		Slug:  "docs/old",
+		Title: "Docs Old",
+		SHA:   "abc123",
+		Size:  42,
+	}, "1111111111111111111111111111111111111111")
+
+	if got, want := result["url"], "http://test.local/api/v3/repos/alice/myrepo/wiki/pages/docs%2Fold?ref=1111111111111111111111111111111111111111"; got != want {
+		t.Fatalf("url = %q, want %q", got, want)
+	}
+	if got, want := result["html_url"], "https://test.local/alice/myrepo/wiki/docs/old?ref=1111111111111111111111111111111111111111"; got != want {
+		t.Fatalf("html_url = %q, want %q", got, want)
 	}
 }
 

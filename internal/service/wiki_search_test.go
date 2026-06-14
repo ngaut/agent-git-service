@@ -483,7 +483,7 @@ func TestWikiSearchPrefersGitLexicalResultsOverStaleIndexedRows(t *testing.T) {
 	}
 }
 
-func TestWikiSearchReadsLiveGitPageBeforeCatalogCatchesUp(t *testing.T) {
+func TestWikiSearchDoesNotReturnGitOnlyPageWhenCatalogHasLiveRows(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
 	ctx := context.Background()
@@ -516,19 +516,60 @@ func TestWikiSearchReadsLiveGitPageBeforeCatalogCatchesUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchWikiPages: %v", err)
 	}
-	if len(resp.Results) != 1 {
-		t.Fatalf("len(results) = %d, want 1", len(resp.Results))
+	if len(resp.Results) != 0 {
+		t.Fatalf("results = %#v, want no git-only page once catalog has live rows", resp.Results)
 	}
-	if resp.Results[0].Slug != "guides/live" {
-		t.Fatalf("results[0].Slug = %q, want guides/live", resp.Results[0].Slug)
+
+	resp, err = svc.SearchWikiPages(ctx, full, "catalog body only", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages(catalog): %v", err)
 	}
-	if !strings.Contains(resp.Results[0].Snippet, "<mark>Fresh</mark> <mark>git-only</mark> <mark>search</mark> <mark>text</mark>") {
-		t.Fatalf("snippet = %q, want live git body", resp.Results[0].Snippet)
+	if len(resp.Results) != 1 || resp.Results[0].Slug != "home" {
+		t.Fatalf("catalog results = %#v, want home", resp.Results)
 	}
 	svc.Wg.Wait()
 }
 
-func TestWikiSearchPreservesLiveGitSnippetForStaleCatalogPage(t *testing.T) {
+func TestWikiSearchFallsBackToGitWithoutCatalogRows(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-legacy-git",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-legacy-git"
+	if err := svc.Git.Init(ctx, full+".wiki", "master", false); err != nil {
+		t.Fatalf("init wiki: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guides/live.md", "add live page", []byte("# Live\n\nLegacy git-only search text.")); err != nil {
+		t.Fatalf("git write live page: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "legacy git-only search text", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Slug != "guides/live" {
+		t.Fatalf("results = %#v, want legacy git page", resp.Results)
+	}
+	if !strings.Contains(resp.Results[0].Snippet, "<mark>Legacy</mark> <mark>git-only</mark> <mark>search</mark> <mark>text</mark>") {
+		t.Fatalf("snippet = %q, want legacy git body", resp.Results[0].Snippet)
+	}
+}
+
+func TestWikiSearchUsesCatalogBodyWhenGitProjectionLagsCatalogPage(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
 	ctx := context.Background()
@@ -561,14 +602,19 @@ func TestWikiSearchPreservesLiveGitSnippetForStaleCatalogPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchWikiPages: %v", err)
 	}
+	if len(resp.Results) != 0 {
+		t.Fatalf("results = %#v, want no git-only snippet once catalog is live", resp.Results)
+	}
+
+	resp, err = svc.SearchWikiPages(ctx, full, "catalog body only", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages(catalog): %v", err)
+	}
 	if len(resp.Results) != 1 || resp.Results[0].Slug != "guides/auth" {
-		t.Fatalf("results = %#v, want guides/auth", resp.Results)
+		t.Fatalf("catalog results = %#v, want guides/auth", resp.Results)
 	}
-	if !strings.Contains(resp.Results[0].Snippet, "<mark>Fresh</mark> <mark>git-only</mark> <mark>snippet</mark> <mark>text</mark>") {
-		t.Fatalf("snippet = %q, want live git snippet", resp.Results[0].Snippet)
-	}
-	if strings.Contains(resp.Results[0].Snippet, "Catalog body only.") {
-		t.Fatalf("snippet = %q, should not use stale catalog body", resp.Results[0].Snippet)
+	if strings.Contains(resp.Results[0].Snippet, "Fresh git-only snippet text.") {
+		t.Fatalf("snippet = %q, should not use git projection body", resp.Results[0].Snippet)
 	}
 	svc.Wg.Wait()
 }

@@ -111,22 +111,29 @@ func wikiSearchResponse(repoFullName, routePrefix string, resp service.WikiSearc
 }
 
 // WikiTreeEntry shapes one wiki tree entry.
-func WikiTreeEntry(repoFullName string, entry service.WikiTreeEntry) map[string]any {
-	path := url.QueryEscape(entry.Path)
+func WikiTreeEntry(repoFullName string, entry service.WikiTreeEntry, ref string) map[string]any {
+	treeQuery := url.Values{"path": []string{entry.Path}}
+	if ref != "" {
+		treeQuery.Set("ref", ref)
+	}
 	out := map[string]any{
 		"path": entry.Path,
 		"name": entry.Name,
 		"kind": entry.Kind,
 		"sha":  entry.SHA,
-		"url":  fmt.Sprintf("%s/repos/%s/wiki/tree?path=%s", apiBase(), repoFullName, path),
+		"url":  fmt.Sprintf("%s/repos/%s/wiki/tree?%s", apiBase(), repoFullName, treeQuery.Encode()),
 	}
 	if entry.Kind == "page" {
 		apiSlug := url.PathEscape(entry.Slug)
+		pageQuery := ""
+		if ref != "" {
+			pageQuery = "?ref=" + url.QueryEscape(ref)
+		}
 		out["slug"] = entry.Slug
 		out["title"] = entry.Title
 		out["size"] = entry.Size
-		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, entry.Slug)
-		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s", apiBase(), repoFullName, apiSlug)
+		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s%s", htmlBase(), repoFullName, entry.Slug, pageQuery)
+		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s%s", apiBase(), repoFullName, apiSlug, pageQuery)
 	}
 	return out
 }

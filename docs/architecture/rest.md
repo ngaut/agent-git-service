@@ -169,7 +169,7 @@ Wiki path-slug hierarchy rules:
 - page slugs are lowercase canonical paths such as `guides/setup`
 - wiki page routes treat `{slug}` as one percent-encoded path parameter; clients must request nested slugs such as `guides/setup` as `guides%2Fsetup` when the slug is followed by a subresource, for example `/wiki/pages/guides%2Fsetup/history`
 - `GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}` accepts an optional `ref` query parameter to read the page body and blob SHA at a full commit SHA from that page's history; omitted `ref` still reads HEAD
-- `GET /api/v3/repos/{owner}/{repo}/wiki/tree` accepts `path` and optional `ref`, and returns one authoritative directory view from the wiki tree with directory/page URLs under `/wiki/...`
+- `GET /api/v3/repos/{owner}/{repo}/wiki/tree` accepts `path` and optional `ref`; omitted `ref` returns the current page-resolvable directory view used by the console sidebar, while explicit `ref` returns the Git tree at that ref and carries the same `ref` through page URLs
 - `GET /api/v3/repos/{owner}/{repo}/wiki/pages` accepts `path`, `recursive`, `label`/`labels`, and `exclude_label`/`exclude_labels` query parameters for prefix-scoped and label-scoped listing
 - `GET /api/v3/repos/{owner}/{repo}/wiki/search` accepts `q`, `limit`, `offset`, `label`/`labels`, and `exclude_label`/`exclude_labels`, returns `{results, query, method, elapsed_ms}`, and caps `limit` server-side at 50
 - `GET /api/v3/repos/{owner}/{repo}/wiki/state` exposes the current derived-index SHA, timestamps, and page count for the authoritative wiki surface
@@ -184,7 +184,8 @@ Wiki path-slug hierarchy rules:
 - only the exact single-segment routes `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
 - read/list/backlink operations also surface legacy on-disk wiki filenames that still contain uppercase letters, underscores, or dots
 - catalog-backed wiki read responses set `X-Wiki-Migration-In-Progress: true` while a stale repository is being replayed into the catalog in the background
-- wiki search indexing is asynchronous after successful put/move/delete/label writes, so candidate selection can lag briefly; before paginating the response, stale missing pages are filtered out and surviving results are refreshed through the current catalog-backed live page read path so titles/snippets/labels reflect the latest page view, and when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
+- live tree, search, and backlink responses must not emit page URLs that the current page endpoint would 404; Git, V2, and search-index projections are fallback/ref surfaces for this purpose, not live-link authority while catalog current rows exist
+- wiki search indexing is asynchronous after successful put/move/delete/label writes, so candidate selection can lag briefly; before paginating the response, stale missing pages are filtered out and surviving results are refreshed through the current live page read path so titles/snippets/labels reflect the latest page view, and when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
 
 ### Wiki Page History
 

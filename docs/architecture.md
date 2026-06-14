@@ -36,7 +36,7 @@ Authority is split by concern:
 Current wiki contract:
 
 - The sibling bare `*.wiki.git` repository is the durable authority for wiki page content, path layout, commit history, ref-pinned reads, rename semantics, and prefix moves.
-- TiDB-backed wiki tables still serve some indexed metadata and current-page compatibility paths during the final cutover, but wiki lexical search now treats git as the primary authority and only falls back to the DB cache when git access is unavailable.
+- TiDB-backed wiki tables still serve some indexed metadata and current-page compatibility paths during the final cutover. While those current-page compatibility paths exist, live link emitters such as tree, search, and backlinks must use the same current-page-resolvable source as `GET /wiki/pages/{slug}` instead of advertising slugs from lagging Git, V2, or search projections.
 - Remaining wiki re-architecture work is tracked in [architecture/wiki-storage-v2.md](architecture/wiki-storage-v2.md) and the cutover runbook in [operations/wiki-storage-v2-cutover.md](operations/wiki-storage-v2-cutover.md), with the remaining goal of removing the last current-page and metadata transitional paths so every derived wiki index stays obviously rebuildable from git without reintroducing catalog-first writes.
 
 This does not prohibit repository- or pull-request-related metadata in the database.

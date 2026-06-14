@@ -344,7 +344,7 @@ func TestWikiV2TreeListsDirectoriesAndPagesFromGit(t *testing.T) {
 	}
 }
 
-func TestWikiTreeUsesLiveGitWhenCatalogLagsCurrentHead(t *testing.T) {
+func TestWikiTreeUsesCatalogRowsWhenGitProjectionLagsCurrentHead(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -363,14 +363,56 @@ func TestWikiTreeUsesLiveGitWhenCatalogLagsCurrentHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWikiTreeAtRef(deep path): %v", err)
 	}
-	if len(tree) != 2 {
-		t.Fatalf("tree entries = %+v, want both live git pages", tree)
+	if len(tree) != 1 {
+		t.Fatalf("tree entries = %+v, want only catalog-backed pages", tree)
 	}
-	if tree[0].Slug != "deep/area-01/module-02/topic-04/git-only" {
-		t.Fatalf("tree[0] = %+v, want git-only live page", tree[0])
+	if tree[0].Slug != "deep/area-01/module-02/topic-04/known" {
+		t.Fatalf("tree[0] = %+v, want known catalog page", tree[0])
 	}
-	if tree[1].Slug != "deep/area-01/module-02/topic-04/known" {
-		t.Fatalf("tree[1] = %+v, want known live page", tree[1])
+}
+
+func TestWikiTreeUsesCatalogRowsWhenV2IndexTracksLaggingGitProjection(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	setupRepoForTest(t, svc, "treev2lag", "wiki-tree-v2-lag")
+	full := "treev2lag/wiki-tree-v2-lag"
+
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n", "seed home", ""); err != nil {
+		t.Fatalf("PutWikiPage(home): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "old-page", "# Old\n", "seed old", ""); err != nil {
+		t.Fatalf("PutWikiPage(old-page): %v", err)
+	}
+	if _, err := svc.ReconcileWikiV2(ctx, full); err != nil {
+		t.Fatalf("ReconcileWikiV2: %v", err)
+	}
+
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	originalHook := svc.WikiCatalog.OnChangeSetCommitted
+	svc.WikiCatalog.OnChangeSetCommitted = nil
+	defer func() {
+		svc.WikiCatalog.OnChangeSetCommitted = originalHook
+	}()
+	if _, err := svc.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+		RepositoryID: repo.ID,
+		Source:       wikicatalog.SourceREST,
+		Message:      "delete old-page in catalog only",
+		Changes:      []wikicatalog.Change{{Op: wikicatalog.OpDelete, Slug: "old-page"}},
+	}); err != nil {
+		t.Fatalf("ApplyChangeSet(delete old-page): %v", err)
+	}
+
+	tree, err := svc.ListWikiTreeAtRef(ctx, full, "", "")
+	if err != nil {
+		t.Fatalf("ListWikiTreeAtRef(root): %v", err)
+	}
+	if len(tree) != 1 || tree[0].Slug != "home" {
+		t.Fatalf("tree = %+v, want only catalog-backed home page", tree)
 	}
 }
 
@@ -423,6 +465,9 @@ func TestWikiV2ReconcileBuildsHistoryAndBacklinkIndexes(t *testing.T) {
 
 	if err := svc.DB.Where("repository_id = ?", repo.ID).Delete(&db.WikiPage{}).Error; err != nil {
 		t.Fatalf("delete legacy wiki pages: %v", err)
+	}
+	if err := svc.DB.Where("repository_id = ?", repo.ID).Delete(&db.WikiRepoHead{}).Error; err != nil {
+		t.Fatalf("delete catalog head: %v", err)
 	}
 
 	history, total, err := svc.ListWikiPageHistoryPage(ctx, full, "home", 1, 10)
@@ -751,6 +796,9 @@ func TestWikiV2BacklinksFallBackUntilBacklinkSnapshotCatchesUp(t *testing.T) {
 	}
 	if err := svc.DB.Where("repository_id = ?", repo.ID).Delete(&db.WikiPage{}).Error; err != nil {
 		t.Fatalf("delete legacy wiki pages: %v", err)
+	}
+	if err := svc.DB.Where("repository_id = ?", repo.ID).Delete(&db.WikiRepoHead{}).Error; err != nil {
+		t.Fatalf("delete catalog head: %v", err)
 	}
 
 	backlinks, err := svc.ListWikiBacklinks(ctx, full, "home")
