@@ -13,7 +13,7 @@ func TestExtractOutlinks(t *testing.T) {
 	}{
 		{
 			name: "bracket-link",
-			body: "see [[Home]] and [[Guides/Intro]]",
+			body: "see [[home]] and [[guides/intro]]",
 			want: []string{"guides/intro", "home"},
 		},
 		{
@@ -48,12 +48,12 @@ func TestExtractOutlinks(t *testing.T) {
 		},
 		{
 			name: "anchor-stripped",
-			body: "[home](Home#install) and [[Guides/Intro?utm=x]]",
+			body: "[home](home#install) and [[guides/intro?utm=x]]",
 			want: []string{"guides/intro", "home"},
 		},
 		{
 			name: "duplicates-collapsed",
-			body: "[a](home) [b](home.md) [[Home]]",
+			body: "[a](home) [b](home.md) [[home]]",
 			want: []string{"home"},
 		},
 		{
@@ -62,9 +62,9 @@ func TestExtractOutlinks(t *testing.T) {
 			want: []string{},
 		},
 		{
-			name: "underscore-canonicalized",
+			name: "invalid-slug-excluded",
 			body: "[[My_Page]]",
-			want: []string{"my-page"},
+			want: []string{},
 		},
 	}
 	for _, tc := range cases {

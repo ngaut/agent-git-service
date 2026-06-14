@@ -45,7 +45,7 @@ func TestPlanChangeSet_ValidatesInputs(t *testing.T) {
 				RepositoryID: 1, Source: SourceREST,
 				Changes: []Change{{Op: OpUpsert, Slug: "Home", Body: []byte("x")}},
 			},
-			wantErr: "must be lowercase",
+			wantErr: "disallowed character",
 		},
 		{
 			name: "bad-slug-disallowed-char",
@@ -80,12 +80,12 @@ func TestPlanChangeSet_ValidatesInputs(t *testing.T) {
 			wantErr: "NewSlug",
 		},
 		{
-			name: "rename-same-canonical",
+			name: "rename-same-slug",
 			req: ChangeSetRequest{
 				RepositoryID: 1, Source: SourceREST,
 				Changes: []Change{{Op: OpRename, Slug: "page", NewSlug: "page"}},
 			},
-			wantErr: "canonicalize to the same slug",
+			wantErr: "same slug",
 		},
 	}
 	for _, tc := range cases {
@@ -155,9 +155,7 @@ func TestPlanChangeSet_RejectsDuplicates(t *testing.T) {
 	c := New(nil, nil)
 	c.Now = func() time.Time { return time.Unix(0, 0).UTC() }
 
-	// Two upserts to the same canonical slug (identical sources;
-	// note that writably-valid slugs are already in canonical form,
-	// so duplicate canonicalization happens only for literal repeats).
+	// Two upserts to the same slug.
 	_, err := c.planChangeSet(ChangeSetRequest{
 		RepositoryID: 1, Source: SourceREST,
 		Changes: []Change{
@@ -197,8 +195,8 @@ func TestPlanChangeSet_TouchedCISetIsSortedUnion(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	want := []string{"home", "new", "old", "trash"}
-	if !reflect.DeepEqual(plan.touchedCI, want) {
-		t.Fatalf("touchedCI = %v, want %v", plan.touchedCI, want)
+	if !reflect.DeepEqual(plan.touchedSlugs, want) {
+		t.Fatalf("touchedSlugs = %v, want %v", plan.touchedSlugs, want)
 	}
 }
 
@@ -251,8 +249,8 @@ func TestComputeSynthCommitSHA_Deterministic(t *testing.T) {
 	t0 := time.Unix(1700000000, 0).UTC()
 	parent := uint64(10)
 	plan := []plannedChange{
-		{op: OpUpsert, srcSlugCI: "home"},
-		{op: OpUpsert, srcSlugCI: "guides/intro"},
+		{op: OpUpsert, srcSlug: "home"},
+		{op: OpUpsert, srcSlug: "guides/intro"},
 	}
 	blobs := map[string]string{
 		"home":         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

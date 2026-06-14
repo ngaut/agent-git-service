@@ -116,7 +116,7 @@ func (s *Service) RemoveAllWikiPageLabels(ctx context.Context, repoFullName, slu
 }
 
 func (s *Service) ensureWikiPageForLabels(ctx context.Context, repoFullName, slug string) error {
-	if err := validateReadableWikiSlug(slug); err != nil {
+	if err := validateWikiSlug(slug); err != nil {
 		return ErrNotFound
 	}
 	if rep, err := s.getRepoBase(ctx, repoFullName); err == nil && s.WikiCatalog != nil {

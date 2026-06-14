@@ -90,7 +90,7 @@ document the relevant contract below in the same change.
 | `connectedlogin` | configurable OAuth-style browser-login code exchange and userinfo client |
 | `tenant` | gitstore tenant context helpers for physical repo scoping |
 | `testharness` | production-wired service and router test fixtures |
-| `wikicatalog` | legacy wiki catalog primitives, slug canonicalization, and transitional blob/CAS helpers |
+| `wikicatalog` | wiki catalog primitives, single-slug validation, and blob/CAS helpers |
 | `wikiv2` | git-authoritative wiki write planning, derived index contracts, and reconcile primitives |
 
 ## Dependency Rules

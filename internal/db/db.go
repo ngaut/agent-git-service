@@ -244,6 +244,9 @@ func DialectorForDSN(raw string) (gorm.Dialector, string) {
 // It is called by Init and can be reused by the control plane router to
 // migrate tenant databases independently.
 func Migrate(database *gorm.DB) error {
+	if err := MigrateWikiSlugColumnsBeforeAutoMigrate(database); err != nil {
+		return err
+	}
 	if err := database.AutoMigrate(
 		&User{},
 		&OrganizationMember{},
@@ -352,6 +355,9 @@ func Migrate(database *gorm.DB) error {
 		return err
 	}
 	if err := MigrateWikiSearch(database); err != nil {
+		return err
+	}
+	if err := MigrateWikiSlugColumns(database); err != nil {
 		return err
 	}
 	// Add unique index on (project_id, content_id, type) to prevent duplicate items

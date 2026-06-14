@@ -220,24 +220,6 @@ func validateWikiSlug(slug string) error {
 	if slug == "" {
 		return fmt.Errorf("%w: empty wiki slug", ErrValidation)
 	}
-	if err := validateReadableWikiSlug(slug); err != nil {
-		return err
-	}
-	if slug != strings.ToLower(slug) {
-		return fmt.Errorf("%w: wiki slug must be lowercase", ErrValidation)
-	}
-	for _, part := range strings.Split(slug, "/") {
-		if err := validateWikiSlugSegment(part); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateReadableWikiSlug(slug string) error {
-	if slug == "" {
-		return fmt.Errorf("%w: empty wiki slug", ErrValidation)
-	}
 	if len(slug) > wikiMaxSlugLength {
 		return fmt.Errorf("%w: wiki slug too long", ErrValidation)
 	}
@@ -246,7 +228,7 @@ func validateReadableWikiSlug(slug string) error {
 		return fmt.Errorf("%w: wiki slug exceeds max depth", ErrValidation)
 	}
 	for _, part := range parts {
-		if err := validateReadableWikiSlugSegment(part); err != nil {
+		if err := validateWikiSlugSegment(part); err != nil {
 			return err
 		}
 	}
@@ -281,35 +263,6 @@ func validateWikiSlugSegment(segment string) error {
 	return nil
 }
 
-func validateReadableWikiSlugSegment(segment string) error {
-	if segment == "" {
-		return fmt.Errorf("%w: wiki slug contains an empty path segment", ErrValidation)
-	}
-	if segment == "." || segment == ".." {
-		return fmt.Errorf("%w: wiki slug contains reserved path segment %q", ErrValidation, segment)
-	}
-	if len(segment) > wikiMaxSegmentLength {
-		return fmt.Errorf("%w: wiki slug segment too long", ErrValidation)
-	}
-	if segment == "_sidebar" {
-		return nil
-	}
-	for i, r := range segment {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case (r == '-' || r == '_' || r == '.') && i > 0:
-		default:
-			return fmt.Errorf("%w: slug contains disallowed character %q", ErrValidation, string(r))
-		}
-	}
-	if segment[0] == '-' || segment[0] == '_' || segment[0] == '.' {
-		return fmt.Errorf("%w: slug cannot start with reserved punctuation", ErrValidation)
-	}
-	return nil
-}
-
 // wikiSlugToPath maps a slug to its on-disk markdown filename inside the
 // wiki repo.
 func wikiSlugToPath(slug string) string {
@@ -328,24 +281,6 @@ func wikiPathToSlug(path string) string {
 		return ""
 	}
 	return slug
-}
-
-func canonicalWikiLookupSlug(slug string) string {
-	parts := strings.Split(slug, "/")
-	for i, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			return ""
-		}
-		part = strings.ReplaceAll(part, "_", "-")
-		part = strings.Join(strings.Fields(part), "-")
-		parts[i] = strings.ToLower(part)
-	}
-	canonical := strings.Join(parts, "/")
-	if err := validateReadableWikiSlug(canonical); err != nil {
-		return ""
-	}
-	return canonical
 }
 
 // titleFromSlug derives the stable display title returned by wiki APIs. It is
@@ -390,17 +325,7 @@ func normalizeWikiReference(raw string) string {
 	if link == "" {
 		return ""
 	}
-	parts := strings.Split(link, "/")
-	for i, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			return ""
-		}
-		part = strings.Join(strings.Fields(part), "-")
-		parts[i] = part
-	}
-	link = strings.Join(parts, "/")
-	if err := validateReadableWikiSlug(link); err != nil {
+	if err := validateWikiSlug(link); err != nil {
 		return ""
 	}
 	return link
@@ -507,122 +432,20 @@ func (s *Service) storeCachedWikiBacklinks(repoFullName, slug, headSHA string, b
 }
 
 func wikiBacklinkGrepPatterns(slug string) []string {
-	seen := map[string]struct{}{}
-	var patterns []string
-	addPattern := func(pattern string) {
-		pattern = strings.TrimSpace(pattern)
-		if pattern == "" {
-			return
-		}
-		if _, ok := seen[pattern]; ok {
-			return
-		}
-		seen[pattern] = struct{}{}
-		patterns = append(patterns, pattern)
-	}
-
-	addPattern(slug)
-	canonical := canonicalWikiLookupSlug(slug)
-	if canonical != "" {
-		addPattern(canonical)
-	}
-
-	variants, overflow := wikiSlugSeparatorVariants(slug, wikiBacklinkGrepPatternLimit-len(patterns))
-	if overflow {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
 		return nil
 	}
-	for _, variant := range variants {
-		addPattern(variant)
-	}
-	if canonical != "" {
-		variants, overflow = wikiSlugSeparatorVariants(canonical, wikiBacklinkGrepPatternLimit-len(patterns))
-		if overflow {
-			return nil
-		}
-		for _, variant := range variants {
-			addPattern(variant)
-		}
-	}
-	return patterns
+	return []string{slug}
 }
 
-const wikiBacklinkGrepPatternLimit = 256
-
-func wikiSlugSeparatorVariants(slug string, limit int) ([]string, bool) {
-	if limit <= 0 {
-		return nil, true
-	}
-	parts := strings.Split(slug, "/")
-	segmentVariants := make([][]string, len(parts))
-	for i, part := range parts {
-		segmentVariants[i] = wikiSegmentSeparatorVariants(part)
-	}
-	seen := map[string]struct{}{}
-	var out []string
-	overflow := false
-	var build func(int, []string)
-	build = func(idx int, acc []string) {
-		if overflow {
-			return
-		}
-		if idx == len(segmentVariants) {
-			joined := strings.Join(acc, "/")
-			if joined == "" {
-				return
-			}
-			if _, ok := seen[joined]; ok {
-				return
-			}
-			if len(out) == limit {
-				overflow = true
-				return
-			}
-			seen[joined] = struct{}{}
-			out = append(out, joined)
-			return
-		}
-		for _, variant := range segmentVariants[idx] {
-			build(idx+1, append(acc, variant))
-		}
-	}
-	build(0, nil)
-	return out, overflow
-}
-
-func wikiSegmentSeparatorVariants(segment string) []string {
-	seen := map[string]struct{}{}
-	var variants []string
-	add := func(v string) {
-		if v == "" {
-			return
-		}
-		if _, ok := seen[v]; ok {
-			return
-		}
-		seen[v] = struct{}{}
-		variants = append(variants, v)
-	}
-
-	add(segment)
-	add(strings.ReplaceAll(segment, "-", " "))
-	add(strings.ReplaceAll(segment, "-", "_"))
-	add(strings.ReplaceAll(segment, "_", " "))
-	add(strings.ReplaceAll(segment, "_", "-"))
-	return variants
-}
-
-func resolveWikiBacklinkTarget(match wikiLinkMatch, pages, topLevelPages map[string]struct{}, canonicalPages, canonicalTopLevelPages map[string]string) (string, bool) {
+func resolveWikiBacklinkTarget(match wikiLinkMatch, pages, topLevelPages map[string]struct{}) (string, bool) {
 	resolvedTarget := match.targetSlug
 	if match.literal {
 		if _, ok := pages[resolvedTarget]; ok {
 			return resolvedTarget, true
 		}
-		canonical := canonicalWikiLookupSlug(match.targetSlug)
-		if canonical == "" {
-			return "", false
-		}
-		resolvedTarget = canonicalPages[canonical]
-		return resolvedTarget, resolvedTarget != ""
+		return "", false
 	}
 
 	if strings.Contains(resolvedTarget, "/") {
@@ -631,12 +454,7 @@ func resolveWikiBacklinkTarget(match wikiLinkMatch, pages, topLevelPages map[str
 	if _, ok := topLevelPages[resolvedTarget]; ok {
 		return resolvedTarget, true
 	}
-	canonical := canonicalWikiLookupSlug(match.targetSlug)
-	if canonical == "" {
-		return "", false
-	}
-	resolvedTarget = canonicalTopLevelPages[canonical]
-	return resolvedTarget, resolvedTarget != ""
+	return "", false
 }
 
 func (s *Service) loadWikiBacklinksForSlug(ctx context.Context, repoFullName, targetSlug string) ([]WikiBacklink, error) {
@@ -656,8 +474,6 @@ func (s *Service) loadWikiBacklinksForSlug(ctx context.Context, repoFullName, ta
 	}
 	pages := make(map[string]struct{}, len(paths))
 	topLevelPages := make(map[string]struct{}, len(paths))
-	canonicalPages := make(map[string]string, len(paths))
-	canonicalTopLevelPages := make(map[string]string, len(paths))
 	for _, p := range paths {
 		slug := wikiPathToSlug(p)
 		if slug == "" {
@@ -666,12 +482,6 @@ func (s *Service) loadWikiBacklinksForSlug(ctx context.Context, repoFullName, ta
 		pages[slug] = struct{}{}
 		if !strings.Contains(slug, "/") {
 			topLevelPages[slug] = struct{}{}
-		}
-		if canonical := canonicalWikiLookupSlug(slug); canonical != "" {
-			canonicalPages[canonical] = slug
-			if !strings.Contains(slug, "/") {
-				canonicalTopLevelPages[canonical] = slug
-			}
 		}
 	}
 	if _, ok := pages[targetSlug]; !ok {
@@ -698,7 +508,7 @@ func (s *Service) loadWikiBacklinksForSlug(ctx context.Context, repoFullName, ta
 			return nil, err
 		}
 		for _, match := range extractWikiLinkMatches(string(body)) {
-			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages, canonicalPages, canonicalTopLevelPages)
+			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages)
 			if !ok || resolvedTarget != targetSlug {
 				continue
 			}
@@ -718,8 +528,7 @@ func (s *Service) loadWikiBacklinksForSlug(ctx context.Context, repoFullName, ta
 }
 
 func (s *Service) loadWikiBacklinksFromCatalog(ctx context.Context, repoID uint, targetSlug string) ([]WikiBacklink, bool, error) {
-	targetCI, err := wikicatalog.CanonicalV1(targetSlug)
-	if err != nil {
+	if err := validateWikiSlug(targetSlug); err != nil {
 		return nil, true, ErrNotFound
 	}
 
@@ -739,8 +548,6 @@ func (s *Service) loadWikiBacklinksFromCatalog(ctx context.Context, repoID uint,
 	pagesByID := make(map[uint64]db.WikiPage, len(pages))
 	pageSlugs := make(map[string]struct{}, len(pages))
 	topLevelPages := make(map[string]struct{}, len(pages))
-	canonicalPages := make(map[string]string, len(pages))
-	canonicalTopLevelPages := make(map[string]string, len(pages))
 	var targetPage db.WikiPage
 	targetFound := false
 	for _, page := range pages {
@@ -749,15 +556,9 @@ func (s *Service) loadWikiBacklinksFromCatalog(ctx context.Context, repoID uint,
 		if !strings.Contains(page.Slug, "/") {
 			topLevelPages[page.Slug] = struct{}{}
 		}
-		if canonical := canonicalWikiLookupSlug(page.Slug); canonical != "" {
-			canonicalPages[canonical] = page.Slug
-			if !strings.Contains(page.Slug, "/") {
-				canonicalTopLevelPages[canonical] = page.Slug
-			}
-			if canonical == targetCI {
-				targetPage = page
-				targetFound = true
-			}
+		if page.Slug == targetSlug {
+			targetPage = page
+			targetFound = true
 		}
 	}
 	if !targetFound {
@@ -766,7 +567,7 @@ func (s *Service) loadWikiBacklinksFromCatalog(ctx context.Context, repoID uint,
 
 	var links []db.WikiPageLink
 	if err := s.DBForCtx(ctx).
-		Where("repository_id = ? AND (dst_page_id = ? OR dst_slug_ci = ?)", repoID, targetPage.PageID, targetCI).
+		Where("repository_id = ? AND (dst_page_id = ? OR dst_slug = ?)", repoID, targetPage.PageID, targetSlug).
 		Find(&links).Error; err != nil {
 		if isMissingTableErr(err) {
 			return nil, false, nil
@@ -789,7 +590,7 @@ func (s *Service) loadWikiBacklinksFromCatalog(ctx context.Context, repoID uint,
 			return nil, true, err
 		}
 		for _, match := range extractWikiLinkMatches(string(body)) {
-			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pageSlugs, topLevelPages, canonicalPages, canonicalTopLevelPages)
+			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pageSlugs, topLevelPages)
 			if !ok || resolvedTarget != targetPage.Slug {
 				continue
 			}
@@ -850,7 +651,7 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 		return nil, err
 	}
 	if opts.Path != "" {
-		if err := validateReadableWikiSlug(opts.Path); err != nil {
+		if err := validateWikiSlug(opts.Path); err != nil {
 			return nil, err
 		}
 	}
@@ -929,7 +730,7 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 func (s *Service) ListWikiTreeAtRef(ctx context.Context, repoFullName, dirPath, ref string) ([]WikiTreeEntry, error) {
 	if strings.TrimSpace(dirPath) != "" {
 		dirPath = strings.Trim(strings.TrimSpace(dirPath), "/")
-		if err := validateReadableWikiSlug(dirPath); err != nil {
+		if err := validateWikiSlug(dirPath); err != nil {
 			return nil, err
 		}
 	}
@@ -1202,7 +1003,7 @@ func (s *Service) GetWikiPage(ctx context.Context, repoFullName, slug string) (W
 // revision in wiki_page_revisions is loaded and projected — replacing
 // the legacy per-page git log + ReadFileWithSHAAtRef walk.
 func (s *Service) GetWikiPageAtRef(ctx context.Context, repoFullName, slug, ref string) (WikiPage, error) {
-	if err := validateReadableWikiSlug(slug); err != nil {
+	if err := validateWikiSlug(slug); err != nil {
 		return WikiPage{}, ErrNotFound
 	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
@@ -1244,9 +1045,8 @@ func (s *Service) GetWikiPageAtRef(ctx context.Context, repoFullName, slug, ref 
 		return s.wikiPageFromCatalog(page, body, labelsBySlug[slug]), nil
 	}
 
-	// Ref-pinned read: locate the revision in wiki_page_revisions
-	// keyed by the page row's slug_ci_v1 (which the catalog updates on
-	// every rename) plus the commit SHA pin.
+	// Ref-pinned read: locate the revision by the page slug at that
+	// revision plus the commit SHA pin.
 	return s.getWikiPageAtRevision(ctx, rep.ID, slug, ref)
 }
 
@@ -1421,27 +1221,25 @@ func (s *Service) listWikiPageHistoryFromV2(ctx context.Context, repoFullName st
 	if missingSequenceCount > 0 {
 		return nil, 0, false, nil
 	}
-	if slugCI, err := wikicatalog.CanonicalV1(slug); err == nil {
-		var pageRow db.WikiPage
-		err := s.DBForCtx(ctx).Unscoped().
-			Select("page_id").
-			Where("repository_id = ? AND slug_ci_v1 = ?", repoID, slugCI).
-			Take(&pageRow).Error
-		switch {
-		case err == nil:
-			var legacyTotal int64
-			if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
-				Where("page_id = ? AND superseded_by_changeset_id IS NULL", pageRow.PageID).
-				Count(&legacyTotal).Error; err != nil {
-				return nil, 0, false, err
-			}
-			if legacyTotal > 0 && legacyTotal != total {
-				return nil, 0, false, nil
-			}
-		case errors.Is(err, gorm.ErrRecordNotFound):
-		default:
+	var pageRow db.WikiPage
+	err := s.DBForCtx(ctx).Unscoped().
+		Select("page_id").
+		Where("repository_id = ? AND slug = ?", repoID, slug).
+		Take(&pageRow).Error
+	switch {
+	case err == nil:
+		var legacyTotal int64
+		if err := s.DBForCtx(ctx).Model(&db.WikiPageRevision{}).
+			Where("page_id = ? AND superseded_by_changeset_id IS NULL", pageRow.PageID).
+			Count(&legacyTotal).Error; err != nil {
 			return nil, 0, false, err
 		}
+		if legacyTotal > 0 && legacyTotal != total {
+			return nil, 0, false, nil
+		}
+	case errors.Is(err, gorm.ErrRecordNotFound):
+	default:
+		return nil, 0, false, err
 	}
 	if page < 1 {
 		page = 1
@@ -1499,20 +1297,12 @@ func (s *Service) listWikiBacklinksFromV2(ctx context.Context, repoFullName stri
 	}
 	pages := make(map[string]struct{}, len(rows))
 	topLevelPages := make(map[string]struct{}, len(rows))
-	canonicalPages := make(map[string]string, len(rows))
-	canonicalTopLevelPages := make(map[string]string, len(rows))
 	rowsBySlug := make(map[string]db.WikiPageIndex, len(rows))
 	for _, row := range rows {
 		rowsBySlug[row.Slug] = row
 		pages[row.Slug] = struct{}{}
 		if !strings.Contains(row.Slug, "/") {
 			topLevelPages[row.Slug] = struct{}{}
-		}
-		if canonical := canonicalWikiLookupSlug(row.Slug); canonical != "" {
-			canonicalPages[canonical] = row.Slug
-			if !strings.Contains(row.Slug, "/") {
-				canonicalTopLevelPages[canonical] = row.Slug
-			}
 		}
 	}
 	if _, exists := pages[slug]; !exists {
@@ -1551,7 +1341,7 @@ func (s *Service) listWikiBacklinksFromV2(ctx context.Context, repoFullName stri
 		}
 		snippet := ""
 		for _, match := range extractWikiLinkMatches(body) {
-			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages, canonicalPages, canonicalTopLevelPages)
+			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages)
 			if ok && resolvedTarget == slug {
 				snippet = match.snippet
 				break
@@ -1599,10 +1389,7 @@ func (s *Service) loadCurrentWikiV2HeadSHA(ctx context.Context, repoFullName str
 // page_id maps to the requested slug. Returns ErrNotFound when the
 // slug was not present at that revision.
 func (s *Service) getWikiPageAtRevision(ctx context.Context, repoID uint, slug, ref string) (WikiPage, error) {
-	// CanonicalV1 validates the slug grammar; the query below joins on
-	// the raw slug_at_rev string, so the canonical form itself isn't
-	// needed here, only the validation it performs.
-	if _, err := wikicatalog.CanonicalV1(slug); err != nil {
+	if err := validateWikiSlug(slug); err != nil {
 		return WikiPage{}, ErrNotFound
 	}
 	// Find any revision for this slug at the requested commit. The
@@ -1710,13 +1497,12 @@ func (s *Service) ListWikiPageHistoryPage(ctx context.Context, repoFullName, slu
 	// Locate the page id, including soft-deleted pages — history is
 	// kept around even after a delete so the catalog still has a
 	// truthful revision chain to project.
-	slugCI, err := wikicatalog.CanonicalV1(slug)
-	if err != nil {
+	if err := validateWikiSlug(slug); err != nil {
 		return nil, 0, ErrNotFound
 	}
 	var pageRow db.WikiPage
 	if err := s.DBForCtx(ctx).Unscoped().
-		Where("repository_id = ? AND slug_ci_v1 = ?", rep.ID, slugCI).
+		Where("repository_id = ? AND slug = ?", rep.ID, slug).
 		Take(&pageRow).Error; err != nil {
 		return nil, 0, ErrNotFound
 	}
@@ -1827,7 +1613,7 @@ func (e *WikiConflictError) Unwrap() error { return ErrConflict }
 // ListWikiBacklinks returns all pages in the current wiki HEAD that link to
 // the requested slug.
 func (s *Service) ListWikiBacklinks(ctx context.Context, repoFullName, slug string) ([]WikiBacklink, error) {
-	if err := validateReadableWikiSlug(slug); err != nil {
+	if err := validateWikiSlug(slug); err != nil {
 		return nil, ErrNotFound
 	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
@@ -2091,13 +1877,12 @@ func (s *Service) MoveWikiPage(ctx context.Context, repoFullName, slug, newSlug,
 // content moves through OpRename unchanged, and a self-reference
 // rewrite would collide with OpRename's target slug.
 func (s *Service) planWikiMoveRewrites(ctx context.Context, repoID uint, oldSlug, newSlug string) (map[string]string, []WikiRewriteSkip, error) {
-	oldCI, err := wikicatalog.CanonicalV1(oldSlug)
-	if err != nil {
+	if err := validateWikiSlug(oldSlug); err != nil {
 		return nil, nil, err
 	}
 	var linkerIDs []uint64
 	if err := s.DBForCtx(ctx).Model(&db.WikiPageLink{}).
-		Where("repository_id = ? AND dst_slug_ci = ?", repoID, oldCI).
+		Where("repository_id = ? AND dst_slug = ?", repoID, oldSlug).
 		Distinct("src_page_id").
 		Pluck("src_page_id", &linkerIDs).Error; err != nil {
 		return nil, nil, fmt.Errorf("look up inbound linkers: %w", err)
@@ -2141,18 +1926,11 @@ func (s *Service) wikiSummariesFromCatalog(ctx context.Context, repoID uint, slu
 	if len(slugs) == 0 {
 		return []WikiPageSummary{}, nil
 	}
-	cis := make([]string, 0, len(slugs))
-	for _, sl := range slugs {
-		ci, err := wikicatalog.CanonicalV1(sl)
-		if err != nil {
-			continue
-		}
-		cis = append(cis, ci)
-	}
+	slugs = uniqueStrings(slugs)
 	var pages []db.WikiPage
 	if err := s.DBForCtx(ctx).
 		Preload("LastAuthor").
-		Where("repository_id = ? AND slug_ci_v1 IN ? AND deleted_at IS NULL", repoID, cis).
+		Where("repository_id = ? AND slug IN ? AND deleted_at IS NULL", repoID, slugs).
 		Find(&pages).Error; err != nil {
 		return nil, err
 	}
@@ -2423,30 +2201,21 @@ func (s *Service) MoveWikiPagePrefix(ctx context.Context, repoFullName, from, to
 }
 
 // findWikiBulkMoveSources returns every live wiki page whose slug
-// equals from or starts with from/. Bypasses the slow git tree walk
-// by querying the catalog's slug_ci_v1 prefix index.
+// equals from or starts with from/.
 func (s *Service) findWikiBulkMoveSources(ctx context.Context, repoID uint, from string) ([]string, map[string]db.WikiPage, error) {
-	fromCI, err := wikicatalog.CanonicalV1(from)
-	if err != nil {
+	if err := validateWikiSlug(from); err != nil {
 		return nil, nil, err
 	}
 	var pages []db.WikiPage
 	if err := s.DBForCtx(ctx).
-		Where("repository_id = ? AND deleted_at IS NULL AND (slug_ci_v1 = ? OR slug_ci_v1 LIKE ?)",
-			repoID, fromCI, fromCI+"/%").
+		Where("repository_id = ? AND deleted_at IS NULL AND (slug = ? OR slug LIKE ?)",
+			repoID, from, from+"/%").
 		Find(&pages).Error; err != nil {
 		return nil, nil, err
 	}
 	slugs := make([]string, 0, len(pages))
 	bySlug := make(map[string]db.WikiPage, len(pages))
 	for _, p := range pages {
-		if p.Slug != from && !strings.HasPrefix(p.Slug, from+"/") {
-			// The slug_ci_v1 prefix match can over-include when the
-			// canonicalisation folds case or unusual characters into
-			// the same key; filter on the raw slug to match legacy
-			// REST semantics exactly.
-			continue
-		}
 		slugs = append(slugs, p.Slug)
 		bySlug[p.Slug] = p
 	}

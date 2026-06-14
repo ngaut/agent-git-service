@@ -51,21 +51,21 @@ func (c *Catalog) ApplyChangeSet(ctx context.Context, req ChangeSetRequest) (Cha
 	}
 
 	// Compute per-change blob SHAs up front so the SQL phase always
-	// knows the new head SHA without re-hashing. blobByCI is also used
+	// knows the new head SHA without re-hashing. blobBySlug is also used
 	// for the synthetic commit SHA. OpRename normally carries the
 	// existing blob forward; when the caller provides ch.body on a
 	// rename, we treat it as a body update applied atomically with
 	// the slug move (the prefix-move planner uses this so a moved
 	// page whose body references another moved slug lands the
 	// rewritten content under the new slug).
-	blobByCI := make(map[string]string, len(plan.changes))
+	blobBySlug := make(map[string]string, len(plan.changes))
 	for _, ch := range plan.changes {
 		switch ch.op {
 		case OpUpsert:
-			blobByCI[ch.srcSlugCI] = HashContent(ch.body)
+			blobBySlug[ch.srcSlug] = HashContent(ch.body)
 		case OpRename:
 			if len(ch.body) > 0 {
-				blobByCI[ch.srcSlugCI] = HashContent(ch.body)
+				blobBySlug[ch.srcSlug] = HashContent(ch.body)
 			}
 		}
 	}
@@ -74,7 +74,7 @@ func (c *Catalog) ApplyChangeSet(ctx context.Context, req ChangeSetRequest) (Cha
 	// before opening the SQL txn so that a slow CAS upload does not
 	// hold a transaction lock; the WAL rows make orphan reclamation
 	// straightforward if the txn later fails.
-	if err := c.uploadBlobs(ctx, plan, blobByCI); err != nil {
+	if err := c.uploadBlobs(ctx, plan, blobBySlug); err != nil {
 		return ChangeSetResult{}, err
 	}
 
@@ -89,7 +89,7 @@ func (c *Catalog) ApplyChangeSet(ctx context.Context, req ChangeSetRequest) (Cha
 			casLost bool
 			txErr   error
 		)
-		result, casLost, txErr = c.applyOnce(ctx, plan, blobByCI)
+		result, casLost, txErr = c.applyOnce(ctx, plan, blobBySlug)
 		if txErr != nil {
 			return ChangeSetResult{}, txErr
 		}
@@ -117,7 +117,7 @@ func (c *Catalog) ApplyChangeSet(ctx context.Context, req ChangeSetRequest) (Cha
 // applyOnce performs a single transaction attempt. casLost == true
 // indicates the wiki_repo_heads CAS lost; the caller decides whether
 // to retry.
-func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobByCI map[string]string) (ChangeSetResult, bool, error) {
+func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobBySlug map[string]string) (ChangeSetResult, bool, error) {
 	var (
 		result  ChangeSetResult
 		casLost bool
@@ -152,7 +152,7 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobByCI ma
 		}
 
 		// 2. Pre-read all touched pages.
-		preRead, err := loadPagesByCanonical(tx, plan.repoID, plan.touchedCI)
+		preRead, err := loadPagesBySlug(tx, plan.repoID, plan.touchedSlugs)
 		if err != nil {
 			return err
 		}
@@ -170,7 +170,7 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobByCI ma
 		if plan.overrideCommitSHA != "" {
 			synthSHA = plan.overrideCommitSHA
 		} else {
-			synthSHA = computeSynthCommitSHA(plan.repoID, parentID, plan.committedAt, plan.message, plan.changes, blobByCI)
+			synthSHA = computeSynthCommitSHA(plan.repoID, parentID, plan.committedAt, plan.message, plan.changes, blobBySlug)
 		}
 		cs := db.WikiChangeset{
 			RepositoryID:   plan.repoID,
@@ -226,7 +226,7 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobByCI ma
 			Changes:     make([]ChangeResult, 0, len(plan.changes)),
 		}
 		for _, ch := range plan.changes {
-			cr, err := c.applyChange(tx, plan, &cs, ch, preRead, blobByCI)
+			cr, err := c.applyChange(tx, plan, &cs, ch, preRead, blobBySlug)
 			if err != nil {
 				return err
 			}
@@ -248,7 +248,7 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobByCI ma
 // to either a retry or ErrCASLost depending on caller intent.
 var errSentinelCASLost = errors.New("wiki catalog internal: CAS lost")
 
-func (c *Catalog) uploadBlobs(ctx context.Context, plan changesetPlan, blobByCI map[string]string) error {
+func (c *Catalog) uploadBlobs(ctx context.Context, plan changesetPlan, blobBySlug map[string]string) error {
 	// Invariant for the GC story: bodies with size <= MaxBodyInlineBytes
 	// live exclusively in wiki_pages.body_inline / wiki_page_revisions
 	// .body_inline. They are NOT written to the CAS filesystem and
@@ -277,7 +277,7 @@ func (c *Catalog) uploadBlobs(ctx context.Context, plan changesetPlan, blobByCI 
 			continue
 		}
 		ch := ch
-		sha := blobByCI[ch.srcSlugCI]
+		sha := blobBySlug[ch.srcSlug]
 		g.Go(func() error {
 			pending := db.WikiPendingBlob{
 				BlobSHA:   sha,
@@ -314,15 +314,15 @@ func loadHeadForUpdate(tx *gorm.DB, repoID uint) (db.WikiRepoHead, bool, error) 
 
 // preReadPages partitions the catalog rows touched by a changeset into
 // live pages (visible to readers) and tombstoned pages (rows held by
-// the unique constraint but logically deleted). Both maps key by
-// slug_ci_v1. They are disjoint because the unique index guarantees at
-// most one row per (repo_id, slug_ci_v1).
+// the unique constraint but logically deleted). Both maps key by slug.
+// They are disjoint because the unique index guarantees at most one row
+// per (repo_id, slug).
 type preReadPages struct {
 	live  map[string]db.WikiPage
 	tombs map[string]db.WikiPage
 }
 
-func loadPagesByCanonical(tx *gorm.DB, repoID uint, slugs []string) (preReadPages, error) {
+func loadPagesBySlug(tx *gorm.DB, repoID uint, slugs []string) (preReadPages, error) {
 	out := preReadPages{
 		live:  map[string]db.WikiPage{},
 		tombs: map[string]db.WikiPage{},
@@ -331,17 +331,17 @@ func loadPagesByCanonical(tx *gorm.DB, repoID uint, slugs []string) (preReadPage
 		return out, nil
 	}
 	var rows []db.WikiPage
-	q := tx.Where("repository_id = ? AND slug_ci_v1 IN ?", repoID, slugs).
+	q := tx.Where("repository_id = ? AND slug IN ?", repoID, slugs).
 		Find(&rows)
 	if err := q.Error; err != nil {
 		return preReadPages{}, err
 	}
 	for _, r := range rows {
 		if r.DeletedAt != nil {
-			out.tombs[r.SlugCIV1] = r
+			out.tombs[r.Slug] = r
 			continue
 		}
-		out.live[r.SlugCIV1] = r
+		out.live[r.Slug] = r
 	}
 	return out, nil
 }
@@ -350,7 +350,7 @@ func (c *Catalog) checkConflicts(tx *gorm.DB, plan changesetPlan, preRead preRea
 	for _, ch := range plan.changes {
 		switch ch.op {
 		case OpUpsert:
-			existing, isLive := preRead.live[ch.srcSlugCI]
+			existing, isLive := preRead.live[ch.srcSlug]
 			// IfMatch is interpreted against live state only; a
 			// tombstoned row is "absent" from the caller's
 			// perspective and a stale ETag must surface as a
@@ -364,13 +364,13 @@ func (c *Catalog) checkConflicts(tx *gorm.DB, plan changesetPlan, preRead preRea
 			// from the pruned state and assertNoPrefixCollision will
 			// allow it because the tomb's leaf was already removed.
 			if !isLive {
-				if err := assertNoPrefixCollision(tx, plan.repoID, ch.srcSlugCI, 0); err != nil {
+				if err := assertNoPrefixCollision(tx, plan.repoID, ch.srcSlug, 0); err != nil {
 					return err
 				}
 			}
 
 		case OpDelete:
-			existing, isLive := preRead.live[ch.srcSlugCI]
+			existing, isLive := preRead.live[ch.srcSlug]
 			if !isLive {
 				return fmt.Errorf("%w: %q", ErrPageNotFound, ch.srcSlug)
 			}
@@ -379,14 +379,14 @@ func (c *Catalog) checkConflicts(tx *gorm.DB, plan changesetPlan, preRead preRea
 			}
 
 		case OpRename:
-			existing, isLive := preRead.live[ch.srcSlugCI]
+			existing, isLive := preRead.live[ch.srcSlug]
 			if !isLive {
 				return fmt.Errorf("%w: %q", ErrPageNotFound, ch.srcSlug)
 			}
 			if err := checkIfMatch(ch, existing.HeadBlobSHA, true); err != nil {
 				return err
 			}
-			if _, taken := preRead.live[ch.dstSlugCI]; taken {
+			if _, taken := preRead.live[ch.dstSlug]; taken {
 				return &ConflictError{
 					Code:        ConflictCodeDestinationTake,
 					Slug:        ch.srcSlug,
@@ -402,7 +402,7 @@ func (c *Catalog) checkConflicts(tx *gorm.DB, plan changesetPlan, preRead preRea
 			// destination's revision history colliding with the
 			// renamed page's. Surface this as a destination-taken
 			// conflict so the operator hard-deletes the tomb first.
-			if _, tombAtDest := preRead.tombs[ch.dstSlugCI]; tombAtDest {
+			if _, tombAtDest := preRead.tombs[ch.dstSlug]; tombAtDest {
 				return &ConflictError{
 					Code:        ConflictCodeDestinationTake,
 					Slug:        ch.srcSlug,
@@ -410,7 +410,7 @@ func (c *Catalog) checkConflicts(tx *gorm.DB, plan changesetPlan, preRead preRea
 					Message:     fmt.Sprintf("rename destination %q holds a tombstoned page; purge it before renaming", ch.dstSlug),
 				}
 			}
-			if err := assertNoPrefixCollision(tx, plan.repoID, ch.dstSlugCI, existing.PageID); err != nil {
+			if err := assertNoPrefixCollision(tx, plan.repoID, ch.dstSlug, existing.PageID); err != nil {
 				return err
 			}
 		}
@@ -432,12 +432,12 @@ func (c *Catalog) checkConflicts(tx *gorm.DB, plan changesetPlan, preRead preRea
 // ignorePageID lets renames declare the source page should not count
 // against the check (its dir leaf is removed in the same transaction
 // before the new leaf is inserted).
-func assertNoPrefixCollision(tx *gorm.DB, repoID uint, slugCI string, ignorePageID uint64) error {
-	// Case 1: any ancestor of slugCI is occupied as a blob leaf.
+func assertNoPrefixCollision(tx *gorm.DB, repoID uint, slug string, ignorePageID uint64) error {
+	// Case 1: any ancestor of slug is occupied as a blob leaf.
 	// One IN-list query against (parent_dir, child_name) tuples for
 	// the whole parent chain replaces the legacy per-depth point
 	// query loop. Bounded by wikiMaxSlugDepth (≤ 6 ancestors).
-	ancestors := parentChain(slugCI)
+	ancestors := parentChain(slug)
 	if len(ancestors) > 0 {
 		// Tuples: (parent_dir, child_name). Some dialects support
 		// `WHERE (a, b) IN ((..),(..))`; SQLite and TiDB do. For
@@ -471,31 +471,31 @@ func assertNoPrefixCollision(tx *gorm.DB, repoID uint, slugCI string, ignorePage
 			}
 			return &ConflictError{
 				Code:         ConflictCodePrefix,
-				Slug:         slugCI,
+				Slug:         slug,
 				CollidesWith: collides,
-				Message:      fmt.Sprintf("slug %q conflicts with existing page %q", slugCI, collides),
+				Message:      fmt.Sprintf("slug %q conflicts with existing page %q", slug, collides),
 			}
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 	}
-	// Case 2: slugCI itself is a directory containing at least one
+	// Case 2: slug itself is a directory containing at least one
 	// live child. dir_index makes this a single index range probe.
 	q := tx.Model(&db.WikiDirIndex{}).
-		Where("repository_id = ? AND parent_dir = ?", repoID, slugCI)
+		Where("repository_id = ? AND parent_dir = ?", repoID, slug)
 	if ignorePageID > 0 {
 		q = q.Where("page_id IS NULL OR page_id <> ?", ignorePageID)
 	}
 	var child db.WikiDirIndex
 	err := q.Take(&child).Error
 	if err == nil {
-		nested := slugCI + "/" + child.ChildName
+		nested := slug + "/" + child.ChildName
 		return &ConflictError{
 			Code:         ConflictCodePrefix,
-			Slug:         slugCI,
+			Slug:         slug,
 			CollidesWith: nested,
-			Message:      fmt.Sprintf("slug %q would shadow nested page %q", slugCI, nested),
+			Message:      fmt.Sprintf("slug %q would shadow nested page %q", slug, nested),
 		}
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {

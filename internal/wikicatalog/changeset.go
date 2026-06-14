@@ -40,9 +40,9 @@ func (o Op) String() string {
 // call may carry many Changes, all committed atomically inside one
 // SQL transaction and one wiki_changesets row.
 //
-// Within a changeset, no two Changes may target the same canonical
-// slug. ApplyChangeSet rejects this at validation time because
-// resolving the intended final state would be ambiguous.
+// Within a changeset, no two Changes may target the same slug.
+// ApplyChangeSet rejects this at validation time because resolving
+// the intended final state would be ambiguous.
 type Change struct {
 	Op      Op
 	Slug    string
@@ -106,8 +106,8 @@ type ChangeSetRequest struct {
 // order so callers can correlate Result[i] with Request.Changes[i].
 type ChangeResult struct {
 	Op         Op
-	Slug       string // post-change canonical slug (NewSlug for rename, Slug otherwise)
-	PrevSlug   string // pre-change canonical slug; only set for OpRename and OpDelete
+	Slug       string // post-change slug (NewSlug for rename, Slug otherwise)
+	PrevSlug   string // pre-change slug; only set for OpRename and OpDelete
 	PageID     uint64
 	RevisionID uint64
 	BlobSHA    string // empty for OpDelete
@@ -137,8 +137,7 @@ var (
 	ErrPageNotFound = errors.New("wiki catalog: page not found")
 
 	// ErrDuplicateInChangeset indicates that two Changes in the same
-	// request target the same canonical slug (after canonicalization
-	// of source and destination slugs).
+	// request target the same slug, including rename destinations.
 	ErrDuplicateInChangeset = errors.New("wiki catalog: duplicate slug within changeset")
 )
 

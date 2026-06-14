@@ -183,7 +183,7 @@ func BenchmarkListPagesByRepo(b *testing.B) {
 				var slugs []string
 				if err := gdb.Model(&db.WikiPage{}).
 					Where("repository_id = ? AND deleted_at IS NULL", repoID).
-					Order("slug_ci_v1").
+					Order("slug").
 					Pluck("slug", &slugs).Error; err != nil {
 					b.Fatalf("list: %v", err)
 				}
@@ -199,7 +199,7 @@ func BenchmarkListPagesByRepo(b *testing.B) {
 // check on the underlying indexed repo-wide slug query at N=10 000
 // pages. Rather than asserting wall-clock latency in the default unit
 // test lane, it verifies the SQLite planner still takes the
-// repository_id + slug_ci_v1 index path for the list query shape that
+// repository_id + slug index path for the list query shape that
 // the future ListWikiPages cutover will rely on.
 func TestCatalogListQuery_UsesIndexedPlan(t *testing.T) {
 	if testing.Short() {
@@ -211,7 +211,7 @@ func TestCatalogListQuery_UsesIndexedPlan(t *testing.T) {
 	var slugs []string
 	if err := gdb.Model(&db.WikiPage{}).
 		Where("repository_id = ? AND deleted_at IS NULL", repoID).
-		Order("slug_ci_v1").
+		Order("slug").
 		Pluck("slug", &slugs).Error; err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestCatalogListQuery_UsesIndexedPlan(t *testing.T) {
 	}
 	var plan []queryPlanRow
 	if err := gdb.Raw(
-		"EXPLAIN QUERY PLAN SELECT slug FROM wiki_pages WHERE repository_id = ? AND deleted_at IS NULL ORDER BY slug_ci_v1",
+		"EXPLAIN QUERY PLAN SELECT slug FROM wiki_pages WHERE repository_id = ? AND deleted_at IS NULL ORDER BY slug",
 		repoID,
 	).Scan(&plan).Error; err != nil {
 		t.Fatalf("explain query plan: %v", err)
@@ -242,19 +242,19 @@ func TestCatalogListQuery_UsesIndexedPlan(t *testing.T) {
 			continue
 		}
 		if strings.Contains(detail, "IDX_WIKI_PAGES_REPO_PREFIX") ||
-			strings.Contains(detail, "IDX_WIKI_PAGES_REPO_SLUG_CI") {
+			strings.Contains(detail, "IDX_WIKI_PAGES_REPO_SLUG") {
 			sawOrderedIndex = true
 		}
 	}
 	if sawOrderedIndex {
 		return
 	}
-	t.Fatalf("expected SQLite to use a (repository_id, slug_ci_v1) index for repo-wide slug listing, got plan: %#v", plan)
+	t.Fatalf("expected SQLite to use a (repository_id, slug) index for repo-wide slug listing, got plan: %#v", plan)
 }
 
 // BenchmarkReadPageBySlug measures the indexed point lookup that will
 // back single-page reads after the M3 cutover. It exercises the unique
-// index on (repository_id, slug_ci_v1) — the lookup that will sit on
+// index on (repository_id, slug) — the lookup that will sit on
 // the read hot path.
 //
 // As with BenchmarkListPagesByRepo, the catalog does not yet export a
@@ -272,7 +272,7 @@ func BenchmarkReadPageBySlug(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				var page db.WikiPage
-				if err := gdb.Where("repository_id = ? AND slug_ci_v1 = ? AND deleted_at IS NULL",
+				if err := gdb.Where("repository_id = ? AND slug = ? AND deleted_at IS NULL",
 					repoID, target).Take(&page).Error; err != nil {
 					b.Fatalf("read %q at N=%d: %v", target, n, err)
 				}
