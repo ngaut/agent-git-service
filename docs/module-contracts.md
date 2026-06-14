@@ -34,7 +34,7 @@ The public import surface is intentionally small:
 
 - `config` exposes environment-backed startup configuration.
 - `server` exposes the embeddable composition-root APIs (`New`, `Run`,
-  `RunWikiReindex`, `Start`, `Shutdown`, and mountable handlers).
+  `RunWikiReindex`, `Handler`, and `Shutdown`).
 - Everything else in the root module remains internal-only unless documented
   otherwise.
 
