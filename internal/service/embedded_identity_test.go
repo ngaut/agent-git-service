@@ -17,12 +17,11 @@ func TestResolveEmbeddedIdentity_RejectsExistingHumanLoginCollision(t *testing.T
 	defer cleanup()
 
 	existing := db.User{
-		Login:       "gateway-user",
-		Name:        "Existing User",
-		Email:       "existing@example.com",
-		Type:        db.TypeUser,
-		UserKind:    db.UserKindHuman,
-		IsAnonymous: false,
+		Login:    "gateway-user",
+		Name:     "Existing User",
+		Email:    "existing@example.com",
+		Type:     db.TypeUser,
+		UserKind: db.UserKindHuman,
 	}
 	if err := svc.DB.Create(&existing).Error; err != nil {
 		t.Fatalf("create existing user: %v", err)
@@ -76,11 +75,10 @@ func TestResolveEmbeddedIdentity_RejectsOrganizationLoginCollision(t *testing.T)
 	defer cleanup()
 
 	existing := db.User{
-		Login:       "shared-login",
-		Name:        "Shared Org",
-		Type:        db.TypeOrganization,
-		UserKind:    db.UserKindHuman,
-		IsAnonymous: false,
+		Login:    "shared-login",
+		Name:     "Shared Org",
+		Type:     db.TypeOrganization,
+		UserKind: db.UserKindHuman,
 	}
 	if err := svc.DB.Create(&existing).Error; err != nil {
 		t.Fatalf("create organization: %v", err)
@@ -112,11 +110,10 @@ func TestResolveEmbeddedIdentity_RejectsAgentLoginCollision(t *testing.T) {
 	defer cleanup()
 
 	existing := db.User{
-		Login:       "shared-agent",
-		Name:        "Shared Agent",
-		Type:        db.TypeUser,
-		UserKind:    db.UserKindAgent,
-		IsAnonymous: false,
+		Login:    "shared-agent",
+		Name:     "Shared Agent",
+		Type:     db.TypeUser,
+		UserKind: db.UserKindAgent,
 	}
 	if err := svc.DB.Create(&existing).Error; err != nil {
 		t.Fatalf("create agent: %v", err)

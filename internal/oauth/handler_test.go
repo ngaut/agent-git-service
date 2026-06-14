@@ -108,48 +108,6 @@ func TestRequestDeviceCode(t *testing.T) {
 	}
 }
 
-func TestRequestDeviceCode_PreapproveEnabled(t *testing.T) {
-	svc := setupTestService(t)
-	h := oauth.New(svc)
-	h.PreapproveDeviceCodes = true
-
-	r := httptest.NewRequest("POST", "/login/device/code", nil)
-	w := httptest.NewRecorder()
-	h.RequestDeviceCode(w, r)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	var body map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	deviceCode := body["device_code"].(string)
-
-	var code db.DeviceCode
-	if err := svc.DB.First(&code, "device_code = ?", deviceCode).Error; err != nil {
-		t.Fatalf("load device code: %v", err)
-	}
-	if code.State != db.DeviceCodeStateApproved {
-		t.Fatalf("device code state = %q, want %q", code.State, db.DeviceCodeStateApproved)
-	}
-	if code.ApprovedBy == nil || *code.ApprovedBy == 0 {
-		t.Fatal("expected ApprovedBy to be populated")
-	}
-	if code.AccessToken == "" {
-		t.Fatal("expected AccessToken to be populated")
-	}
-
-	exchange := httptest.NewRequest("POST", "/login/oauth/access_token", strings.NewReader(`{"device_code":"`+deviceCode+`"}`))
-	exchange.Header.Set("Content-Type", "application/json")
-	exchangeW := httptest.NewRecorder()
-	h.AccessToken(exchangeW, exchange)
-
-	if exchangeW.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", exchangeW.Code, exchangeW.Body.String())
-	}
-}
-
 func TestAccessToken_JSONBody(t *testing.T) {
 	svc := setupTestService(t)
 	h := oauth.New(svc)

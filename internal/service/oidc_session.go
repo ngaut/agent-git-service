@@ -118,12 +118,11 @@ attemptLoop:
 				for i := 0; i < maxLoginAttempts && i < len(loginCandidates); i++ {
 					login := loginCandidates[i]
 					created = db.User{
-						Login:       login,
-						Name:        profile.DisplayName(login),
-						Email:       profile.Email,
-						Type:        db.TypeUser,
-						UserKind:    userKind,
-						IsAnonymous: false,
+						Login:    login,
+						Name:     profile.DisplayName(login),
+						Email:    profile.Email,
+						Type:     db.TypeUser,
+						UserKind: userKind,
 					}
 					if err := tx.Create(&created).Error; err != nil {
 						if isDuplicateErr(err) {

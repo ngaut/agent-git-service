@@ -13,12 +13,9 @@ type User struct {
 	// Status controls whether the account may approve or receive OAuth grants.
 	Status string `gorm:"size:20;not null;default:'active'"` // active, banned, suspended, deleted
 	// UserKind distinguishes human accounts from agent accounts.
-	UserKind                    string `gorm:"size:16;default:'human'"`
+	UserKind                    string `gorm:"size:16;not null;default:'human'"`
 	SiteAdmin                   bool   `gorm:"default:false"`
 	DefaultRepositoryPermission string `gorm:"size:20;not null;default:'none'"`
-	// IsAnonymous is legacy state for deprecated anonymous accounts.
-	// It is no longer authoritative; use UserKind for access decisions.
-	IsAnonymous bool `gorm:"index;default:false"`
 	// HidePresence allows users to hide their presence from others.
 	HidePresence bool `gorm:"default:false"`
 	CreatedAt    time.Time

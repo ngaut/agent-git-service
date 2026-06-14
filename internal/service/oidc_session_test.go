@@ -126,8 +126,8 @@ func TestOIDCLogin_NewUser(t *testing.T) {
 	if user.Name != "New User" {
 		t.Errorf("expected name 'New User', got %q", user.Name)
 	}
-	if user.IsAnonymous {
-		t.Error("expected user to not be anonymous")
+	if user.UserKind != db.UserKindHuman {
+		t.Errorf("expected user kind %q, got %q", db.UserKindHuman, user.UserKind)
 	}
 
 	// Verify identity was linked

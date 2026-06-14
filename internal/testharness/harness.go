@@ -54,7 +54,7 @@ func New(tb testing.TB) *Harness {
 	tb.Cleanup(cleanup)
 
 	// Seed a default admin user (SiteAdmin: true for OAuth exchange compatibility).
-	user := db.User{Login: "testuser", Name: "testuser", Type: db.TypeUser, SiteAdmin: true}
+	user := db.User{Login: "testuser", Name: "testuser", Type: db.TypeUser, UserKind: db.UserKindHuman, SiteAdmin: true}
 	if err := svc.DB.Create(&user).Error; err != nil {
 		tb.Fatalf("testharness: seed user: %v", err)
 	}
