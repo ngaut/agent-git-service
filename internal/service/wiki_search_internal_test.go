@@ -343,7 +343,7 @@ func TestWikiSearchCurrentHydrationQuery_OmitsEmbedding(t *testing.T) {
 	}
 }
 
-func TestSearchWikiSemanticANN_FallsBackWhenCandidateWindowMissesRepoDocs(t *testing.T) {
+func TestSearchWikiSemanticANN_PostFiltersWithoutExactRepoFallback(t *testing.T) {
 	driverName := fmt.Sprintf("sqlite3_wiki_ann_fallback_%d", time.Now().UnixNano())
 	sql.Register(driverName, &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
@@ -415,11 +415,11 @@ func TestSearchWikiSemanticANN_FallsBackWhenCandidateWindowMissesRepoDocs(t *tes
 	if err != nil {
 		t.Fatalf("searchWikiSemanticANN: %v", err)
 	}
-	if !ok {
-		t.Fatal("expected ANN path to return results after exact fallback")
+	if ok {
+		t.Fatalf("expected ANN path to avoid exact fallback when candidate window misses repo docs, got results %#v", results)
 	}
-	if len(results) != 1 || results[0].Slug != "target-hit" {
-		t.Fatalf("results = %#v, want target-hit after exact fallback", results)
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want none without exact fallback", results)
 	}
 }
 
