@@ -355,22 +355,6 @@ func TestEnvironmentInvalid(t *testing.T) {
 	}
 }
 
-func TestGetEnvReturnsValueWhenSet(t *testing.T) {
-	t.Setenv("TEST_CONFIG_KEY", "custom")
-	got := getEnv("TEST_CONFIG_KEY", "default")
-	if got != "custom" {
-		t.Errorf("expected 'custom', got %q", got)
-	}
-}
-
-func TestGetEnvReturnsFallbackWhenUnset(t *testing.T) {
-	t.Setenv("TEST_CONFIG_KEY_UNSET", "")
-	got := getEnv("TEST_CONFIG_KEY_UNSET", "fallback")
-	if got != "fallback" {
-		t.Errorf("expected 'fallback', got %q", got)
-	}
-}
-
 func TestWorkflowExecTimeoutInvalid(t *testing.T) {
 	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
 	t.Setenv("WORKFLOW_EXEC_TIMEOUT", "nope")

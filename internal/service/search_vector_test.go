@@ -8,23 +8,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
-// mockEmbedder returns deterministic vectors for testing.
-type mockEmbedder struct {
-	vectors map[string][]float32
-}
-
-func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	if v, ok := m.vectors[text]; ok {
-		return v, nil
-	}
-	// Return a simple deterministic vector
-	return []float32{0.1, 0.2, 0.3}, nil
-}
-
-func (m *mockEmbedder) Dimensions() int {
-	return 3
-}
-
 // TestSearchIssues_EmbeddingFailureGracefulDegradation tests that search falls back to LIKE
 // when embedding API fails or is unavailable.
 func TestSearchIssues_EmbeddingFailureGracefulDegradation(t *testing.T) {

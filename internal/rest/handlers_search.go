@@ -134,13 +134,6 @@ func parseTopicsStr(t string) []string {
 	return out
 }
 
-func repoPushedAt(rep db.Repository) time.Time {
-	if rep.PushedAt != nil {
-		return *rep.PushedAt
-	}
-	return rep.CreatedAt
-}
-
 func parseNumericQualifier(raw string) (func(int) bool, bool) {
 	spec := strings.TrimSpace(raw)
 	if spec == "" {
@@ -211,118 +204,6 @@ func parseNumericQualifier(raw string) (func(int) bool, bool) {
 		return nil, false
 	}
 	return func(v int) bool { return v == n }, true
-}
-
-type dateValue struct {
-	t       time.Time
-	dayOnly bool
-}
-
-func parseDateValue(raw string) (dateValue, bool) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return dateValue{}, false
-	}
-	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return dateValue{t: t}, true
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return dateValue{t: t}, true
-	}
-	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return dateValue{t: t, dayOnly: true}, true
-	}
-	return dateValue{}, false
-}
-
-func dateBounds(v dateValue) (time.Time, time.Time) {
-	if !v.dayOnly {
-		return v.t, v.t
-	}
-	start := time.Date(v.t.Year(), v.t.Month(), v.t.Day(), 0, 0, 0, 0, time.UTC)
-	end := start.Add(24*time.Hour - time.Nanosecond)
-	return start, end
-}
-
-func parseDateQualifier(raw string) (func(time.Time) bool, bool) {
-	spec := strings.TrimSpace(raw)
-	if spec == "" {
-		return nil, false
-	}
-
-	if strings.Contains(spec, "..") {
-		parts := strings.SplitN(spec, "..", 2)
-		left := strings.TrimSpace(parts[0])
-		right := strings.TrimSpace(parts[1])
-		var (
-			hasLeft  bool
-			hasRight bool
-			leftVal  time.Time
-			rightVal time.Time
-		)
-		if left != "" {
-			v, ok := parseDateValue(left)
-			if !ok {
-				return nil, false
-			}
-			leftVal, _ = dateBounds(v)
-			hasLeft = true
-		}
-		if right != "" {
-			v, ok := parseDateValue(right)
-			if !ok {
-				return nil, false
-			}
-			_, rightVal = dateBounds(v)
-			hasRight = true
-		}
-		if !hasLeft && !hasRight {
-			return nil, false
-		}
-		return func(t time.Time) bool {
-			if hasLeft && t.Before(leftVal) {
-				return false
-			}
-			if hasRight && t.After(rightVal) {
-				return false
-			}
-			return true
-		}, true
-	}
-
-	ops := []string{">=", "<=", ">", "<"}
-	for _, op := range ops {
-		if strings.HasPrefix(spec, op) {
-			valStr := strings.TrimSpace(spec[len(op):])
-			v, ok := parseDateValue(valStr)
-			if !ok {
-				return nil, false
-			}
-			start, end := dateBounds(v)
-			switch op {
-			case ">=":
-				return func(t time.Time) bool { return !t.Before(start) }, true
-			case "<=":
-				return func(t time.Time) bool { return !t.After(end) }, true
-			case ">":
-				return func(t time.Time) bool { return t.After(end) }, true
-			case "<":
-				return func(t time.Time) bool { return t.Before(start) }, true
-			}
-		}
-	}
-
-	if strings.HasPrefix(spec, "=") {
-		spec = strings.TrimSpace(spec[1:])
-	}
-	v, ok := parseDateValue(spec)
-	if !ok {
-		return nil, false
-	}
-	start, end := dateBounds(v)
-	return func(t time.Time) bool {
-		return !t.Before(start) && !t.After(end)
-	}, true
 }
 
 // SearchIssues handles GET /api/v3/search/issues

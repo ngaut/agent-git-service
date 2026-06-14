@@ -17,7 +17,6 @@ const (
 
 type actorKey struct{}
 type reportKey struct{}
-type snapshotKey struct{}
 
 // Resource identifies a GitHub rate-limit bucket.
 type Resource string
@@ -148,39 +147,12 @@ func NewGitHubLimiter() *Limiter {
 	}
 }
 
-// CompatibilitySnapshot returns the authenticated core snapshot used when a
-// handler is invoked without middleware in front of it.
-func CompatibilitySnapshot(now time.Time) Snapshot {
-	p := authenticatedPolicies()[ResourceCore]
-	return snapshotForPolicy(p, ResourceCore, 0, now.UTC())
-}
-
-// SnapshotForContext returns the request-scoped snapshot when present so
-// headers and handler payloads stay in sync for a single response.
-func SnapshotForContext(ctx context.Context, now time.Time) Snapshot {
-	if snapshot, ok := SnapshotFromContext(ctx); ok {
-		return snapshot
-	}
-	return CompatibilitySnapshot(now)
-}
-
 // ReportForContext returns the request-scoped rate-limit report when present.
 func ReportForContext(ctx context.Context, now time.Time) Report {
 	if report, ok := reportFromContext(ctx); ok {
 		return report
 	}
 	return NewGitHubLimiter().Report(Subject{Actor: "ip:compat", Authenticated: false}, now)
-}
-
-// WithSnapshot stores a rate-limit snapshot on the request context.
-func WithSnapshot(ctx context.Context, snapshot Snapshot) context.Context {
-	return context.WithValue(ctx, snapshotKey{}, snapshot)
-}
-
-// SnapshotFromContext loads the rate-limit snapshot from the request context.
-func SnapshotFromContext(ctx context.Context) (Snapshot, bool) {
-	snapshot, ok := ctx.Value(snapshotKey{}).(Snapshot)
-	return snapshot, ok
 }
 
 // WithReport stores a rate-limit report on the request context.

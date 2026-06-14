@@ -61,13 +61,6 @@ func (s *Service) TypingHub() *TypingHub {
 	return s.typingHub
 }
 
-func (h *TypingHub) TTL() time.Duration {
-	if h == nil {
-		return DefaultTypingTTL
-	}
-	return h.ttl
-}
-
 func (h *TypingHub) Subscribe(issueID uint) ([]TypingUser, <-chan TypingEnvelope, func()) {
 	ch := make(chan TypingEnvelope, 16)
 

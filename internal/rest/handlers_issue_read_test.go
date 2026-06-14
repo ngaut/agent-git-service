@@ -155,13 +155,6 @@ type participantReadStateResponse struct {
 	UpdatedAt         string `json:"updated_at"`
 }
 
-func decodeIssueReadStateResponse(t *testing.T, w *http.Response) issueReadStateResponse {
-	t.Helper()
-	var resp issueReadStateResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	return resp
-}
-
 func decodeIssueReadStateResponseFromRecorder(t *testing.T, w *httptest.ResponseRecorder) issueReadStateResponse {
 	t.Helper()
 	var resp issueReadStateResponse

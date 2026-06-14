@@ -348,17 +348,17 @@ func TestCreateAgentSwitchSessionPreservesExistingAgentToken(t *testing.T) {
 		t.Fatalf("expected switch session token expiry in the future, got %v", result.Token.ExpiresAt)
 	}
 
-	resolvedOld, err := svc.ResolveUserByToken(context.Background(), originalToken)
-	if err != nil {
-		t.Fatalf("ResolveUserByToken(original): %v", err)
+	resolvedOld, ok := svc.ValidateAndResolveToken(context.Background(), originalToken)
+	if !ok {
+		t.Fatal("ValidateAndResolveToken(original) failed")
 	}
 	if resolvedOld.ID != agent.ID {
 		t.Fatalf("resolved old token user = %d, want %d", resolvedOld.ID, agent.ID)
 	}
 
-	resolvedNew, err := svc.ResolveUserByToken(context.Background(), result.Token.Value)
-	if err != nil {
-		t.Fatalf("ResolveUserByToken(new): %v", err)
+	resolvedNew, ok := svc.ValidateAndResolveToken(context.Background(), result.Token.Value)
+	if !ok {
+		t.Fatal("ValidateAndResolveToken(new) failed")
 	}
 	if resolvedNew.ID != agent.ID {
 		t.Fatalf("resolved new token user = %d, want %d", resolvedNew.ID, agent.ID)
@@ -409,13 +409,13 @@ func TestRefreshAgentSwitchSessionRotatesOnlyTheSwitchToken(t *testing.T) {
 		t.Fatalf("expected refreshed switch token expiry in the future, got %v", refreshed.Token.ExpiresAt)
 	}
 
-	if _, err := svc.ResolveUserByToken(context.Background(), originalToken); err != nil {
-		t.Fatalf("ResolveUserByToken(original): %v", err)
+	if _, ok := svc.ValidateAndResolveToken(context.Background(), originalToken); !ok {
+		t.Fatal("ValidateAndResolveToken(original) failed")
 	}
-	if _, err := svc.ResolveUserByToken(context.Background(), refreshed.Token.Value); err != nil {
-		t.Fatalf("ResolveUserByToken(refreshed): %v", err)
+	if _, ok := svc.ValidateAndResolveToken(context.Background(), refreshed.Token.Value); !ok {
+		t.Fatal("ValidateAndResolveToken(refreshed) failed")
 	}
-	if _, err := svc.ResolveUserByToken(context.Background(), issued.Token.Value); err == nil {
+	if _, ok := svc.ValidateAndResolveToken(context.Background(), issued.Token.Value); ok {
 		t.Fatal("expected old switch token to stop resolving after refresh")
 	}
 

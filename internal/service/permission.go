@@ -105,10 +105,6 @@ func ParseRepoPermission(value string) RepoPermission {
 	}
 }
 
-func parseRepoPermission(value string) RepoPermission {
-	return ParseRepoPermission(value)
-}
-
 func NormalizeGrantPermission(value string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "pull", "read", "triage":

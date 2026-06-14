@@ -117,33 +117,6 @@ func isUserStatusActive(status string) bool {
 	return normalizeUserStatus(status) == db.UserStatusActive
 }
 
-// ValidateToken checks if the given token is valid.
-// When AllowAnyToken is true and the tokens table is empty, any non-empty token
-// is accepted (dev convenience). Otherwise, the token must match one in the DB.
-func (s *Service) ValidateToken(ctx context.Context, token string) bool {
-	var count int64
-	// Use retry logic for token count query to handle TiDB PD timeouts
-	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).Model(&db.Token{}).Count(&count).Error
-	}); err != nil {
-		return false // DB error — reject
-	}
-	if count == 0 {
-		return s.AllowAnyToken
-	}
-	var tok db.Token
-	// Use retry logic for token lookup to handle TiDB PD timeouts
-	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).Take(&tok, "value = ?", token).Error
-	}); err != nil {
-		return false
-	}
-	if tok.ExpiresAt != nil && !tok.ExpiresAt.After(time.Now().UTC()) {
-		return false
-	}
-	return true
-}
-
 // CreateDeviceCode stores a new OAuth device code and returns it.
 func (s *Service) CreateDeviceCode(ctx context.Context, code *db.DeviceCode) error {
 	return s.DBForCtx(ctx).Create(code).Error
@@ -459,41 +432,8 @@ func (s *Service) ExchangeDeviceCode(ctx context.Context, deviceCode string) (ac
 	return "", fmt.Errorf("exchange device code: failed after %d retries", maxRetries)
 }
 
-// ResolveUserByToken looks up the user who owns the given token.
-// When AllowAnyToken is true and no tokens are registered, returns the first
-// admin user. Otherwise, the token must exist in the DB.
-func (s *Service) ResolveUserByToken(ctx context.Context, token string) (db.User, error) {
-	var count int64
-	// Use retry logic for token count query to handle TiDB PD timeouts
-	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).Model(&db.Token{}).Count(&count).Error
-	}); err != nil {
-		return db.User{}, fmt.Errorf("ResolveUserByToken: count tokens: %w", err)
-	}
-	if count == 0 {
-		if !s.AllowAnyToken {
-			return db.User{}, fmt.Errorf("ResolveUserByToken: no tokens registered and ALLOW_ANY_TOKEN is not set")
-		}
-		var u db.User
-		err := s.DBForCtx(ctx).First(&u, "type = ? AND site_admin = ?", db.TypeUser, true).Error
-		return u, err
-	}
-	var tok db.Token
-	// Use retry logic for token lookup to handle TiDB PD timeouts
-	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).Preload("User").Take(&tok, "value = ?", token).Error
-	}); err != nil {
-		return db.User{}, fmt.Errorf("ResolveUserByToken: %w", err)
-	}
-	if tok.ExpiresAt != nil && !tok.ExpiresAt.After(time.Now().UTC()) {
-		return db.User{}, fmt.Errorf("ResolveUserByToken: token expired: %w", ErrUnauthorized)
-	}
-	return tok.User, nil
-}
-
 // ValidateAndResolveToken validates the token and resolves the owning user in
-// a single pass. This replaces the pattern of calling ValidateToken() followed
-// by ResolveUserByToken(), which duplicates the COUNT(*) and SELECT queries.
+// a single pass.
 //
 // Returns the user and true if valid, or zero-value and false if invalid.
 func (s *Service) ValidateAndResolveToken(ctx context.Context, token string) (db.User, bool) {

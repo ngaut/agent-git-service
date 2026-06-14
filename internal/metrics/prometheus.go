@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -165,7 +164,6 @@ var (
 	defaultPrometheus *PrometheusMetrics
 	defaultHandler    http.Handler
 	initOnce          sync.Once
-	metricsEnabled    atomic.Bool
 )
 
 // Init registers metrics with the default registry and returns the handler.
@@ -174,19 +172,8 @@ func Init() http.Handler {
 		defaultPrometheus = NewPrometheusMetrics(prometheus.DefaultRegisterer)
 		defaultRecorder = defaultPrometheus
 		defaultHandler = promhttp.Handler()
-		metricsEnabled.Store(true)
 	})
 	return defaultHandler
-}
-
-// Handler returns the Prometheus HTTP handler if initialized.
-func Handler() http.Handler {
-	return defaultHandler
-}
-
-// Enabled reports whether metrics have been initialized.
-func Enabled() bool {
-	return metricsEnabled.Load()
 }
 
 // DefaultPrometheus returns the default Prometheus collector set, if initialized.

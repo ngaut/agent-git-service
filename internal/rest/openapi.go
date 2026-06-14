@@ -8,11 +8,6 @@ import (
 
 var restOpenAPISpec = mustBuildRESTOpenAPISpec()
 
-// OpenAPISpecBytes returns the published REST extension OpenAPI artifact.
-func OpenAPISpecBytes() []byte {
-	return append([]byte(nil), restOpenAPISpec...)
-}
-
 // GetOpenAPI handles GET /api/v3/openapi.json.
 func (d *Deps) GetOpenAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
