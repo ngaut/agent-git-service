@@ -102,6 +102,60 @@ func TestGrepFilesAtRef(t *testing.T) {
 	}
 }
 
+func TestGrepFileMatchCountsAtRef(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gitstore-grep-counts-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := gitstore.New(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repoName := "user/grep-counts"
+
+	if err := store.Init(ctx, repoName, "main", false); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	if _, err := store.WriteFile(ctx, repoName, "main", "home.md", "add home", []byte("Setup\nsetup again\n")); err != nil {
+		t.Fatalf("WriteFile(home): %v", err)
+	}
+	if _, err := store.WriteFile(ctx, repoName, "main", "guide:setup.md", "add guide", []byte("setup\nnothing\nsetup\n")); err != nil {
+		t.Fatalf("WriteFile(guide): %v", err)
+	}
+	if _, err := store.WriteFile(ctx, repoName, "main", "notes.md", "add notes", []byte("No links here.\n")); err != nil {
+		t.Fatalf("WriteFile(notes): %v", err)
+	}
+	head, err := store.HeadSHA(ctx, repoName, "main")
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+
+	counts, err := store.GrepFileMatchCountsAtRef(ctx, repoName, head, []string{"setup"})
+	if err != nil {
+		t.Fatalf("GrepFileMatchCountsAtRef: %v", err)
+	}
+	if counts["home.md"] != 2 {
+		t.Fatalf("home.md count = %d, want 2", counts["home.md"])
+	}
+	if counts["guide:setup.md"] != 2 {
+		t.Fatalf("guide:setup.md count = %d, want 2", counts["guide:setup.md"])
+	}
+	if _, ok := counts["notes.md"]; ok {
+		t.Fatalf("notes.md should not match: %#v", counts)
+	}
+
+	counts, err = store.GrepFileMatchCountsAtRef(ctx, repoName, head, []string{"missing"})
+	if err != nil {
+		t.Fatalf("GrepFileMatchCountsAtRef missing: %v", err)
+	}
+	if len(counts) != 0 {
+		t.Fatalf("missing counts = %#v, want empty", counts)
+	}
+}
+
 func TestReadFile_FileNotFoundOnHead(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "gitstore-readfile-missing-*")
 	if err != nil {

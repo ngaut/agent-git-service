@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,6 +204,70 @@ func (s *Store) GrepFilesAtRef(ctx context.Context, fullName, ref string, patter
 		paths = append(paths, path)
 	}
 	return paths, nil
+}
+
+// GrepFileMatchCountsAtRef returns per-path matching line counts for fixed
+// string patterns at ref. Git grep returns exit 1 for no matches; callers
+// receive an empty map.
+func (s *Store) GrepFileMatchCountsAtRef(ctx context.Context, fullName, ref string, patterns []string) (map[string]int, error) {
+	dir, err := s.repoPath(ctx, fullName)
+	if err != nil {
+		return nil, err
+	}
+	commit, err := s.resolveContentCommit(ctx, dir, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	seenPatterns := make(map[string]struct{}, len(patterns))
+	args := []string{"-C", dir, "grep", "-I", "-i", "-c", "-F"}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seenPatterns[pattern]; ok {
+			continue
+		}
+		seenPatterns[pattern] = struct{}{}
+		args = append(args, "-e", pattern)
+	}
+	if len(seenPatterns) == 0 {
+		return map[string]int{}, nil
+	}
+	args = append(args, commit, "--")
+
+	out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return map[string]int{}, nil
+		}
+		return nil, fmt.Errorf("git grep count failed: %w, output: %s", err, out)
+	}
+
+	counts := make(map[string]int)
+	prefix := commit + ":"
+	for _, raw := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if raw == "" {
+			continue
+		}
+		pathAndCount := raw
+		if strings.HasPrefix(pathAndCount, prefix) {
+			pathAndCount = strings.TrimPrefix(pathAndCount, prefix)
+		} else if idx := strings.IndexByte(pathAndCount, ':'); idx >= 0 {
+			pathAndCount = pathAndCount[idx+1:]
+		}
+		idx := strings.LastIndexByte(pathAndCount, ':')
+		if idx <= 0 || idx == len(pathAndCount)-1 {
+			continue
+		}
+		count, err := strconv.Atoi(pathAndCount[idx+1:])
+		if err != nil || count <= 0 {
+			continue
+		}
+		counts[pathAndCount[:idx]] += count
+	}
+	return counts, nil
 }
 
 // TreeEntry represents an entry in a git tree (file or directory).

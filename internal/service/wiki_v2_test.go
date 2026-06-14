@@ -221,6 +221,44 @@ func TestWikiV2HeadReadsUseDerivedIndexWhenCurrent(t *testing.T) {
 	}
 }
 
+func TestWikiV2HeadReadUsesCatalogBodyWhenAvailable(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	setupRepoForTest(t, svc, "v2catalog", "wiki-v2-catalog-body")
+	full := "v2catalog/wiki-v2-catalog-body"
+
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nFrom git.\n", "seed home", ""); err != nil {
+		t.Fatalf("PutWikiPage(home): %v", err)
+	}
+	if _, err := svc.ReconcileWikiV2(ctx, full); err != nil {
+		t.Fatalf("ReconcileWikiV2: %v", err)
+	}
+
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	catalogBody := []byte("# Home\n\nFrom catalog.\n")
+	if err := svc.DB.Model(&db.WikiPage{}).
+		Where("repository_id = ? AND slug = ?", repo.ID, "home").
+		Updates(map[string]any{
+			"body_inline": catalogBody,
+			"body_size":   len(catalogBody),
+		}).Error; err != nil {
+		t.Fatalf("mutate catalog body: %v", err)
+	}
+
+	page, err := svc.GetWikiPage(ctx, full, "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage(home): %v", err)
+	}
+	if page.Body != string(catalogBody) {
+		t.Fatalf("body = %q, want catalog body", page.Body)
+	}
+}
+
 func TestWikiV2HeadReadsFallBackWhenIndexStateIsStale(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
@@ -303,6 +341,36 @@ func TestWikiV2TreeListsDirectoriesAndPagesFromGit(t *testing.T) {
 	}
 	if guides[1].Kind != "page" || guides[1].Slug != "guides/setup" {
 		t.Fatalf("guides[1] = %+v, want guides/setup page", guides[1])
+	}
+}
+
+func TestWikiTreeUsesLiveGitWhenCatalogLagsCurrentHead(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	setupRepoForTest(t, svc, "treefast", "wiki-tree-fast")
+	full := "treefast/wiki-tree-fast"
+
+	if _, err := svc.PutWikiPage(ctx, full, "deep/area-01/module-02/topic-04/known", "# Known\n", "seed known", ""); err != nil {
+		t.Fatalf("PutWikiPage(known): %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "deep/area-01/module-02/topic-04/git-only.md", "add git-only page", []byte("# Git only\n")); err != nil {
+		t.Fatalf("write git-only wiki page: %v", err)
+	}
+
+	tree, err := svc.ListWikiTreeAtRef(ctx, full, "deep/area-01/module-02/topic-04", "")
+	if err != nil {
+		t.Fatalf("ListWikiTreeAtRef(deep path): %v", err)
+	}
+	if len(tree) != 2 {
+		t.Fatalf("tree entries = %+v, want both live git pages", tree)
+	}
+	if tree[0].Slug != "deep/area-01/module-02/topic-04/git-only" {
+		t.Fatalf("tree[0] = %+v, want git-only live page", tree[0])
+	}
+	if tree[1].Slug != "deep/area-01/module-02/topic-04/known" {
+		t.Fatalf("tree[1] = %+v, want known live page", tree[1])
 	}
 }
 

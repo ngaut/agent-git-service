@@ -276,7 +276,7 @@ func TestWikiSearchLifecycleAndFallback_Issue1362(t *testing.T) {
 	}
 }
 
-func TestWikiSearchFallsBackToGitScanWhenIndexUnavailable(t *testing.T) {
+func TestWikiSearchReturnsResultsWhenIndexUnavailable(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
 	ctx := context.Background()
@@ -317,6 +317,60 @@ func TestWikiSearchFallsBackToGitScanWhenIndexUnavailable(t *testing.T) {
 	}
 	if resp.Results[0].Title != "Auth" {
 		t.Fatalf("fallback title = %q, want Auth", resp.Results[0].Title)
+	}
+}
+
+func TestWikiSearchUsesCatalogContentWhenIndexUnavailable(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-catalog-first",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-catalog-first"
+	if _, err := svc.PutWikiPage(ctx, full, "tutorial/auth", "# Authentication\n\nGit body does not contain the catalog query.", "create auth", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	catalogBody := []byte("# Authentication\n\nCatalog only needle lives in the DB catalog body.")
+	if err := svc.DB.Model(&db.WikiPage{}).
+		Where("repository_id = ? AND slug = ?", repo.ID, "tutorial/auth").
+		Updates(map[string]any{
+			"body_inline": catalogBody,
+			"body_size":   len(catalogBody),
+		}).Error; err != nil {
+		t.Fatalf("mutate catalog body: %v", err)
+	}
+	if err := svc.DB.Migrator().DropTable(&db.WikiSearchDocument{}); err != nil {
+		t.Fatalf("drop wiki search table: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "catalog only needle", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages(index unavailable): %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Slug != "tutorial/auth" {
+		t.Fatalf("catalog fallback results = %#v, want tutorial/auth", resp.Results)
+	}
+	if !strings.Contains(resp.Results[0].Snippet, "<mark>Catalog</mark> <mark>only</mark> <mark>needle</mark>") {
+		t.Fatalf("snippet = %q, want catalog body snippet", resp.Results[0].Snippet)
 	}
 }
 
@@ -634,6 +688,61 @@ func TestWikiSearchBackfillsPageAfterFilteringStaleIndexedRows(t *testing.T) {
 	}
 	if len(resp.Results) != 1 {
 		t.Fatalf("len(results) = %d, want 1 live result after backfill", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "guides/live" {
+		t.Fatalf("results[0].Slug = %q, want guides/live", resp.Results[0].Slug)
+	}
+}
+
+func TestWikiSearchUsesCatalogLexicalWhenIndexedRowsMissLivePage(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-live-catalog-recall",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-live-catalog-recall"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	if _, err := svc.PutWikiPage(ctx, full, "guides/live", "# Live\n\nFresh catalog-only recall text.", "create live", ""); err != nil {
+		t.Fatalf("PutWikiPage: %v", err)
+	}
+	svc.Wg.Wait()
+
+	if err := svc.DB.Where("repository_id = ? AND slug = ?", repo.ID, "guides/live").Delete(&db.WikiSearchDocument{}).Error; err != nil {
+		t.Fatalf("delete live search doc: %v", err)
+	}
+	if err := svc.DB.Create(&db.WikiSearchDocument{
+		RepositoryID: repo.ID,
+		Slug:         "guides/stale",
+		Title:        "Stale",
+		Body:         db.LargeText("Fresh catalog-only recall text."),
+		RevisionSHA:  "stale-sha",
+	}).Error; err != nil {
+		t.Fatalf("seed stale search doc: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "fresh catalog-only recall text", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(resp.Results))
 	}
 	if resp.Results[0].Slug != "guides/live" {
 		t.Fatalf("results[0].Slug = %q, want guides/live", resp.Results[0].Slug)
