@@ -175,6 +175,72 @@ func TestBuildWikiSemanticANNCandidateQuery_UsesIndexFriendlyShape(t *testing.T)
 	}
 }
 
+func TestCurrentWikiSearchDocumentsQuery_UsesTiDBCompatibleJoinShape(t *testing.T) {
+	gdb := newWikiSearchDryRunMySQLDB(t)
+	svc := &Service{}
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		svc.DB = tx
+		var docs []db.WikiSearchDocument
+		return svc.currentWikiSearchDocumentsQuery(context.Background(), 42).
+			Order("wiki_search_documents.updated_at desc").
+			Find(&docs)
+	})
+
+	for _, want := range []string{
+		"FROM `wiki_search_documents`",
+		"JOIN wiki_pages ON wiki_pages.repository_id = wiki_search_documents.repository_id AND wiki_pages.slug = wiki_search_documents.slug",
+		"wiki_search_documents.repository_id = 42",
+		"wiki_pages.deleted_at IS NULL",
+		"wiki_search_documents.revision_sha = wiki_pages.head_blob_sha",
+		"ORDER BY wiki_search_documents.updated_at desc",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected current wiki search SQL to contain %q, got %q", want, sql)
+		}
+	}
+}
+
+func TestWikiSearchCurrentFullTextQuery_IsolatesTiDBFTSSubqueries(t *testing.T) {
+	gdb := newWikiSearchDryRunMySQLDB(t)
+	svc := &Service{}
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		svc.DB = tx
+		q := svc.currentWikiSearchDocumentsQuery(context.Background(), 42)
+		likeEscape := wikiSearchLikeEscapeClause(tx)
+		for _, token := range wikiSearchTokens("alpha beta") {
+			like := "%" + escapeWikiSearchLike(token) + "%"
+			q = q.Where(
+				"(wiki_search_documents.id IN (?) OR wiki_search_documents.id IN (?) OR wiki_search_documents.slug LIKE ?"+likeEscape+" OR "+wikiSearchLabelTokenExistsSQL(likeEscape)+")",
+				wikiSearchFullTextSubquery(tx, "title", token),
+				wikiSearchFullTextSubquery(tx, "body", token),
+				like,
+				like,
+				like,
+			)
+		}
+		var docs []db.WikiSearchDocument
+		return q.Order("wiki_search_documents.updated_at desc").Find(&docs)
+	})
+
+	if strings.Count(sql, "FTS_MATCH_WORD") != 4 {
+		t.Fatalf("expected two FTS subqueries per token, got %q", sql)
+	}
+	for _, want := range []string{
+		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('alpha', wiki_search_documents.title)",
+		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('alpha', wiki_search_documents.body)",
+		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('beta', wiki_search_documents.title)",
+		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('beta', wiki_search_documents.body)",
+		"wiki_search_documents.slug LIKE '%alpha%' ESCAPE '\\\\'",
+		"wiki_search_documents.slug LIKE '%beta%' ESCAPE '\\\\'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected current full-text SQL to contain %q, got %q", want, sql)
+		}
+	}
+}
+
 func TestSearchWikiSemanticANN_FallsBackWhenCandidateWindowMissesRepoDocs(t *testing.T) {
 	driverName := fmt.Sprintf("sqlite3_wiki_ann_fallback_%d", time.Now().UnixNano())
 	sql.Register(driverName, &sqlite3.SQLiteDriver{

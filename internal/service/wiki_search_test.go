@@ -15,6 +15,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/embedding"
 	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"gorm.io/driver/sqlite"
@@ -792,6 +793,89 @@ func TestWikiSearchUsesCatalogLexicalWhenIndexedRowsMissLivePage(t *testing.T) {
 	}
 	if resp.Results[0].Slug != "guides/live" {
 		t.Fatalf("results[0].Slug = %q, want guides/live", resp.Results[0].Slug)
+	}
+}
+
+func TestWikiSearchLargeCurrentIndexMissDoesNotScanCatalog(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{
+		Login: "testuser",
+		Name:  "Test User",
+		Type:  db.TypeUser,
+	}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	created, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-search-large-index",
+		AutoInit:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-search-large-index"
+	repoID := created.ID
+
+	pages := make([]db.WikiPage, 0, 102)
+	docs := make([]db.WikiSearchDocument, 0, 101)
+	now := time.Now().UTC()
+	for i := 0; i < 101; i++ {
+		slug := fmt.Sprintf("guides/page-%03d", i)
+		body := []byte(fmt.Sprintf("ordinary indexed body %03d", i))
+		sha := wikicatalog.HashContent(body)
+		pages = append(pages, db.WikiPage{
+			RepositoryID:    repoID,
+			Slug:            slug,
+			SlugCIV1:        slug,
+			Title:           fmt.Sprintf("Page %03d", i),
+			HeadBlobSHA:     sha,
+			BodySize:        len(body),
+			BodyInline:      body,
+			HeadRevisionID:  1,
+			HeadChangesetID: 1,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		})
+		docs = append(docs, db.WikiSearchDocument{
+			RepositoryID: repoID,
+			Slug:         slug,
+			Title:        fmt.Sprintf("Page %03d", i),
+			Body:         db.LargeText(body),
+			RevisionSHA:  sha,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
+	}
+	catalogOnlyBody := []byte("catalog only needle should not trigger a large fallback scan")
+	pages = append(pages, db.WikiPage{
+		RepositoryID:    repoID,
+		Slug:            "guides/catalog-only",
+		SlugCIV1:        "guides/catalog-only",
+		Title:           "Catalog Only",
+		HeadBlobSHA:     wikicatalog.HashContent(catalogOnlyBody),
+		BodySize:        len(catalogOnlyBody),
+		BodyInline:      catalogOnlyBody,
+		HeadRevisionID:  1,
+		HeadChangesetID: 1,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	})
+	if err := svc.DB.CreateInBatches(pages, 50).Error; err != nil {
+		t.Fatalf("seed wiki pages: %v", err)
+	}
+	if err := svc.DB.CreateInBatches(docs, 50).Error; err != nil {
+		t.Fatalf("seed wiki search docs: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "catalog only needle", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 0 {
+		t.Fatalf("results = %#v, want empty because large indexed repos should not catalog-scan on misses", resp.Results)
 	}
 }
 

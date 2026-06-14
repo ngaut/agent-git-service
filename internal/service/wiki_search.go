@@ -18,6 +18,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 	applog "github.com/ngaut/agent-git-service/internal/logging"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -30,6 +31,9 @@ const (
 	wikiSemanticMinScore    = 0.2
 	wikiSearchMinRankWindow = 100
 	wikiSearchMaxRankWindow = 500
+	// Preserve correctness for small repos and fresh async-index lag without
+	// letting large wiki searches fall back to an O(total page body) scan.
+	wikiCatalogFallbackMaxCurrentIndexedDocs = wikiSearchMinRankWindow
 	// When lexical search already found concrete token matches, keep
 	// semantic-only additions to high-confidence neighbors so short literal
 	// queries do not get flooded by weak vector nearest-neighbor noise.
@@ -40,6 +44,8 @@ const (
 	wikiReindexWorkers                  = 4
 )
 
+var errWikiCurrentSearchIndexStale = errors.New("wiki current search index stale")
+
 type WikiSearchResult struct {
 	Slug    string
 	Title   string
@@ -47,7 +53,8 @@ type WikiSearchResult struct {
 	Snippet string
 	Labels  []db.Label
 
-	liveGitHydrated bool
+	liveGitHydrated         bool
+	currentIndexBodyTrusted bool
 }
 
 type WikiSearchResponse struct {
@@ -143,16 +150,37 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 	method := "substring"
 	var lexical []WikiSearchResult
 	if catalogSearchReady {
-		catalogLexical, catalogErr := s.searchWikiLexicalFromCatalog(ctx, repo.ID, query, labelFilters, rankWindow)
-		if catalogErr != nil {
-			slog.WarnContext(ctx, "wiki search catalog lexical path failed", "repo", repo.FullName, "error", catalogErr)
-			indexedLexical, indexedErr := s.searchWikiLexical(ctx, repo.ID, query, labelFilters, rankWindow)
-			if indexedErr != nil {
-				return WikiSearchResponse{}, catalogErr
+		indexedLexical, indexedOK, indexedErr := s.searchWikiLexicalFromCurrentIndex(ctx, repo.ID, query, labelFilters, rankWindow)
+		if indexedErr != nil && !errors.Is(indexedErr, errWikiCurrentSearchIndexStale) {
+			slog.WarnContext(ctx, "wiki search current index path failed; falling back to catalog lexical path", "repo", repo.FullName, "error", indexedErr)
+		}
+		useCatalogFallback := !indexedOK || errors.Is(indexedErr, errWikiCurrentSearchIndexStale)
+		if indexedOK && indexedErr == nil && len(indexedLexical) == 0 {
+			currentIndexedCount, countOK, countErr := s.countCurrentWikiSearchDocuments(ctx, repo.ID)
+			if countErr != nil {
+				return WikiSearchResponse{}, countErr
 			}
+			useCatalogFallback = !countOK || currentIndexedCount <= wikiCatalogFallbackMaxCurrentIndexedDocs
+		}
+		if useCatalogFallback {
+			catalogLexical, catalogErr := s.searchWikiLexicalFromCatalog(ctx, repo.ID, query, labelFilters, rankWindow)
+			if catalogErr != nil {
+				slog.WarnContext(ctx, "wiki search catalog lexical path failed", "repo", repo.FullName, "error", catalogErr)
+				if indexedErr != nil && !errors.Is(indexedErr, errWikiCurrentSearchIndexStale) {
+					return WikiSearchResponse{}, indexedErr
+				}
+				indexedLexical, indexedErr := s.searchWikiLexical(ctx, repo.ID, query, labelFilters, rankWindow)
+				if indexedErr != nil {
+					return WikiSearchResponse{}, catalogErr
+				}
+				lexical = indexedLexical
+			} else {
+				lexical = catalogLexical
+			}
+		} else if indexedErr == nil {
 			lexical = indexedLexical
 		} else {
-			lexical = catalogLexical
+			lexical = []WikiSearchResult{}
 		}
 	} else if wikiRepoLive {
 		gitLexical, gitErr := s.searchWikiLexicalFromGit(ctx, repoFullName, query, labelFilters, rankWindow)
@@ -287,12 +315,19 @@ func (s *Service) hydrateWikiSearchResultsFromCatalog(ctx context.Context, repoI
 		if !ok {
 			continue
 		}
+		labels := labelsBySlug[page.Slug]
+		title := titleFromSlug(page.Slug)
+		if result.currentIndexBodyTrusted {
+			result.Slug = page.Slug
+			result.Title = title
+			result.Labels = labels
+			hydrated = append(hydrated, result)
+			continue
+		}
 		body, err := s.wikiPageBody(ctx, page)
 		if err != nil {
 			return nil, true, err
 		}
-		labels := labelsBySlug[page.Slug]
-		title := titleFromSlug(page.Slug)
 		if requireLexicalMatch && !wikiTextContainsAllTokens(title, page.Slug, string(body), query) && wikiLabelLexicalScore(labels, query) <= 0 {
 			continue
 		}
@@ -347,6 +382,84 @@ func (s *Service) wikiCatalogMatchesLiveHead(ctx context.Context, repoFullName s
 		return false, err
 	}
 	return strings.EqualFold(strings.TrimSpace(last.CommitSHA), strings.TrimSpace(headSHA)), nil
+}
+
+func (s *Service) searchWikiLexicalFromCurrentIndex(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, rankLimit int) ([]WikiSearchResult, bool, error) {
+	if db.SupportsTiDBSearch(s.DBForCtx(ctx)) {
+		docs, err := s.wikiSearchCurrentDocumentsFullText(ctx, repoID, query, filters)
+		if err == nil {
+			results, err := s.rankWikiCurrentLexicalDocuments(ctx, repoID, docs, query)
+			if err != nil {
+				return nil, true, err
+			}
+			return markWikiSearchResultsCurrentIndex(truncateWikiSearchResultList(results, rankLimit)), true, nil
+		}
+		if isMissingTableErr(err) || wikiSearchDocumentTableMissing(err) {
+			return nil, false, nil
+		}
+		slog.WarnContext(ctx, "wiki search current TiDB full-text query failed; falling back to LIKE", "repo_id", repoID, "error", err)
+	}
+
+	docs, err := s.wikiSearchCurrentDocuments(ctx, repoID, query, false, filters)
+	if err != nil {
+		if isMissingTableErr(err) || wikiSearchDocumentTableMissing(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	results, err := s.rankWikiCurrentLexicalDocuments(ctx, repoID, docs, query)
+	if err != nil {
+		return nil, true, err
+	}
+	return markWikiSearchResultsCurrentIndex(truncateWikiSearchResultList(results, rankLimit)), true, nil
+}
+
+func (s *Service) countCurrentWikiSearchDocuments(ctx context.Context, repoID uint) (int64, bool, error) {
+	var count int64
+	err := s.currentWikiSearchDocumentsQuery(ctx, repoID).Count(&count).Error
+	if err != nil {
+		if isMissingTableErr(err) || wikiSearchDocumentTableMissing(err) {
+			return 0, false, nil
+		}
+		return 0, true, err
+	}
+	return count, true, nil
+}
+
+func (s *Service) currentWikiSearchDocumentsQuery(ctx context.Context, repoID uint) *gorm.DB {
+	return s.DBForCtx(ctx).
+		Model(&db.WikiSearchDocument{}).
+		Joins("JOIN wiki_pages ON wiki_pages.repository_id = wiki_search_documents.repository_id AND wiki_pages.slug = wiki_search_documents.slug").
+		Where("wiki_search_documents.repository_id = ? AND wiki_pages.deleted_at IS NULL AND wiki_search_documents.revision_sha = wiki_pages.head_blob_sha", repoID)
+}
+
+func (s *Service) rankWikiCurrentLexicalDocuments(ctx context.Context, repoID uint, docs []db.WikiSearchDocument, query string) ([]WikiSearchResult, error) {
+	currentDocs, dropped := filterCurrentWikiSearchDocuments(docs)
+	if dropped > 0 && len(currentDocs) == 0 {
+		return nil, errWikiCurrentSearchIndexStale
+	}
+	return s.rankWikiLexicalDocuments(ctx, repoID, currentDocs, query)
+}
+
+func filterCurrentWikiSearchDocuments(docs []db.WikiSearchDocument) ([]db.WikiSearchDocument, int) {
+	out := make([]db.WikiSearchDocument, 0, len(docs))
+	dropped := 0
+	for _, doc := range docs {
+		if !wikiSearchDocumentBodyMatchesRevision(doc) {
+			dropped++
+			continue
+		}
+		out = append(out, doc)
+	}
+	return out, dropped
+}
+
+func wikiSearchDocumentBodyMatchesRevision(doc db.WikiSearchDocument) bool {
+	revision := strings.TrimSpace(doc.RevisionSHA)
+	if revision == "" {
+		return false
+	}
+	return strings.EqualFold(wikicatalog.HashContent([]byte(doc.Body)), revision)
 }
 
 func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, rankLimit int) ([]WikiSearchResult, error) {
@@ -888,6 +1001,39 @@ func (s *Service) wikiSearchDocumentsFullText(ctx context.Context, repoID uint, 
 	return docs, nil
 }
 
+func (s *Service) wikiSearchCurrentDocumentsFullText(ctx context.Context, repoID uint, query string, filters WikiLabelFilters) ([]db.WikiSearchDocument, error) {
+	database := s.DBForCtx(ctx)
+	q := s.currentWikiSearchDocumentsQuery(ctx, repoID)
+	var noResults bool
+	var err error
+	q, noResults, err = s.applyWikiSearchLabelPredicates(ctx, repoID, q, filters)
+	if err != nil {
+		return nil, err
+	}
+	if noResults {
+		return []db.WikiSearchDocument{}, nil
+	}
+
+	likeEscape := wikiSearchLikeEscapeClause(database)
+	for _, token := range wikiSearchTokens(query) {
+		like := "%" + escapeWikiSearchLike(token) + "%"
+		q = q.Where(
+			"(wiki_search_documents.id IN (?) OR wiki_search_documents.id IN (?) OR wiki_search_documents.slug LIKE ?"+likeEscape+" OR "+wikiSearchLabelTokenExistsSQL(likeEscape)+")",
+			wikiSearchFullTextSubquery(database, "title", token),
+			wikiSearchFullTextSubquery(database, "body", token),
+			like,
+			like,
+			like,
+		)
+	}
+
+	var docs []db.WikiSearchDocument
+	if err := q.Order("wiki_search_documents.updated_at desc").Find(&docs).Error; err != nil {
+		return nil, err
+	}
+	return docs, nil
+}
+
 func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, limit, offset, rankLimit int, lexicalEmpty, paginateBeforeHydration bool) ([]WikiSearchResult, bool, error) {
 	query = embedding.TruncateInput(query)
 	vec, err := s.Embedder.Embed(ctx, query)
@@ -1229,6 +1375,13 @@ func markWikiSearchResultsLiveGitHydrated(results []WikiSearchResult) []WikiSear
 	return results
 }
 
+func markWikiSearchResultsCurrentIndex(results []WikiSearchResult) []WikiSearchResult {
+	for i := range results {
+		results[i].currentIndexBodyTrusted = true
+	}
+	return results
+}
+
 func paginateWikiSearchResultList(results []WikiSearchResult, limit, offset int) []WikiSearchResult {
 	if offset >= len(results) {
 		return []WikiSearchResult{}
@@ -1372,6 +1525,53 @@ func (s *Service) wikiSearchDocuments(ctx context.Context, repoID uint, query st
 		}
 	}
 	return filtered, nil
+}
+
+func (s *Service) wikiSearchCurrentDocuments(ctx context.Context, repoID uint, query string, requireEmbedding bool, filters WikiLabelFilters) ([]db.WikiSearchDocument, error) {
+	var docs []db.WikiSearchDocument
+	database := s.DBForCtx(ctx)
+	q := s.currentWikiSearchDocumentsQuery(ctx, repoID)
+	if requireEmbedding {
+		q = q.Where("wiki_search_documents.embedding <> ''")
+	}
+	if !requireEmbedding {
+		if tokens := wikiSearchTokens(query); len(tokens) > 0 {
+			likeEscape := wikiSearchLikeEscapeClause(database)
+			q = q.
+				Joins("LEFT JOIN wiki_page_labels ON wiki_page_labels.repository_id = wiki_search_documents.repository_id AND wiki_page_labels.slug = wiki_search_documents.slug").
+				Joins("LEFT JOIN labels ON labels.id = wiki_page_labels.label_id")
+			for _, token := range tokens {
+				like := "%" + escapeWikiSearchLike(token) + "%"
+				q = q.Where(
+					"(wiki_search_documents.title LIKE ?"+likeEscape+" OR wiki_search_documents.slug LIKE ?"+likeEscape+" OR wiki_search_documents.body LIKE ?"+likeEscape+" OR labels.name LIKE ?"+likeEscape+" OR labels.description LIKE ?"+likeEscape+")",
+					like, like, like, like, like,
+				)
+			}
+			q = q.Distinct(
+				"wiki_search_documents.id",
+				"wiki_search_documents.repository_id",
+				"wiki_search_documents.slug",
+				"wiki_search_documents.title",
+				"wiki_search_documents.body",
+				"wiki_search_documents.revision_sha",
+				"wiki_search_documents.created_at",
+				"wiki_search_documents.updated_at",
+			)
+		}
+	}
+	var noResults bool
+	var err error
+	q, noResults, err = s.applyWikiSearchLabelPredicates(ctx, repoID, q, filters)
+	if err != nil {
+		return nil, err
+	}
+	if noResults {
+		return []db.WikiSearchDocument{}, nil
+	}
+	if err := q.Order("wiki_search_documents.updated_at desc").Find(&docs).Error; err != nil {
+		return nil, err
+	}
+	return docs, nil
 }
 
 func (s *Service) refreshStaleWikiSearchTitles(ctx context.Context, docs []db.WikiSearchDocument) error {
