@@ -89,13 +89,12 @@ attemptLoop:
 					return fmt.Errorf("%w: embedded identity login %q is already claimed by a non-human account", ErrConflict, identity.Login)
 				case errors.Is(userErr, gorm.ErrRecordNotFound):
 					candidate := db.User{
-						Login:       identity.Login,
-						Name:        identity.Name,
-						Email:       identity.Email,
-						Type:        db.TypeUser,
-						UserKind:    db.UserKindHuman,
-						SiteAdmin:   identity.SiteAdmin,
-						IsAnonymous: false,
+						Login:     identity.Login,
+						Name:      identity.Name,
+						Email:     identity.Email,
+						Type:      db.TypeUser,
+						UserKind:  db.UserKindHuman,
+						SiteAdmin: identity.SiteAdmin,
 					}
 					if err := tx.Create(&candidate).Error; err != nil {
 						if isDuplicateErr(err) {

@@ -26,10 +26,6 @@ type Config struct {
 	// Default is false (production-secure).
 	AllowAnyToken bool
 
-	// OAuthPreapproveDeviceCodes restores the legacy insecure local-dev device
-	// flow that auto-approves newly-created device codes.
-	OAuthPreapproveDeviceCodes bool
-
 	// AdminLogin and AdminToken override the default seed credentials.
 	// When both are empty the legacy testadmin / mytoken values are used.
 	AdminLogin string
@@ -107,15 +103,13 @@ type Config struct {
 // It returns an error if any required variable (DB_DSN) is missing.
 func New() (Config, error) {
 	cfg := Config{
-		Port:           os.Getenv("PORT"),
-		BaseURL:        os.Getenv("BASE_URL"),
-		ConsoleBaseURL: os.Getenv("CONSOLE_BASE_URL"),
-		DBdsn:          os.Getenv("DB_DSN"),
-		GitRepoDir:     os.Getenv("GIT_REPO_DIR"),
-		ListenMode:     os.Getenv("LISTEN_MODE"),
-		AllowAnyToken:  os.Getenv("ALLOW_ANY_TOKEN") == "true" || os.Getenv("ALLOW_ANY_TOKEN") == "1",
-		OAuthPreapproveDeviceCodes: os.Getenv("OAUTH_PREAPPROVE_DEVICE_CODES") == "true" ||
-			os.Getenv("OAUTH_PREAPPROVE_DEVICE_CODES") == "1",
+		Port:                                    os.Getenv("PORT"),
+		BaseURL:                                 os.Getenv("BASE_URL"),
+		ConsoleBaseURL:                          os.Getenv("CONSOLE_BASE_URL"),
+		DBdsn:                                   os.Getenv("DB_DSN"),
+		GitRepoDir:                              os.Getenv("GIT_REPO_DIR"),
+		ListenMode:                              os.Getenv("LISTEN_MODE"),
+		AllowAnyToken:                           os.Getenv("ALLOW_ANY_TOKEN") == "true" || os.Getenv("ALLOW_ANY_TOKEN") == "1",
 		AdminLogin:                              os.Getenv("ADMIN_LOGIN"),
 		AdminToken:                              os.Getenv("ADMIN_TOKEN"),
 		Environment:                             os.Getenv("ENVIRONMENT"),

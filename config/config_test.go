@@ -34,9 +34,6 @@ func TestNewDefaults(t *testing.T) {
 	if cfg.DBdsn != "user:pass@tcp(localhost)/testdb" {
 		t.Errorf("expected DBdsn from env, got %q", cfg.DBdsn)
 	}
-	if cfg.OAuthPreapproveDeviceCodes {
-		t.Error("expected OAuthPreapproveDeviceCodes=false by default")
-	}
 	if cfg.EnableWorkflowExec {
 		t.Error("expected workflow execution to be disabled by default")
 	}
@@ -69,7 +66,6 @@ func TestNewOverrides(t *testing.T) {
 	t.Setenv("BASE_URL", "https://example.com")
 	t.Setenv("CONSOLE_BASE_URL", "https://console.example.com")
 	t.Setenv("GIT_REPO_DIR", "/tmp/repos")
-	t.Setenv("OAUTH_PREAPPROVE_DEVICE_CODES", "true")
 	t.Setenv("ENABLE_WORKFLOW_EXEC", "1")
 	t.Setenv("WORKFLOW_EXEC_IMAGE", "custom/bash:latest")
 	t.Setenv("WORKFLOW_EXEC_TIMEOUT", "45s")
@@ -102,9 +98,6 @@ func TestNewOverrides(t *testing.T) {
 	}
 	if cfg.DBdsn != "custom-dsn" {
 		t.Errorf("expected DBdsn=custom-dsn, got %q", cfg.DBdsn)
-	}
-	if !cfg.OAuthPreapproveDeviceCodes {
-		t.Error("expected OAuthPreapproveDeviceCodes=true")
 	}
 	if !cfg.EnableWorkflowExec {
 		t.Error("expected workflow execution to be enabled")

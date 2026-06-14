@@ -363,8 +363,8 @@ func TestSearchIssues_NewlyCreatedIssue(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// Create a non-anonymous user and repo
-	svc.DB.Create(&db.User{Login: "newuser", Name: "newuser", Type: db.TypeUser, IsAnonymous: false})
+	// Create a human user and repo.
+	svc.DB.Create(&db.User{Login: "newuser", Name: "newuser", Type: db.TypeUser, UserKind: db.UserKindHuman})
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{OwnerLogin: "newuser", Name: "newrepo"})
 	if err != nil {
 		t.Fatalf("CreateRepo: %v", err)

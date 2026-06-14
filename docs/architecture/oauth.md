@@ -43,10 +43,7 @@ The `Handler` struct holds a single field:
 POST /login/device/code
   → RequestDeviceCode handler
   → generate device code (32 hex), user code (8 hex, XXXX-XXXX)
-  → default behavior: store device code in "pending" state
-  → optional local-dev behavior when OAUTH_PREAPPROVE_DEVICE_CODES=true:
-      → resolve the first active site admin
-      → approve immediately and mint the access token
+  → store device code in "pending" state
   → Svc.CreateDeviceCode(ctx, deviceCode)
   → respond with { device_code, user_code, verification_uri, expires_in: 900, interval: 5 }
 ```
@@ -123,7 +120,7 @@ gh auth login
 
 ## Invariants and Design Constraints
 
-- **Authenticated device approval by default.** The `/login/device` POST endpoint requires an authenticated user. Device codes are no longer pre-approved unless `OAUTH_PREAPPROVE_DEVICE_CODES=true` is explicitly enabled for local development.
+- **Authenticated device approval.** The `/login/device` POST endpoint requires an authenticated user. Device codes are never pre-approved by the request endpoint.
 - **Token bound to approver.** Access tokens generated via device code approval are bound to the approving user's identity (`DeviceCode.ApprovedBy`, `Token.UserID`). Token exchange validates that the approver exists and is of type "User", preventing privilege escalation via hardcoded admin lookup.
 - **PKCE and state required.** The `/login/oauth/authorize` endpoint requires `state` (CSRF protection) and PKCE `code_challenge` with `code_challenge_method=S256`, and `/login/oauth/access_token` validates `code_verifier` against the stored challenge before issuing a token.
 - **State echoed in redirect.** The authorization redirect includes the original `state` parameter, enabling the client to validate the response matches the request.

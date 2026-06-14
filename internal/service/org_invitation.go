@@ -363,10 +363,10 @@ func (s *Service) UpsertTeamPendingOrganizationInvitation(ctx context.Context, o
 		}
 
 		var invitee db.User
-		if err := tx.Select("id", "type", "is_anonymous").First(&invitee, "id = ?", inviteeID).Error; err != nil {
+		if err := tx.Select("id", "type", "user_kind").First(&invitee, "id = ?", inviteeID).Error; err != nil {
 			return err
 		}
-		if invitee.Type != db.TypeUser || invitee.IsAnonymous {
+		if !isHumanUser(invitee) {
 			return ErrValidation
 		}
 
@@ -452,10 +452,10 @@ func (s *Service) CreateOrganizationInvitation(ctx context.Context, in CreateOrg
 		}
 
 		var invitee db.User
-		if err := tx.Select("id", "type", "is_anonymous").First(&invitee, "id = ?", in.InviteeID).Error; err != nil {
+		if err := tx.Select("id", "type", "user_kind").First(&invitee, "id = ?", in.InviteeID).Error; err != nil {
 			return err
 		}
-		if invitee.Type != db.TypeUser || invitee.IsAnonymous {
+		if !isHumanUser(invitee) {
 			return ErrValidation
 		}
 
