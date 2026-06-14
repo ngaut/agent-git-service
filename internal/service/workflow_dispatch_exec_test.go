@@ -1,5 +1,3 @@
-//go:build testing
-
 package service_test
 
 import (
@@ -449,6 +447,7 @@ func TestCancelWorkflowRun_CrossRepo(t *testing.T) {
 func TestWorkflowService_ExecuteWorkflow_InvalidYAML(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
+	svc.EnableWorkflowExecForTest(0)
 
 	ctx := context.Background()
 	repoFullName := setupRepoWithGit(t, svc, "wfexec-user", "wfexec-repo")
@@ -498,6 +497,7 @@ done:
 func TestWorkflowService_ExecuteWorkflow_MissingGitFile(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
+	svc.EnableWorkflowExecForTest(0)
 
 	ctx := context.Background()
 	repoFullName := setupRepoWithGit(t, svc, "wfmissing-user", "wfmissing-repo")
@@ -546,6 +546,7 @@ done:
 func TestWorkflowService_ExecuteWorkflow_StepFailure(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
+	svc.EnableWorkflowExecForTest(0)
 
 	ctx := context.Background()
 	repoFullName := setupRepoWithGit(t, svc, "wffail-user", "wffail-repo")
@@ -614,6 +615,7 @@ done:
 func TestWorkflowService_ExecuteWorkflow_EnvironmentSecrets(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
+	svc.EnableWorkflowExecForTest(0)
 
 	ctx := context.Background()
 	repoFullName := setupRepoWithGit(t, svc, "wfenv-user", "wfenv-repo")
