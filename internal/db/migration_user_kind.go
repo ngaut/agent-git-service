@@ -24,11 +24,6 @@ func enforceUserKindNotNull(database *gorm.DB) error {
 	switch database.Dialector.Name() {
 	case "mysql":
 		return database.Exec("ALTER TABLE `users` MODIFY COLUMN `user_kind` varchar(16) NOT NULL DEFAULT 'human'").Error
-	case "postgres":
-		if err := database.Exec(`ALTER TABLE "users" ALTER COLUMN "user_kind" SET DEFAULT 'human'`).Error; err != nil {
-			return err
-		}
-		return database.Exec(`ALTER TABLE "users" ALTER COLUMN "user_kind" SET NOT NULL`).Error
 	default:
 		return database.Migrator().AlterColumn(&User{}, "UserKind")
 	}

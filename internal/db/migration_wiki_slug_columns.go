@@ -127,7 +127,7 @@ func dropObsoleteWikiColumn(database *gorm.DB, col wikiObsoleteColumn) error {
 	var err error
 	if database.Dialector != nil {
 		switch database.Dialector.Name() {
-		case "mysql", "postgres":
+		case "mysql":
 			err = database.Exec(dropWikiColumnDDL(database, col)).Error
 		default:
 			err = migrator.DropColumn(col.table, col.column)
@@ -146,9 +146,6 @@ func dropObsoleteWikiColumn(database *gorm.DB, col wikiObsoleteColumn) error {
 }
 
 func renameColumnDDL(database *gorm.DB, table, oldName, newName string) string {
-	if database != nil && database.Dialector != nil && database.Dialector.Name() == "postgres" {
-		return fmt.Sprintf(`ALTER TABLE "%s" RENAME COLUMN "%s" TO "%s"`, table, oldName, newName)
-	}
 	return fmt.Sprintf("ALTER TABLE `%s` RENAME COLUMN `%s` TO `%s`", table, oldName, newName)
 }
 
@@ -157,8 +154,5 @@ func dropWikiIndexDDL(idx wikiObsoleteIndex) string {
 }
 
 func dropWikiColumnDDL(database *gorm.DB, col wikiObsoleteColumn) string {
-	if database != nil && database.Dialector != nil && database.Dialector.Name() == "postgres" {
-		return fmt.Sprintf(`ALTER TABLE "%s" DROP COLUMN "%s"`, col.table, col.column)
-	}
 	return fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`", col.table, col.column)
 }

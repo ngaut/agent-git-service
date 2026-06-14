@@ -39,17 +39,9 @@ func MigrateTeamOrgSlugIndex(database *gorm.DB) error {
 }
 
 // hasCorrectIndexShape checks if an index exists with the expected columns in the correct order.
-// It detects the database backend and uses the appropriate query syntax.
+// AGS supports TiDB/MySQL-compatible databases, which expose SHOW INDEX.
 func hasCorrectIndexShape(db *gorm.DB, tableName, indexName string, expectedColumns []string) (bool, error) {
-	dialect := db.Dialector.Name()
-
-	switch dialect {
-	case "postgres":
-		return hasCorrectIndexShapePostgres(db, tableName, indexName, expectedColumns)
-	default:
-		// MySQL/TiDB use SHOW INDEX syntax.
-		return hasCorrectIndexShapeMySQL(db, tableName, indexName, expectedColumns)
-	}
+	return hasCorrectIndexShapeMySQL(db, tableName, indexName, expectedColumns)
 }
 
 // hasCorrectIndexShapeMySQL checks index shape using MySQL/TiDB SHOW INDEX syntax.
@@ -102,50 +94,6 @@ func hasCorrectIndexShapeMySQL(db *gorm.DB, tableName, indexName string, expecte
 	}
 
 	// Compare columns
-	if len(columns) != len(expectedColumns) {
-		return false, nil
-	}
-	for i, col := range columns {
-		if !strings.EqualFold(col, expectedColumns[i]) {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-// hasCorrectIndexShapePostgres checks index shape using pg_indexes so PostgreSQL
-// does not attempt MySQL-only SHOW INDEX syntax during migrations.
-func hasCorrectIndexShapePostgres(db *gorm.DB, tableName, indexName string, expectedColumns []string) (bool, error) {
-	var indexDef string
-	err := db.Raw(`
-SELECT indexdef
-FROM pg_indexes
-WHERE schemaname = current_schema()
-  AND tablename = ?
-  AND indexname = ?
-`, tableName, indexName).Row().Scan(&indexDef)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
-		return false, err
-	}
-
-	open := strings.LastIndex(indexDef, "(")
-	close := strings.LastIndex(indexDef, ")")
-	if open == -1 || close == -1 || close <= open {
-		return false, nil
-	}
-	rawColumns := strings.Split(indexDef[open+1:close], ",")
-	columns := make([]string, 0, len(rawColumns))
-	for _, raw := range rawColumns {
-		col := strings.TrimSpace(strings.Trim(raw, `"`))
-		if col == "" {
-			return false, nil
-		}
-		columns = append(columns, col)
-	}
-
 	if len(columns) != len(expectedColumns) {
 		return false, nil
 	}
