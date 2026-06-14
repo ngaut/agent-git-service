@@ -104,7 +104,7 @@ func (c *fakeMySQLCapabilityConn) QueryContext(_ context.Context, query string, 
 			if c.driver.cfg.fullTextErr != nil {
 				return nil, c.driver.cfg.fullTextErr
 			}
-			return &singleValueRows{columns: []string{"FTS_MATCH_WORD('test', `body`)"}, values: []driver.Value{c.driver.cfg.fullTextScore}}, nil
+			return &singleValueRows{columns: []string{"id"}, values: []driver.Value{int64(1)}}, nil
 		}
 		return nil, fmt.Errorf("unexpected query: %s", query)
 	}
@@ -307,16 +307,26 @@ func TestSupportsTiDBFullText_MySQLRequiresTiDBAndIndexedColumnProbe(t *testing.
 
 			sawFullTextDDL := false
 			sawFullTextQuery := false
+			sawFullTextRankQuery := false
 			for _, query := range fakeDriver.Queries() {
 				upper := strings.ToUpper(query)
 				if strings.Contains(upper, "FTS_MATCH_WORD(?, ?)") {
 					t.Fatalf("full-text probe must use an indexed column, saw legacy query %q", query)
+				}
+				if strings.HasPrefix(upper, "SELECT FTS_MATCH_WORD") && strings.Contains(upper, "LIMIT") {
+					t.Fatalf("full-text probe must not limit a top-level FTS_MATCH_WORD projection, saw unsupported query %q", query)
 				}
 				if strings.Contains(upper, "ADD FULLTEXT INDEX") {
 					sawFullTextDDL = true
 				}
 				if strings.Contains(upper, "FTS_MATCH_WORD") {
 					sawFullTextQuery = true
+					if strings.Contains(upper, " AS FTS_SCORE") &&
+						strings.Contains(upper, "JOIN (SELECT") &&
+						strings.Contains(upper, "ORDER BY FTS_MATCHES.FTS_SCORE DESC") &&
+						strings.Contains(upper, "LIMIT 1") {
+						sawFullTextRankQuery = true
+					}
 				}
 			}
 			if sawFullTextDDL != tt.wantFullTextDDL {
@@ -324,6 +334,9 @@ func TestSupportsTiDBFullText_MySQLRequiresTiDBAndIndexedColumnProbe(t *testing.
 			}
 			if sawFullTextQuery != tt.wantFullTextQuery {
 				t.Fatalf("full-text query probe presence = %v, want %v; queries=%#v", sawFullTextQuery, tt.wantFullTextQuery, fakeDriver.Queries())
+			}
+			if sawFullTextRankQuery != tt.wantFullTextQuery {
+				t.Fatalf("full-text ranked query probe presence = %v, want %v; queries=%#v", sawFullTextRankQuery, tt.wantFullTextQuery, fakeDriver.Queries())
 			}
 		})
 	}
