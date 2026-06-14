@@ -2,6 +2,8 @@ package db
 
 import (
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +67,35 @@ func TestWikiCatalogAutoMigrate(t *testing.T) {
 			t.Errorf("expected index %q on %q after Migrate", idx.name, idx.table)
 		}
 	}
+}
+
+func TestWikiSlugModelTypesAvoidIndexedCollationRewrite(t *testing.T) {
+	wikiSearchSlugTag := gormTag(t, WikiSearchDocument{}, "Slug")
+	if strings.Contains(wikiSearchSlugTag, "varbinary") {
+		t.Fatalf("WikiSearchDocument.Slug gorm tag = %q, want varchar/size tag to avoid TiDB indexed collation rewrite", wikiSearchSlugTag)
+	}
+	if !strings.Contains(wikiSearchSlugTag, "size:255") {
+		t.Fatalf("WikiSearchDocument.Slug gorm tag = %q, want size:255", wikiSearchSlugTag)
+	}
+
+	wikiPageSlugTag := gormTag(t, WikiPage{}, "Slug")
+	if !strings.Contains(wikiPageSlugTag, "type:varbinary(1024)") {
+		t.Fatalf("WikiPage.Slug gorm tag = %q, want existing varbinary(1024) width preserved", wikiPageSlugTag)
+	}
+
+	wikiLinkDstSlugTag := gormTag(t, WikiPageLink{}, "DstSlug")
+	if !strings.Contains(wikiLinkDstSlugTag, "type:varbinary(384)") {
+		t.Fatalf("WikiPageLink.DstSlug gorm tag = %q, want renamed dst_slug_ci width preserved", wikiLinkDstSlugTag)
+	}
+}
+
+func gormTag(t *testing.T, model any, fieldName string) string {
+	t.Helper()
+	field, ok := reflect.TypeOf(model).FieldByName(fieldName)
+	if !ok {
+		t.Fatalf("%T missing field %s", model, fieldName)
+	}
+	return field.Tag.Get("gorm")
 }
 
 // TestWikiCatalogRoundTrip exercises insertion/retrieval against each
