@@ -34,6 +34,16 @@ func TestIssueSearchDDLBuilders(t *testing.T) {
 	if strings.Contains(fullText, "ADD_COLUMNAR_REPLICA_ON_DEMAND") {
 		t.Fatalf("expected playground-compatible full-text DDL, got %q", fullText)
 	}
+	fullTextDDLs := fullTextIndexDDLs("issues", "idx_issues_fts_title", "title")
+	if len(fullTextDDLs) != 2 {
+		t.Fatalf("expected columnar and base full-text DDLs, got %#v", fullTextDDLs)
+	}
+	if !strings.Contains(fullTextDDLs[0], "ADD_COLUMNAR_REPLICA_ON_DEMAND") {
+		t.Fatalf("expected columnar replica full-text DDL first, got %#v", fullTextDDLs)
+	}
+	if fullTextDDLs[1] != fullText {
+		t.Fatalf("expected base full-text DDL fallback, got %#v", fullTextDDLs)
+	}
 
 	dropIndex := dropIndexDDL(issueSearchFullTextIndex{
 		table: "issues",
