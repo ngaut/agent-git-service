@@ -61,7 +61,6 @@ func (s *Service) ForkRepo(ctx context.Context, sourceFullName, targetOwnerLogin
 		Description:      src.Description,
 		Private:          src.Private,
 		DefaultBranch:    src.DefaultBranch,
-		AddReadme:        false,
 		RequireOrgAdmin:  targetsOrg,
 		SkipOrgBootstrap: targetsOrg,
 	}

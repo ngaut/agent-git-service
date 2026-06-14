@@ -24,7 +24,7 @@ func TestRenameRepo_Success(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "renameuser",
 		Name:       "oldname",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -94,7 +94,7 @@ func TestRenameRepo_UpdatesAutolink(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "renameuser",
 		Name:       "oldname",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -152,7 +152,7 @@ func TestRenameRepo_RollbackOnUpdateFailure(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "renameuser",
 		Name:       "oldname",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -230,7 +230,7 @@ func TestSearchRepos_ByName(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "searchuser",
 		Name:       "alpha-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create alpha: %v", err)
@@ -239,7 +239,7 @@ func TestSearchRepos_ByName(t *testing.T) {
 	_, err = svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "searchuser",
 		Name:       "beta-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create beta: %v", err)
@@ -248,7 +248,7 @@ func TestSearchRepos_ByName(t *testing.T) {
 	_, err = svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin:  "searchuser",
 		Name:        "gamma-repo",
-		AddReadme:   true,
+		AutoInit:    true,
 		Description: "This is the gamma repository",
 	})
 	if err != nil {
@@ -301,7 +301,7 @@ func TestSearchReposGQL_ByUser(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqluser",
 		Name:       "repo1",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo1: %v", err)
@@ -310,7 +310,7 @@ func TestSearchReposGQL_ByUser(t *testing.T) {
 	_, err = svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqluser",
 		Name:       "repo2",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo2: %v", err)
@@ -336,7 +336,7 @@ func TestSearchReposGQL_ByLanguage(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "languser",
 		Name:       "go-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create go-repo: %v", err)
@@ -346,7 +346,7 @@ func TestSearchReposGQL_ByLanguage(t *testing.T) {
 	_, err = svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "languser",
 		Name:       "python-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create python-repo: %v", err)
@@ -375,7 +375,7 @@ func TestSearchReposGQL_ByTopic(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "topicuser",
 		Name:       "topic-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create topic-repo: %v", err)
@@ -406,7 +406,7 @@ func TestListAllRepos_ReturnsAll(t *testing.T) {
 		_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: "listuser",
 			Name:       "list-repo-" + string(rune('0'+i)),
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create repo %d: %v", i, err)
@@ -434,7 +434,7 @@ func TestDependabotAlerts_List(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "depuser",
 		Name:       "dep-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create dep repo: %v", err)
@@ -482,7 +482,7 @@ func TestDependabotAlerts_Get(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "depuser2",
 		Name:       "dep-repo2",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create dep repo2: %v", err)
@@ -524,7 +524,7 @@ func TestDependabotAlerts_Update(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "depuser3",
 		Name:       "dep-repo3",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create dep repo3: %v", err)
@@ -567,7 +567,7 @@ func TestDependabotAlerts_ListEmptyRepo(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "depuser4",
 		Name:       "dep-repo4",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create dep repo4: %v", err)

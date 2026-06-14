@@ -23,7 +23,7 @@ func TestConcurrentIssueAndPRCreationUsesSharedUniqueNumbers(t *testing.T) {
 		OwnerLogin:    "concurrency-user",
 		Name:          "concurrency-repo",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)

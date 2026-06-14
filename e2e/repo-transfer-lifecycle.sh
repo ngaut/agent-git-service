@@ -83,7 +83,7 @@ create_user_repo() {
     -X POST "$BASE_URL/api/v3/user/repos" \
     -H "Authorization: token $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"$name\",\"add_readme\":true}"
+    -d "{\"name\":\"$name\",\"auto_init\":true}"
 }
 
 get_repo() {

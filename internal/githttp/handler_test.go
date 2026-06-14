@@ -524,8 +524,8 @@ func TestClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("README.md not found in clone: %v", err)
 	}
-	if !strings.Contains(string(data), "README") {
-		t.Errorf("expected README content, got: %s", data)
+	if len(data) != 0 {
+		t.Errorf("expected empty auto-init README content, got: %q", data)
 	}
 }
 
@@ -541,8 +541,8 @@ func TestClone_LiteralPercentRepoName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("README.md not found in clone: %v", err)
 	}
-	if !strings.Contains(string(data), "README") {
-		t.Errorf("expected README content, got: %s", data)
+	if len(data) != 0 {
+		t.Errorf("expected empty auto-init README content, got: %q", data)
 	}
 }
 

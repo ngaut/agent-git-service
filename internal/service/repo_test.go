@@ -665,7 +665,7 @@ func createRepo(t *testing.T, svc *service.Service, ctx context.Context, ownerLo
 		OwnerLogin:    ownerLogin,
 		Name:          name,
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create repo %s/%s: %v", ownerLogin, name, err)

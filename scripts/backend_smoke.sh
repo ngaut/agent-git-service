@@ -100,7 +100,7 @@ repo_json="$(curl_json 201 \
   -X POST "$BASE_URL/api/v3/user/repos" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"$REPO_NAME\",\"add_readme\":true}")"
+  -d "{\"name\":\"$REPO_NAME\",\"auto_init\":true}")"
 repo_full_name="$(printf '%s' "$repo_json" | jq -r '.full_name')"
 assert_eq "$repo_full_name" "$ADMIN_LOGIN/$REPO_NAME"
 ok "created $repo_full_name"

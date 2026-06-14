@@ -39,7 +39,7 @@ func TestDeleteRepo_CascadeHonorsFKs(t *testing.T) {
 		OwnerLogin:    owner.Login,
 		Name:          "to-delete",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)

@@ -32,6 +32,13 @@ func TestStore_InitForkDelete(t *testing.T) {
 	if !store.Exists(ctx, repoName) {
 		t.Error("expected repo to exist after Init")
 	}
+	readme, err := store.ReadFile(ctx, repoName, "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile README.md failed: %v", err)
+	}
+	if len(readme) != 0 {
+		t.Fatalf("expected auto-init README.md to be empty, got %q", readme)
+	}
 
 	// Test SetupConfig
 	if err := store.SetupConfig(ctx, repoName, "http://localhost"); err != nil {

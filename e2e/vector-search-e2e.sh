@@ -138,7 +138,7 @@ create_repo() {
     -X POST "$BASE_URL/api/v3/user/repos" \
     -H "Authorization: token $token" \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"$name\",\"private\":true,\"add_readme\":true}"
+    -d "{\"name\":\"$name\",\"private\":true,\"auto_init\":true}"
 }
 
 create_issue() {

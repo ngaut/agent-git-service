@@ -97,7 +97,7 @@ func (s *Store) Fork(ctx context.Context, srcFullName, targetFullName string) er
 // seedReadme creates an initial commit with README.md on defaultBranch.
 func seedReadme(ctx context.Context, repo *git.Repository, defaultBranch string) error {
 	stg := repo.Storer
-	readmeContent := "# README\n\nInitialised by gh-server.\n"
+	readmeContent := ""
 
 	// Create blob.
 	blobEnc := stg.NewEncodedObject()
