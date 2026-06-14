@@ -17,11 +17,6 @@ import (
 	searchsvc "github.com/ngaut/agent-git-service/internal/service/search"
 )
 
-// NextIssueNumber returns the next sequential issue number within a repo.
-func (s *Service) NextIssueNumber(ctx context.Context, repoID uint) (int, error) {
-	return nextIssueOrPRNumber(s, ctx, repoID)
-}
-
 // CreateIssueInput holds issue creation parameters.
 type CreateIssueInput struct {
 	RepoFullName string

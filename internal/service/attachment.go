@@ -203,18 +203,6 @@ func (s *Service) removeRepoAttachmentDir(repoID uint) error {
 	return os.RemoveAll(dir)
 }
 
-func (s *Service) AttachmentMarkdown(a db.Attachment) string {
-	downloadURL := fmt.Sprintf("%s/api/v3/attachments/%s", s.BaseURL, a.UUID)
-	label := strings.NewReplacer("[", "", "]", "").Replace(strings.TrimSpace(a.OriginalName))
-	if label == "" {
-		label = "attachment"
-	}
-	if a.IsImage {
-		return fmt.Sprintf("![%s](%s)", label, downloadURL)
-	}
-	return fmt.Sprintf("[%s](%s)", label, downloadURL)
-}
-
 // UploadIssueAttachment stores an issue attachment on disk and in the database.
 func (s *Service) UploadIssueAttachment(ctx context.Context, issueID uint, originalName, declaredContentType string, body io.Reader) (db.Attachment, error) {
 	_ = normalizeAttachmentMediaType(declaredContentType)

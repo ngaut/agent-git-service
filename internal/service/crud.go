@@ -37,13 +37,6 @@ func deleteByID[T any](s *Service, ctx context.Context, id uint) error {
 	return checkAffected(s.DBForCtx(ctx).Delete(new(T), id))
 }
 
-// nextIssueOrPRNumber returns the next sequential number for an issue or pull request within a repo.
-// GitHub enforces a unified sequence namespace for issues and PRs.
-func nextIssueOrPRNumber(s *Service, ctx context.Context, repoID uint) (int, error) {
-	return nextIssueOrPRNumberTx(s.DBForCtx(ctx), repoID)
-}
-
-// nextIssueOrPRNumberTx is the tx-aware variant of nextIssueOrPRNumber.
 // Issue and PR numbers share one repository-scoped namespace, so allocation
 // must use a single row instead of independent MAX(number) queries.
 func nextIssueOrPRNumberTx(tx *gorm.DB, repoID uint) (int, error) {
