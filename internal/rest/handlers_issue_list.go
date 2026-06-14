@@ -29,6 +29,10 @@ type issueListParams struct {
 	assignee     string
 	creator      string
 	mentioned    string
+	kind         string
+	titlePrefix  string
+	includeBody  bool
+	fields       []string
 	sort         string
 	direction    string
 	milestone    string
@@ -68,13 +72,15 @@ func (d *Deps) ListIssues(w http.ResponseWriter, r *http.Request) {
 		RepoFullName:  params.repoFullName,
 		State:         params.state,
 		Labels:        params.labels,
+		Kind:          params.kind,
+		TitlePrefix:   params.titlePrefix,
 		Sort:          params.sort,
 		Direction:     params.direction,
 		Milestone:     params.milestone,
 		Since:         params.since,
 		Page:          page,
 		PerPage:       perPage,
-		OmitIssueBody: true,
+		OmitIssueBody: !params.includeBody,
 	})
 	if err != nil {
 		respond.ServiceErrorRequest(r, w, err)
@@ -90,6 +96,7 @@ func (d *Deps) ListIssues(w http.ResponseWriter, r *http.Request) {
 		respond.ServiceErrorRequest(r, w, err)
 		return
 	}
+	out = filterIssueListResponseFields(out, params.fields)
 	respond.JSON(w, 200, out)
 }
 
@@ -100,6 +107,7 @@ func (d *Deps) listIssuesLegacy(w http.ResponseWriter, r *http.Request, params *
 		return
 	}
 	items := mergeIssuesAndPRs(issues, prs)
+	items = filterIssueListItems(items, params)
 	if err := d.countCommentsForItems(r.Context(), items); err != nil {
 		respond.ServiceErrorRequest(r, w, err)
 		return
@@ -122,6 +130,7 @@ func (d *Deps) listIssuesLegacy(w http.ResponseWriter, r *http.Request, params *
 		respond.ServiceErrorRequest(r, w, err)
 		return
 	}
+	out = filterIssueListResponseFields(out, params.fields)
 	respond.JSON(w, 200, out)
 }
 
@@ -252,6 +261,21 @@ func parseIssueListParams(r *http.Request) (*issueListParams, error) {
 	assignee := r.URL.Query().Get("assignee")
 	creator := r.URL.Query().Get("creator")
 	mentioned := r.URL.Query().Get("mentioned")
+	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("kind")))
+	if kind == "" {
+		kind = "all"
+	}
+	if kind == "pr" {
+		kind = "pull"
+	}
+	switch kind {
+	case "issue", "pull", "all":
+	default:
+		return nil, validationError("kind must be one of: issue, pull, all")
+	}
+	titlePrefix := strings.TrimSpace(r.URL.Query().Get("title_prefix"))
+	includeBody := queryListContains(r.URL.Query().Get("include"), "body")
+	fields := parseIssueListFields(r.URL.Query().Get("fields"))
 	sortParam := strings.TrimSpace(r.URL.Query().Get("sort"))
 	if sortParam != "" {
 		sortParam = strings.ToLower(sortParam)
@@ -292,6 +316,10 @@ func parseIssueListParams(r *http.Request) (*issueListParams, error) {
 		assignee:     assignee,
 		creator:      creator,
 		mentioned:    mentioned,
+		kind:         kind,
+		titlePrefix:  titlePrefix,
+		includeBody:  includeBody,
+		fields:       fields,
 		sort:         sortParam,
 		direction:    direction,
 		milestone:    milestone,
@@ -304,45 +332,119 @@ func parseIssueListParams(r *http.Request) (*issueListParams, error) {
 func (d *Deps) fetchIssuesAndPRs(ctx context.Context, params *issueListParams) ([]db.Issue, []db.PullRequest, error) {
 	var issues []db.Issue
 	var err error
-	if params.assignee != "" || params.creator != "" || params.mentioned != "" {
-		issues, err = d.Svc.ListIssuesFiltered(ctx, service.IssueListFilter{
-			RepoFullName: params.repoFullName,
-			State:        params.state,
-			Assignee:     params.assignee,
-			Mentioned:    params.mentioned,
-			CreatedBy:    params.creator,
-			Labels:       params.labels,
-			Sort:         params.sort,
-			Direction:    params.direction,
-			Milestone:    params.milestone,
-			Since:        params.since,
-		})
-	} else {
-		issues, err = d.Svc.ListIssuesForREST(ctx, params.repoFullName, params.state, params.labels, params.sort, params.direction, params.milestone, params.since)
-	}
-	if err != nil {
-		return nil, nil, err
+	if params.kind != "pull" {
+		if params.assignee != "" || params.creator != "" || params.mentioned != "" {
+			issues, err = d.Svc.ListIssuesFiltered(ctx, service.IssueListFilter{
+				RepoFullName: params.repoFullName,
+				State:        params.state,
+				Assignee:     params.assignee,
+				Mentioned:    params.mentioned,
+				CreatedBy:    params.creator,
+				Labels:       params.labels,
+				Sort:         params.sort,
+				Direction:    params.direction,
+				Milestone:    params.milestone,
+				Since:        params.since,
+			})
+		} else {
+			issues, err = d.Svc.ListIssuesForREST(ctx, params.repoFullName, params.state, params.labels, params.sort, params.direction, params.milestone, params.since)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	var prs []db.PullRequest
-	prs, err = d.Svc.ListPRsFiltered(ctx, service.PRListFilter{
-		RepoFullName: params.repoFullName,
-		State:        params.state,
-		Mentioned:    params.mentioned,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	labelFilters := parseFilterList(params.labels)
-	if len(prs) > 0 {
-		var invalidMilestone bool
-		prs, invalidMilestone = filterPRs(prs, labelFilters, params.assignee, params.creator, params.milestone, params.sinceTime, params.hasSince)
-		if invalidMilestone {
-			prs = nil
+	if params.kind != "issue" {
+		prs, err = d.Svc.ListPRsFiltered(ctx, service.PRListFilter{
+			RepoFullName: params.repoFullName,
+			State:        params.state,
+			Mentioned:    params.mentioned,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		labelFilters := parseFilterList(params.labels)
+		if len(prs) > 0 {
+			var invalidMilestone bool
+			prs, invalidMilestone = filterPRs(prs, labelFilters, params.assignee, params.creator, params.milestone, params.sinceTime, params.hasSince)
+			if invalidMilestone {
+				prs = nil
+			}
 		}
 	}
 
 	return issues, prs, nil
+}
+
+func queryListContains(raw, wanted string) bool {
+	wanted = strings.ToLower(strings.TrimSpace(wanted))
+	for _, part := range strings.Split(raw, ",") {
+		if strings.ToLower(strings.TrimSpace(part)) == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func parseIssueListFields(raw string) []string {
+	parts := strings.Split(raw, ",")
+	fields := make([]string, 0, len(parts))
+	seen := make(map[string]struct{})
+	for _, part := range parts {
+		field := strings.TrimSpace(part)
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		fields = append(fields, field)
+	}
+	return fields
+}
+
+func filterIssueListItems(items []issueListItem, params *issueListParams) []issueListItem {
+	if params.titlePrefix == "" {
+		return items
+	}
+	out := make([]issueListItem, 0, len(items))
+	for _, item := range items {
+		title := ""
+		if item.issue != nil {
+			title = item.issue.Title
+		}
+		if item.pr != nil {
+			title = item.pr.Title
+		}
+		if strings.HasPrefix(strings.ToLower(title), strings.ToLower(params.titlePrefix)) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func filterIssueListResponseFields(rows []any, fields []string) []any {
+	if len(fields) == 0 {
+		return rows
+	}
+	out := make([]any, len(rows))
+	for i, row := range rows {
+		src, ok := row.(map[string]any)
+		if !ok {
+			out[i] = row
+			continue
+		}
+		dst := make(map[string]any, len(fields))
+		for _, field := range fields {
+			if value, ok := src[field]; ok {
+				dst[field] = value
+			}
+		}
+		out[i] = dst
+	}
+	return out
 }
 
 func mergeIssuesAndPRs(issues []db.Issue, prs []db.PullRequest) []issueListItem {
