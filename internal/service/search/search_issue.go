@@ -62,15 +62,7 @@ func SearchIssuesDetailed(ctx context.Context, deps IssueSearchDeps, query strin
 	baseDB := deps.DBForCtx(ctx)
 	if len(sq.FreeText) == 0 {
 		// No free text — just apply qualifiers and return.
-		q := baseDB.Model(&db.Issue{})
-		if deps.PreloadIssue != nil {
-			q = deps.PreloadIssue(q)
-		}
-		q = ApplyIssueQualifiers(q, baseDB, sq)
-		// Skip discoverability filter when explicit repo: qualifier is provided.
-		if sq.Repo == "" {
-			q = restrictIssuesToDiscoverableRepos(ctx, deps, baseDB, q)
-		}
+		q := buildIssueSearchBaseQuery(ctx, deps, baseDB, sq, true)
 		var issues []db.Issue
 		err := q.Order(SortOrder(sortQualifier, "issues")).Limit(deps.DefaultListLimit).Find(&issues).Error
 		if err != nil {
@@ -80,38 +72,75 @@ func SearchIssuesDetailed(ctx context.Context, deps IssueSearchDeps, query strin
 	}
 
 	freeText := strings.Join(sq.FreeText, " ")
-	baseQ := ApplyIssueQualifiers(baseDB.Model(&db.Issue{}), baseDB, sq)
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type lexicalResult struct {
+		ids []uint
+		err error
+	}
+	type semanticResult struct {
+		ranks []rankedSearchID
+		err   error
+	}
+
+	lexicalCh := make(chan lexicalResult, 1)
+	semanticCh := make(chan semanticResult, 1)
+
+	go func() {
+		baseQ := buildIssueSearchBaseQuery(searchCtx, deps, baseDB, sq, false)
+		ids, err := searchIssueLexical(searchCtx, baseQ, baseDB, sq, sortQualifier, explicitSort, deps.DefaultListLimit)
+		if err != nil {
+			cancel()
+		}
+		lexicalCh <- lexicalResult{ids: ids, err: err}
+	}()
+
+	go func() {
+		vec := ""
+		if deps.EmbedQuery != nil {
+			vec = deps.EmbedQuery(searchCtx, freeText)
+		}
+		if vec == "" {
+			semanticCh <- semanticResult{}
+			return
+		}
+		baseQ := buildIssueSearchBaseQuery(searchCtx, deps, baseDB, sq, false)
+		ranks, err := searchIssueSemanticDetailed(searchCtx, baseQ, baseDB, sq, vec, deps.DefaultListLimit)
+		semanticCh <- semanticResult{ranks: ranks, err: err}
+	}()
+
+	lexical := <-lexicalCh
+	if lexical.err != nil {
+		cancel()
+		<-semanticCh
+		return nil, lexical.err
+	}
+	semantic := <-semanticCh
+
+	if semantic.err != nil {
+		slog.WarnContext(ctx, "issue search vector query failed; returning lexical results only", "error", semantic.err)
+		ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(lexical.ids), nil, explicitSort, deps.DefaultListLimit)
+		return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
+	}
+
+	// Merge lexical and semantic ranks for default "best match" search.
+	// Preserve explicit user-requested sort semantics when sort/order qualifiers are present.
+	ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(lexical.ids), semantic.ranks, explicitSort, deps.DefaultListLimit)
+	return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
+}
+
+func buildIssueSearchBaseQuery(ctx context.Context, deps IssueSearchDeps, baseDB *gorm.DB, sq SearchQualifiers, preload bool) *gorm.DB {
+	q := baseDB.Model(&db.Issue{})
+	if preload && deps.PreloadIssue != nil {
+		q = deps.PreloadIssue(q)
+	}
+	q = ApplyIssueQualifiers(q, baseDB, sq)
 	// Skip discoverability filter when explicit repo: qualifier is provided.
 	if sq.Repo == "" {
-		baseQ = restrictIssuesToDiscoverableRepos(ctx, deps, baseDB, baseQ)
+		q = restrictIssuesToDiscoverableRepos(ctx, deps, baseDB, q)
 	}
-
-	likeIDs, err := searchIssueLexical(ctx, baseQ, baseDB, sq, sortQualifier, explicitSort, deps.DefaultListLimit)
-	if err != nil {
-		return nil, err
-	}
-
-	// Step 2: Vector search (only when embedder is available).
-	vec := ""
-	if deps.EmbedQuery != nil {
-		vec = deps.EmbedQuery(ctx, freeText)
-	}
-	if vec == "" {
-		ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(likeIDs), nil, explicitSort, deps.DefaultListLimit)
-		return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
-	}
-
-	vecResults, err := searchIssueSemanticDetailed(ctx, baseQ, baseDB, sq, vec, deps.DefaultListLimit)
-	if err != nil {
-		slog.WarnContext(ctx, "issue search vector query failed; returning lexical results only", "error", err)
-		ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(likeIDs), nil, explicitSort, deps.DefaultListLimit)
-		return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
-	}
-
-	// Step 3: Merge lexical and semantic ranks for default "best match" search.
-	// Preserve explicit user-requested sort semantics when sort/order qualifiers are present.
-	ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(likeIDs), vecResults, explicitSort, deps.DefaultListLimit)
-	return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
+	return q
 }
 
 func buildIssueDetailedResults(

@@ -50,11 +50,7 @@ func SearchPRsDetailed(ctx context.Context, deps PRSearchDeps, query string, opt
 
 	baseDB := deps.DBForCtx(ctx)
 	if len(sq.FreeText) == 0 {
-		q := ApplyPRQualifiers(deps.PreloadPR(baseDB), baseDB, sq)
-		// Skip discoverability filter when explicit repo: qualifier is provided.
-		if sq.Repo == "" {
-			q = restrictPRsToDiscoverableRepos(ctx, deps, baseDB, q)
-		}
+		q := buildPRSearchBaseQuery(ctx, deps, baseDB, sq)
 		var prs []db.PullRequest
 		err := q.Order(SortOrder(sortQualifier, "pull_requests")).Limit(deps.DefaultListLimit).Find(&prs).Error
 		if err != nil {
@@ -64,39 +60,72 @@ func SearchPRsDetailed(ctx context.Context, deps PRSearchDeps, query string, opt
 	}
 
 	freeText := strings.Join(sq.FreeText, " ")
-	baseQ := ApplyPRQualifiers(deps.PreloadPR(baseDB), baseDB, sq)
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type lexicalResult struct {
+		prs []db.PullRequest
+		err error
+	}
+	type semanticResult struct {
+		prs []db.PullRequest
+		err error
+	}
+
+	lexicalCh := make(chan lexicalResult, 1)
+	semanticCh := make(chan semanticResult, 1)
+
+	go func() {
+		baseQ := buildPRSearchBaseQuery(searchCtx, deps, baseDB, sq)
+		prs, err := searchPRLexical(searchCtx, baseQ, baseDB, sq, sortQualifier, explicitSort, deps.DefaultListLimit)
+		if err != nil {
+			cancel()
+		}
+		lexicalCh <- lexicalResult{prs: prs, err: err}
+	}()
+
+	go func() {
+		vec := ""
+		if deps.EmbedQuery != nil {
+			vec = deps.EmbedQuery(searchCtx, freeText)
+		}
+		if vec == "" {
+			semanticCh <- semanticResult{}
+			return
+		}
+		baseQ := buildPRSearchBaseQuery(searchCtx, deps, baseDB, sq)
+		prs, err := searchPRSemantic(baseQ, baseDB, sq, vec, deps.DefaultListLimit)
+		semanticCh <- semanticResult{prs: prs, err: err}
+	}()
+
+	lexical := <-lexicalCh
+	if lexical.err != nil {
+		cancel()
+		<-semanticCh
+		return nil, lexical.err
+	}
+	semantic := <-semanticCh
+
+	if semantic.err != nil {
+		slog.WarnContext(ctx, "pull request search vector query failed; returning lexical results only", "error", semantic.err)
+		ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(lexical.prs), nil, explicitSort, deps.DefaultListLimit)
+		return buildPRDetailedResults(baseDB, lexical.prs, ranks, sq, opts)
+	}
+
+	ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(lexical.prs), prsToRankedSearchIDs(semantic.prs), explicitSort, deps.DefaultListLimit)
+	allResults := make([]db.PullRequest, 0, len(lexical.prs)+len(semantic.prs))
+	allResults = append(allResults, lexical.prs...)
+	allResults = append(allResults, semantic.prs...)
+	return buildPRDetailedResults(baseDB, allResults, ranks, sq, opts)
+}
+
+func buildPRSearchBaseQuery(ctx context.Context, deps PRSearchDeps, baseDB *gorm.DB, sq SearchQualifiers) *gorm.DB {
+	q := ApplyPRQualifiers(deps.PreloadPR(baseDB), baseDB, sq)
 	// Skip discoverability filter when explicit repo: qualifier is provided.
 	if sq.Repo == "" {
-		baseQ = restrictPRsToDiscoverableRepos(ctx, deps, baseDB, baseQ)
+		q = restrictPRsToDiscoverableRepos(ctx, deps, baseDB, q)
 	}
-
-	likeResults, err := searchPRLexical(ctx, baseQ, baseDB, sq, sortQualifier, explicitSort, deps.DefaultListLimit)
-	if err != nil {
-		return nil, err
-	}
-
-	// Step 2: Vector search.
-	vec := ""
-	if deps.EmbedQuery != nil {
-		vec = deps.EmbedQuery(ctx, freeText)
-	}
-	if vec == "" {
-		ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(likeResults), nil, explicitSort, deps.DefaultListLimit)
-		return buildPRDetailedResults(baseDB, likeResults, ranks, sq, opts)
-	}
-
-	vecResults, err := searchPRSemantic(baseQ, baseDB, sq, vec, deps.DefaultListLimit)
-	if err != nil {
-		slog.WarnContext(ctx, "pull request search vector query failed; returning lexical results only", "error", err)
-		ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(likeResults), nil, explicitSort, deps.DefaultListLimit)
-		return buildPRDetailedResults(baseDB, likeResults, ranks, sq, opts)
-	}
-
-	ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(likeResults), prsToRankedSearchIDs(vecResults), explicitSort, deps.DefaultListLimit)
-	allResults := make([]db.PullRequest, 0, len(likeResults)+len(vecResults))
-	allResults = append(allResults, likeResults...)
-	allResults = append(allResults, vecResults...)
-	return buildPRDetailedResults(baseDB, allResults, ranks, sq, opts)
+	return q
 }
 
 func buildPRDetailedResults(
