@@ -103,13 +103,12 @@ func wikiSearchRankWindow(limit, offset int) int {
 }
 
 type wikiSearchTiming struct {
-	repoMS          int64
-	liveHeadMS      int64
-	catalogMS       int64
-	lexicalMS       int64
-	refreshTitlesMS int64
-	semanticWaitMS  int64
-	hydrateMS       int64
+	repoMS         int64
+	liveHeadMS     int64
+	catalogMS      int64
+	lexicalMS      int64
+	semanticWaitMS int64
+	hydrateMS      int64
 
 	lexicalResults  int
 	semanticResults int
@@ -178,12 +177,6 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 	}
 	timing.lexicalMS = time.Since(stageStart).Milliseconds()
 	timing.lexicalResults = len(lexical)
-	stageStart = time.Now()
-	if err := s.refreshWikiSearchTitlesForResults(searchCtx, repo.ID, lexical); err != nil {
-		cancelSearch()
-		return WikiSearchResponse{}, err
-	}
-	timing.refreshTitlesMS = time.Since(stageStart).Milliseconds()
 	results := lexical
 
 	if semanticResultC != nil {
@@ -255,7 +248,6 @@ func logWikiSearchTiming(ctx context.Context, repoFullName, method, query string
 		"live_head_ms", timing.liveHeadMS,
 		"catalog_ms", timing.catalogMS,
 		"lexical_ms", timing.lexicalMS,
-		"refresh_titles_ms", timing.refreshTitlesMS,
 		"semantic_wait_ms", timing.semanticWaitMS,
 		"hydrate_ms", timing.hydrateMS,
 		"lexical_results", timing.lexicalResults,
@@ -552,9 +544,6 @@ func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query stri
 }
 
 func (s *Service) rankWikiLexicalDocuments(ctx context.Context, repoID uint, docs []db.WikiSearchDocument, query string) ([]WikiSearchResult, error) {
-	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
-		return nil, err
-	}
 	labelsBySlug, err := s.wikiSearchLabelsBySlug(ctx, repoID, docs)
 	if err != nil {
 		return nil, err
@@ -1394,9 +1383,6 @@ func (s *Service) searchWikiSemanticInMemory(ctx context.Context, repoID uint, q
 	if len(docs) == 0 {
 		return nil, false, nil
 	}
-	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
-		return nil, false, err
-	}
 	labelsBySlug, err := s.wikiSearchLabelsBySlug(ctx, repoID, docs)
 	if err != nil {
 		return nil, false, err
@@ -1586,9 +1572,6 @@ func (s *Service) buildWikiSemanticResultsFromDBRows(ctx context.Context, repoID
 	docs := make([]db.WikiSearchDocument, 0, len(rows))
 	for _, row := range rows {
 		docs = append(docs, row.WikiSearchDocument)
-	}
-	if err := s.refreshStaleWikiSearchTitles(ctx, docs); err != nil {
-		return nil, false, err
 	}
 	labelsBySlug, err := s.wikiSearchLabelsBySlug(ctx, repoID, docs)
 	if err != nil {
@@ -1896,44 +1879,6 @@ func (s *Service) wikiSearchCurrentDocuments(ctx context.Context, repoID uint, q
 	return docs, nil
 }
 
-func (s *Service) refreshStaleWikiSearchTitles(ctx context.Context, docs []db.WikiSearchDocument) error {
-	for i := range docs {
-		title := titleFromSlug(docs[i].Slug)
-		if docs[i].Title == title {
-			continue
-		}
-		if err := s.DBForCtx(ctx).
-			Model(&db.WikiSearchDocument{}).
-			Where("id = ?", docs[i].ID).
-			Update("title", title).
-			Error; err != nil {
-			return err
-		}
-		docs[i].Title = title
-	}
-	return nil
-}
-
-func (s *Service) refreshWikiSearchTitlesForResults(ctx context.Context, repoID uint, results []WikiSearchResult) error {
-	for _, result := range results {
-		title := titleFromSlug(result.Slug)
-		if title == "" {
-			continue
-		}
-		if err := s.DBForCtx(ctx).
-			Model(&db.WikiSearchDocument{}).
-			Where("repository_id = ? AND slug = ? AND title <> ?", repoID, result.Slug, title).
-			Update("title", title).
-			Error; err != nil {
-			if wikiSearchDocumentTableMissing(err) {
-				return nil
-			}
-			return err
-		}
-	}
-	return nil
-}
-
 func wikiSearchDocumentTableMissing(err error) bool {
 	if err == nil {
 		return false
@@ -2217,7 +2162,8 @@ func (s *Service) ReindexWikiSearch(ctx context.Context, repoFullName string) (i
 	toRefresh := make([]WikiPage, 0, len(pages))
 	for _, page := range pages {
 		labelDigest := wikiPageLabelsText(labelsBySlug[page.Slug])
-		if doc, ok := existingBySlug[page.Slug]; ok && doc.RevisionSHA == page.HeadBlobSHA && doc.LabelDigest == labelDigest {
+		title := titleFromSlug(page.Slug)
+		if doc, ok := existingBySlug[page.Slug]; ok && doc.RevisionSHA == page.HeadBlobSHA && doc.LabelDigest == labelDigest && doc.Title == title {
 			continue
 		}
 		body, err := s.wikiPageBody(ctx, page)
@@ -2226,7 +2172,7 @@ func (s *Service) ReindexWikiSearch(ctx context.Context, repoFullName string) (i
 		}
 		toRefresh = append(toRefresh, WikiPage{
 			Slug:       page.Slug,
-			Title:      titleFromSlug(page.Slug),
+			Title:      title,
 			Body:       string(body),
 			UpdatedAt:  page.UpdatedAt,
 			SHA:        page.HeadBlobSHA,
