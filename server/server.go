@@ -212,10 +212,7 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	// Wiki catalog: a content-addressed blob store on the filesystem
 	// plus the catalog primitive backed by the same database. The
 	// blob root sits alongside the attachment root by convention so
-	// operators only need to mount one persistent volume. The catalog
-	// is constructed but inactive until Step 4 wires it into the REST
-	// handlers; meanwhile MigrateAllWikis and RunWikiCatalogGC can
-	// already be invoked from admin endpoints.
+	// operators only need to mount one persistent volume.
 	wikiBlob := wikicatalog.NewBlobStore(dataRoot)
 	wikiCat := wikicatalog.New(database, wikiBlob)
 
@@ -573,12 +570,12 @@ func shutdown(deps *bootstrapDeps, cfg shutdownConfig) shutdownResult {
 	}
 	slog.Info("all listeners stopped; waiting for background goroutines")
 
-	// Wait for background goroutines (svcDeps.Wg).
-	waitForWaitGroup(ctx, &deps.SvcDeps.Wg, "background goroutines (svcDeps)", &result.BgDrained, &result.BgDrainTimedOut)
-
 	// Cancel the server context so background goroutines observe Done and begin draining.
 	deps.SrvCancel()
 	result.ContextCanceled = true
+
+	// Wait for background goroutines (svcDeps.Wg).
+	waitForWaitGroup(ctx, &deps.SvcDeps.Wg, "background goroutines (svcDeps)", &result.BgDrained, &result.BgDrainTimedOut)
 
 	return result
 }
@@ -589,6 +586,7 @@ func run(sigCh <-chan struct{}, shutdownCfg shutdownConfig) error {
 		return result.Err
 	}
 	deps := result.Deps
+	startRuntimeWorkers(deps)
 
 	// Start HTTP servers.
 	for i, srv := range deps.Servers {
@@ -667,6 +665,7 @@ func New(cfg config.Config, opts ...Option) (*Server, error) {
 	if result.Err != nil {
 		return nil, result.Err
 	}
+	startRuntimeWorkers(result.Deps)
 	return &Server{
 		deps:    result.Deps,
 		handler: result.Deps.Mux,
