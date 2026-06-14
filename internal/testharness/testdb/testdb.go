@@ -49,16 +49,6 @@ func Open(t testing.TB, opts Options) (*gorm.DB, func()) {
 	return openExisting(t, dbName, dsn, adminSQL, opts.Logger)
 }
 
-func OpenCloned(t testing.TB, templateDB string, opts Options) (*gorm.DB, func()) {
-	t.Helper()
-	dbName, dsn, adminSQL := CreateDatabase(t, opts)
-	if err := CloneSchema(t.Context(), adminSQL, templateDB, dbName); err != nil {
-		_, _ = adminSQL.Exec("DROP DATABASE IF EXISTS `" + dbName + "`")
-		t.Fatalf("testdb: clone schema from %s to %s: %v", templateDB, dbName, err)
-	}
-	return openExisting(t, dbName, dsn, adminSQL, opts.Logger)
-}
-
 func (p *SchemaPool) Open(t testing.TB) (*gorm.DB, func()) {
 	t.Helper()
 	if p.TemplateDB == "" {
@@ -327,48 +317,6 @@ func baseTableNames(ctx context.Context, db *sql.DB, schema string) ([]string, e
 		return nil, err
 	}
 	return tables, nil
-}
-
-func ResetData(ctx context.Context, database *gorm.DB) error {
-	sqlDB, err := database.DB()
-	if err != nil {
-		return err
-	}
-	conn, err := sqlDB.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	var dbName string
-	if err := conn.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&dbName); err != nil {
-		return err
-	}
-	rows, err := conn.QueryContext(ctx, `
-		SELECT TABLE_NAME
-		FROM information_schema.tables
-		WHERE table_schema = ? AND table_type = 'BASE TABLE'
-		ORDER BY TABLE_NAME`, dbName)
-	if err != nil {
-		return err
-	}
-	var tables []string
-	for rows.Next() {
-		var table string
-		if err := rows.Scan(&table); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		tables = append(tables, table)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	return resetDataTablesWithConn(ctx, conn, tables)
 }
 
 func resetDataTables(ctx context.Context, database *gorm.DB, tables []string) error {

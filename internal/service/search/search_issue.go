@@ -194,24 +194,6 @@ func searchIssueLikeFallback(baseQ *gorm.DB, sq SearchQualifiers, sortQualifier 
 	return pluckIssueIDs(qLike, limit)
 }
 
-func searchIssueSemantic(ctx context.Context, baseQ *gorm.DB, baseDB *gorm.DB, sq SearchQualifiers, vec string, limit int) ([]uint, error) {
-	if !supportsVectorDistance(baseDB) {
-		return nil, nil
-	}
-	if !supportsTiDBANN(baseDB) {
-		return searchIssueSemanticFiltered(baseQ, vec, limit)
-	}
-
-	switch semanticModeForQuery(sq, issueSemanticApplicable(sq.In)) {
-	case semanticModeDisabled:
-		return nil, nil
-	case semanticModeFilteredExact:
-		return searchIssueSemanticFiltered(baseQ, vec, limit)
-	default:
-		return searchIssueSemanticANN(ctx, baseQ, baseDB, vec, limit)
-	}
-}
-
 func searchIssueSemanticDetailed(ctx context.Context, baseQ *gorm.DB, baseDB *gorm.DB, sq SearchQualifiers, vec string, limit int) ([]rankedSearchID, error) {
 	if !supportsVectorDistance(baseDB) {
 		return nil, nil
@@ -269,10 +251,6 @@ func buildIssueSemanticFilteredQuery(baseQ *gorm.DB, vec string) *gorm.DB {
 
 func buildIssueSemanticFilteredRankQuery(baseQ *gorm.DB, vec string) *gorm.DB {
 	return buildIssueSemanticFilteredQuery(baseQ, vec).Select("issues.id")
-}
-
-func searchIssueSemanticFiltered(baseQ *gorm.DB, vec string, limit int) ([]uint, error) {
-	return pluckIssueIDs(buildIssueSemanticFilteredRankQuery(baseQ, vec), limit)
 }
 
 func searchIssueSemanticFilteredDetailed(baseQ *gorm.DB, vec string, limit int) ([]rankedSearchID, error) {

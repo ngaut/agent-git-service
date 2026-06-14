@@ -66,12 +66,6 @@ func (s *Service) EnableWorkflowExecForTest(timeout time.Duration) {
 	})
 }
 
-// DisableWorkflowExecForTest disables workflow execution and clears any custom runner.
-func (s *Service) DisableWorkflowExecForTest() {
-	s.WorkflowExecEnabled = false
-	s.workflowStepRunner = nil
-}
-
 // SetWorkflowStepRunnerForTest replaces the workflow runner with a custom test hook.
 func (s *Service) SetWorkflowStepRunnerForTest(timeout time.Duration, fn func(ctx context.Context, dir, script string, env []string) ([]byte, int, error)) {
 	s.WorkflowExecEnabled = true

@@ -61,45 +61,6 @@ func assertStatusCode(t *testing.T, w *httptest.ResponseRecorder, want int) {
 	}
 }
 
-// assertPATCHPartialUpdate verifies PATCH partial-update semantics:
-// send a PATCH with only the specified field changed, then verify that all
-// "unchanged" fields retain their original values.
-func assertPATCHPartialUpdate(t *testing.T, h *testharness.Harness, method, path string,
-	patchBody map[string]any, getPath string, unchangedFields map[string]any) {
-	t.Helper()
-
-	// Get original values.
-	wBefore := h.DoREST(t, "GET", getPath, nil)
-	assertStatusCode(t, wBefore, 200)
-	before := testharness.DecodeJSON(t, wBefore)
-
-	// Apply PATCH.
-	wPatch := h.DoRESTJSON(t, method, path, patchBody)
-	assertStatusCode(t, wPatch, 200)
-
-	// Get after values.
-	wAfter := h.DoREST(t, "GET", getPath, nil)
-	assertStatusCode(t, wAfter, 200)
-	after := testharness.DecodeJSON(t, wAfter)
-
-	// Verify unchanged fields.
-	for field, expected := range unchangedFields {
-		_ = before // ensure we fetched before
-		got := after[field]
-		switch ev := expected.(type) {
-		case string:
-			if gs, ok := got.(string); !ok || gs != ev {
-				t.Errorf("field %q changed unexpectedly: want %q, got %v", field, ev, got)
-			}
-		default:
-			// For non-string types, just verify the field is still present.
-			if got == nil {
-				t.Errorf("field %q became nil after PATCH", field)
-			}
-		}
-	}
-}
-
 // assertPaginationHeaders checks that the response has appropriate pagination
 // headers when hasMore is true.
 func assertPaginationHeaders(t *testing.T, w *httptest.ResponseRecorder, hasMore bool) {

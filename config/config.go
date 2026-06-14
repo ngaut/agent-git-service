@@ -294,13 +294,6 @@ func (c Config) ConnectedLoginEnabled() bool {
 		strings.TrimSpace(c.ConnectedLoginClientSecret) != ""
 }
 
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func firstNonEmpty(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback

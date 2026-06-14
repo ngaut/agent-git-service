@@ -10,6 +10,7 @@ import (
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
+	searchsvc "github.com/ngaut/agent-git-service/internal/service/search"
 
 	"gorm.io/gorm"
 )
@@ -931,7 +932,7 @@ func TestSearchQualifierRepoFilters(t *testing.T) {
 			sq := ParseSearchQuery(tt.query)
 
 			var gotIssues []db.Issue
-			if err := applyIssueQualifiers(gdb.Model(&db.Issue{}), gdb, sq).Find(&gotIssues).Error; err != nil {
+			if err := searchsvc.ApplyIssueQualifiers(gdb.Model(&db.Issue{}), gdb, sq).Find(&gotIssues).Error; err != nil {
 				t.Fatalf("issue query failed: %v", err)
 			}
 			if got := issueNumbers(gotIssues); !reflect.DeepEqual(got, tt.wantIssues) {
@@ -939,7 +940,7 @@ func TestSearchQualifierRepoFilters(t *testing.T) {
 			}
 
 			var gotPRs []db.PullRequest
-			if err := applyPRQualifiers(gdb.Model(&db.PullRequest{}), gdb, sq).Find(&gotPRs).Error; err != nil {
+			if err := searchsvc.ApplyPRQualifiers(gdb.Model(&db.PullRequest{}), gdb, sq).Find(&gotPRs).Error; err != nil {
 				t.Fatalf("pr query failed: %v", err)
 			}
 			if got := prNumbers(gotPRs); !reflect.DeepEqual(got, tt.wantPRs) {
@@ -1015,7 +1016,7 @@ func TestSearchQualifierRepoScopedLabelFilters(t *testing.T) {
 	sq := ParseSearchQuery("repo:octo/public label:bug -label:wontfix")
 
 	var gotIssues []db.Issue
-	if err := applyIssueQualifiers(gdb.Model(&db.Issue{}), gdb, sq).Find(&gotIssues).Error; err != nil {
+	if err := searchsvc.ApplyIssueQualifiers(gdb.Model(&db.Issue{}), gdb, sq).Find(&gotIssues).Error; err != nil {
 		t.Fatalf("issue query failed: %v", err)
 	}
 	if got := issueNumbers(gotIssues); !reflect.DeepEqual(got, []int{1}) {
@@ -1023,7 +1024,7 @@ func TestSearchQualifierRepoScopedLabelFilters(t *testing.T) {
 	}
 
 	var gotPRs []db.PullRequest
-	if err := applyPRQualifiers(gdb.Model(&db.PullRequest{}), gdb, sq).Find(&gotPRs).Error; err != nil {
+	if err := searchsvc.ApplyPRQualifiers(gdb.Model(&db.PullRequest{}), gdb, sq).Find(&gotPRs).Error; err != nil {
 		t.Fatalf("pr query failed: %v", err)
 	}
 	if got := prNumbers(gotPRs); !reflect.DeepEqual(got, []int{1}) {
@@ -1035,7 +1036,7 @@ func TestSearchQualifierRepoScopedLabelFilters(t *testing.T) {
 // Vector Search Path Unit Tests (Issue #234)
 // -----------------------------------------------------------------------------
 
-// TestDeduplicateIssues tests the deduplicateIssues helper function.
+// TestDeduplicateIssues tests the search package issue deduplication helper.
 func TestDeduplicateIssues(t *testing.T) {
 	t.Run("overlapping IDs dedup", func(t *testing.T) {
 		primary := []db.Issue{
@@ -1046,7 +1047,7 @@ func TestDeduplicateIssues(t *testing.T) {
 			{ID: 2, Number: 2, Title: "Issue 2 Duplicate"},
 			{ID: 3, Number: 3, Title: "Issue 3"},
 		}
-		result := deduplicateIssues(primary, secondary)
+		result := searchsvc.DeduplicateIssues(primary, secondary, defaultListLimit)
 		if len(result) != 3 {
 			t.Errorf("Expected 3 results, got %d", len(result))
 		}
@@ -1068,7 +1069,7 @@ func TestDeduplicateIssues(t *testing.T) {
 			{ID: 2, Number: 2, Title: "Issue 2"},
 			{ID: 3, Number: 3, Title: "Issue 3"},
 		}
-		result := deduplicateIssues(primary, secondary)
+		result := searchsvc.DeduplicateIssues(primary, secondary, defaultListLimit)
 		if len(result) != 3 {
 			t.Errorf("Expected 3 results, got %d", len(result))
 		}
@@ -1088,7 +1089,7 @@ func TestDeduplicateIssues(t *testing.T) {
 			{ID: 1003, Number: 1003, Title: "Issue 1003"},
 			{ID: 1004, Number: 1004, Title: "Issue 1004"},
 		}
-		result := deduplicateIssues(primary, secondary)
+		result := searchsvc.DeduplicateIssues(primary, secondary, defaultListLimit)
 		if len(result) != defaultListLimit {
 			t.Errorf("Expected %d results (capped at limit), got %d", defaultListLimit, len(result))
 		}
@@ -1100,7 +1101,7 @@ func TestDeduplicateIssues(t *testing.T) {
 			{ID: 1, Number: 1, Title: "Issue 1"},
 			{ID: 2, Number: 2, Title: "Issue 2"},
 		}
-		result := deduplicateIssues(primary, secondary)
+		result := searchsvc.DeduplicateIssues(primary, secondary, defaultListLimit)
 		if len(result) != 2 {
 			t.Errorf("Expected 2 results, got %d", len(result))
 		}
@@ -1111,14 +1112,14 @@ func TestDeduplicateIssues(t *testing.T) {
 			{ID: 1, Number: 1, Title: "Issue 1"},
 		}
 		secondary := []db.Issue{}
-		result := deduplicateIssues(primary, secondary)
+		result := searchsvc.DeduplicateIssues(primary, secondary, defaultListLimit)
 		if len(result) != 1 {
 			t.Errorf("Expected 1 result, got %d", len(result))
 		}
 	})
 }
 
-// TestDeduplicatePRs tests the deduplicatePRs helper function.
+// TestDeduplicatePRs tests the search package pull request deduplication helper.
 func TestDeduplicatePRs(t *testing.T) {
 	t.Run("overlapping IDs dedup", func(t *testing.T) {
 		primary := []db.PullRequest{
@@ -1129,7 +1130,7 @@ func TestDeduplicatePRs(t *testing.T) {
 			{ID: 2, Number: 2, Title: "PR 2 Duplicate"},
 			{ID: 3, Number: 3, Title: "PR 3"},
 		}
-		result := deduplicatePRs(primary, secondary)
+		result := searchsvc.DeduplicatePRs(primary, secondary, defaultListLimit)
 		if len(result) != 3 {
 			t.Errorf("Expected 3 results, got %d", len(result))
 		}
@@ -1150,7 +1151,7 @@ func TestDeduplicatePRs(t *testing.T) {
 			{ID: 2, Number: 2, Title: "PR 2"},
 			{ID: 3, Number: 3, Title: "PR 3"},
 		}
-		result := deduplicatePRs(primary, secondary)
+		result := searchsvc.DeduplicatePRs(primary, secondary, defaultListLimit)
 		if len(result) != 3 {
 			t.Errorf("Expected 3 results, got %d", len(result))
 		}
@@ -1169,7 +1170,7 @@ func TestDeduplicatePRs(t *testing.T) {
 			{ID: 1003, Number: 1003, Title: "PR 1003"},
 			{ID: 1004, Number: 1004, Title: "PR 1004"},
 		}
-		result := deduplicatePRs(primary, secondary)
+		result := searchsvc.DeduplicatePRs(primary, secondary, defaultListLimit)
 		if len(result) != defaultListLimit {
 			t.Errorf("Expected %d results (capped at limit), got %d", defaultListLimit, len(result))
 		}
@@ -1181,7 +1182,7 @@ func TestDeduplicatePRs(t *testing.T) {
 			{ID: 1, Number: 1, Title: "PR 1"},
 			{ID: 2, Number: 2, Title: "PR 2"},
 		}
-		result := deduplicatePRs(primary, secondary)
+		result := searchsvc.DeduplicatePRs(primary, secondary, defaultListLimit)
 		if len(result) != 2 {
 			t.Errorf("Expected 2 results, got %d", len(result))
 		}
@@ -1192,7 +1193,7 @@ func TestDeduplicatePRs(t *testing.T) {
 			{ID: 1, Number: 1, Title: "PR 1"},
 		}
 		secondary := []db.PullRequest{}
-		result := deduplicatePRs(primary, secondary)
+		result := searchsvc.DeduplicatePRs(primary, secondary, defaultListLimit)
 		if len(result) != 1 {
 			t.Errorf("Expected 1 result, got %d", len(result))
 		}
@@ -1362,12 +1363,12 @@ func TestBuildIssueTextWhere(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotClause, gotArgs := buildIssueTextWhere(tt.inValues, tt.text)
+			gotClause, gotArgs := searchsvc.BuildIssueTextWhere(tt.inValues, tt.text)
 			if gotClause != tt.wantClause {
-				t.Errorf("buildIssueTextWhere(%v, %q)\ngot  clause = %q\nwant clause = %q", tt.inValues, tt.text, gotClause, tt.wantClause)
+				t.Errorf("searchsvc.BuildIssueTextWhere(%v, %q)\ngot  clause = %q\nwant clause = %q", tt.inValues, tt.text, gotClause, tt.wantClause)
 			}
 			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
-				t.Errorf("buildIssueTextWhere(%v, %q)\ngot  args = %v\nwant args = %v", tt.inValues, tt.text, gotArgs, tt.wantArgs)
+				t.Errorf("searchsvc.BuildIssueTextWhere(%v, %q)\ngot  args = %v\nwant args = %v", tt.inValues, tt.text, gotArgs, tt.wantArgs)
 			}
 		})
 	}
@@ -1441,12 +1442,12 @@ func TestBuildPRTextWhere(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotClause, gotArgs := buildPRTextWhere(tt.inValues, tt.text)
+			gotClause, gotArgs := searchsvc.BuildPRTextWhere(tt.inValues, tt.text)
 			if gotClause != tt.wantClause {
-				t.Errorf("buildPRTextWhere(%v, %q)\ngot  clause = %q\nwant clause = %q", tt.inValues, tt.text, gotClause, tt.wantClause)
+				t.Errorf("searchsvc.BuildPRTextWhere(%v, %q)\ngot  clause = %q\nwant clause = %q", tt.inValues, tt.text, gotClause, tt.wantClause)
 			}
 			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
-				t.Errorf("buildPRTextWhere(%v, %q)\ngot  args = %v\nwant args = %v", tt.inValues, tt.text, gotArgs, tt.wantArgs)
+				t.Errorf("searchsvc.BuildPRTextWhere(%v, %q)\ngot  args = %v\nwant args = %v", tt.inValues, tt.text, gotArgs, tt.wantArgs)
 			}
 		})
 	}
@@ -1517,12 +1518,12 @@ func TestBuildIssueInFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotClause, gotArgs := buildIssueInFilter(tt.inValues)
+			gotClause, gotArgs := searchsvc.BuildIssueInFilter(tt.inValues)
 			if gotClause != tt.wantClause {
-				t.Errorf("buildIssueInFilter(%v)\ngot  clause = %q\nwant clause = %q", tt.inValues, gotClause, tt.wantClause)
+				t.Errorf("searchsvc.BuildIssueInFilter(%v)\ngot  clause = %q\nwant clause = %q", tt.inValues, gotClause, tt.wantClause)
 			}
 			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
-				t.Errorf("buildIssueInFilter(%v)\ngot  args = %v\nwant args = %v", tt.inValues, gotArgs, tt.wantArgs)
+				t.Errorf("searchsvc.BuildIssueInFilter(%v)\ngot  args = %v\nwant args = %v", tt.inValues, gotArgs, tt.wantArgs)
 			}
 		})
 	}
@@ -1587,12 +1588,12 @@ func TestBuildPRInFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotClause, gotArgs := buildPRInFilter(tt.inValues)
+			gotClause, gotArgs := searchsvc.BuildPRInFilter(tt.inValues)
 			if gotClause != tt.wantClause {
-				t.Errorf("buildPRInFilter(%v)\ngot  clause = %q\nwant clause = %q", tt.inValues, gotClause, tt.wantClause)
+				t.Errorf("searchsvc.BuildPRInFilter(%v)\ngot  clause = %q\nwant clause = %q", tt.inValues, gotClause, tt.wantClause)
 			}
 			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
-				t.Errorf("buildPRInFilter(%v)\ngot  args = %v\nwant args = %v", tt.inValues, gotArgs, tt.wantArgs)
+				t.Errorf("searchsvc.BuildPRInFilter(%v)\ngot  args = %v\nwant args = %v", tt.inValues, gotArgs, tt.wantArgs)
 			}
 		})
 	}

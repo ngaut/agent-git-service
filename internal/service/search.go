@@ -7,8 +7,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 	searchsvc "github.com/ngaut/agent-git-service/internal/service/search"
-
-	"gorm.io/gorm"
 )
 
 // Type aliases preserve the public API while delegating to the search package.
@@ -124,49 +122,9 @@ func (s *Service) ListIssuesFiltered(ctx context.Context, filter IssueListFilter
 	}, filter)
 }
 
-// applyIssueQualifiers applies all structured search qualifiers to an issue query.
-func applyIssueQualifiers(q *gorm.DB, baseDB *gorm.DB, sq SearchQualifiers) *gorm.DB {
-	return searchsvc.ApplyIssueQualifiers(q, baseDB, sq)
-}
-
-// applyPRQualifiers applies all structured search qualifiers to a PR query.
-func applyPRQualifiers(q *gorm.DB, baseDB *gorm.DB, sq SearchQualifiers) *gorm.DB {
-	return searchsvc.ApplyPRQualifiers(q, baseDB, sq)
-}
-
-// buildIssueTextWhere builds the WHERE clause for issue text search based on the in: qualifier.
-func buildIssueTextWhere(inValues []string, text string) (string, []any) {
-	return searchsvc.BuildIssueTextWhere(inValues, text)
-}
-
-// buildPRTextWhere builds the WHERE clause for PR text search based on the in: qualifier.
-func buildPRTextWhere(inValues []string, text string) (string, []any) {
-	return searchsvc.BuildPRTextWhere(inValues, text)
-}
-
-// buildIssueInFilter builds a WHERE clause to filter results based on in: qualifier.
-func buildIssueInFilter(inValues []string) (string, []any) {
-	return searchsvc.BuildIssueInFilter(inValues)
-}
-
-// buildPRInFilter builds a WHERE clause to filter PR results based on in: qualifier.
-func buildPRInFilter(inValues []string) (string, []any) {
-	return searchsvc.BuildPRInFilter(inValues)
-}
-
 // sortOrder returns the SQL ORDER BY clause for the given sort qualifier.
 func sortOrder(sort, prefix string) string {
 	return searchsvc.SortOrder(sort, prefix)
-}
-
-// deduplicateIssues merges primary and secondary slices, skipping any duplicates by ID.
-func deduplicateIssues(primary, secondary []db.Issue) []db.Issue {
-	return searchsvc.DeduplicateIssues(primary, secondary, defaultListLimit)
-}
-
-// deduplicatePRs merges primary and secondary slices, skipping any duplicates by ID.
-func deduplicatePRs(primary, secondary []db.PullRequest) []db.PullRequest {
-	return searchsvc.DeduplicatePRs(primary, secondary, defaultListLimit)
 }
 
 // embedQuery attempts to embed a search query string. Returns the formatted
