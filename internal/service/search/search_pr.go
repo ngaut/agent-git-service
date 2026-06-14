@@ -24,6 +24,19 @@ type PRSearchDeps struct {
 
 // SearchPRs performs a hybrid search on the pull_requests table.
 func SearchPRs(ctx context.Context, deps PRSearchDeps, query string) ([]db.PullRequest, error) {
+	results, err := SearchPRsDetailed(ctx, deps, query, SearchOptions{})
+	if err != nil {
+		return nil, err
+	}
+	prs := make([]db.PullRequest, 0, len(results))
+	for _, result := range results {
+		prs = append(prs, result.PullRequest)
+	}
+	return prs, nil
+}
+
+// SearchPRsDetailed performs pull request search and returns ranking observability.
+func SearchPRsDetailed(ctx context.Context, deps PRSearchDeps, query string, opts SearchOptions) ([]PRSearchResult, error) {
 	if query == "" {
 		return nil, nil
 	}
@@ -44,7 +57,10 @@ func SearchPRs(ctx context.Context, deps PRSearchDeps, query string) ([]db.PullR
 		}
 		var prs []db.PullRequest
 		err := q.Order(SortOrder(sortQualifier, "pull_requests")).Limit(deps.DefaultListLimit).Find(&prs).Error
-		return prs, err
+		if err != nil {
+			return nil, err
+		}
+		return prQualifierOnlyResults(prs, sq, opts), nil
 	}
 
 	freeText := strings.Join(sq.FreeText, " ")
@@ -65,20 +81,41 @@ func SearchPRs(ctx context.Context, deps PRSearchDeps, query string) ([]db.PullR
 		vec = deps.EmbedQuery(ctx, freeText)
 	}
 	if vec == "" {
-		return likeResults, nil
+		ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(likeResults), nil, explicitSort, deps.DefaultListLimit)
+		return buildPRDetailedResults(baseDB, likeResults, ranks, sq, opts)
 	}
 
 	vecResults, err := searchPRSemantic(baseQ, baseDB, sq, vec, deps.DefaultListLimit)
 	if err != nil {
 		slog.WarnContext(ctx, "pull request search vector query failed; returning lexical results only", "error", err)
-		return likeResults, nil
+		ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(likeResults), nil, explicitSort, deps.DefaultListLimit)
+		return buildPRDetailedResults(baseDB, likeResults, ranks, sq, opts)
 	}
 
-	if explicitSort {
-		return DeduplicatePRs(likeResults, vecResults, deps.DefaultListLimit), nil
-	}
+	ranks := fuseDetailedSearchRanks(prsToRankedSearchIDs(likeResults), prsToRankedSearchIDs(vecResults), explicitSort, deps.DefaultListLimit)
+	allResults := make([]db.PullRequest, 0, len(likeResults)+len(vecResults))
+	allResults = append(allResults, likeResults...)
+	allResults = append(allResults, vecResults...)
+	return buildPRDetailedResults(baseDB, allResults, ranks, sq, opts)
+}
 
-	return fusePRSearchResults(likeResults, vecResults, deps.DefaultListLimit), nil
+func buildPRDetailedResults(
+	baseDB *gorm.DB,
+	prs []db.PullRequest,
+	ranks []detailedSearchRank,
+	sq SearchQualifiers,
+	opts SearchOptions,
+) ([]PRSearchResult, error) {
+	_, _, _, searchComments := resolvePRLexicalTargets(sq.In)
+	commentBodies := map[searchCommentKey][]string(nil)
+	var err error
+	if searchComments {
+		commentBodies, err = loadCommentBodiesForPRs(baseDB, prs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return prResultsFromRanksWithComments(prs, ranks, sq, opts, commentBodies), nil
 }
 
 func searchPRLexical(ctx context.Context, baseQ *gorm.DB, baseDB *gorm.DB, sq SearchQualifiers, sortQualifier string, explicitSort bool, limit int) ([]db.PullRequest, error) {

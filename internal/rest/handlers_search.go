@@ -354,41 +354,46 @@ func (d *Deps) SearchIssues(w http.ResponseWriter, r *http.Request) {
 	// Pass the full query to the service layer.
 	// We parse the query first to determine whether we should route to issues or PRs.
 	sq := service.ParseSearchQuery(q)
+	requestDebug := searchDebugRequested(r)
+	requestTextMatches := searchTextMatchesRequested(r)
+	searchOpts := service.SearchOptions{IncludeTextMatches: requestTextMatches}
 
 	var items []any
 	if sq.IsPR {
-		prs, err := d.Svc.SearchPRs(r.Context(), q)
+		results, err := d.Svc.SearchPRsDetailed(r.Context(), q, searchOpts)
 		if err != nil {
 			logErr(r.Context(), "search pull requests failed", err, "query", q)
 		}
-		for _, pr := range prs {
+		for _, result := range results {
+			pr := result.PullRequest
 			assoc := getAssoc(pr.Repository)
 			item := transform.IssueFromPR(pr, resolver, assoc)
-			item["score"] = 1.0
+			addPRSearchObservability(item, result, requestDebug, requestTextMatches)
 			items = append(items, item)
 		}
 	} else {
-		issues, err := d.Svc.SearchIssues(r.Context(), q)
+		results, err := d.Svc.SearchIssuesDetailed(r.Context(), q, searchOpts)
 		if err != nil {
 			logErr(r.Context(), "search issues failed", err, "query", q)
 		}
 		// Batch-fetch reaction counts for all issues in one query
 		// instead of N individual queries.
-		issueIDs := make([]uint, len(issues))
-		for i, iss := range issues {
-			issueIDs[i] = iss.ID
+		issueIDs := make([]uint, len(results))
+		for i, result := range results {
+			issueIDs[i] = result.Issue.ID
 		}
 		allReactions, err := d.Svc.CountReactionsBatch(r.Context(), issueIDs)
 		if err != nil {
 			logErr(r.Context(), "search issues batch reaction count failed", err)
 			allReactions = nil
 		}
-		for _, iss := range issues {
+		for _, result := range results {
+			iss := result.Issue
 			assoc := getAssoc(iss.Repository)
 			item := transform.Issue(iss, resolver, assoc, transform.IssueCounts{
 				Reactions: allReactions[iss.ID],
 			})
-			item["score"] = 1.0
+			addIssueSearchObservability(item, result, requestDebug, requestTextMatches)
 			items = append(items, item)
 		}
 	}
@@ -409,6 +414,109 @@ func (d *Deps) SearchIssues(w http.ResponseWriter, r *http.Request) {
 		"incomplete_results": false,
 		"items":              paged,
 	})
+}
+
+func searchDebugRequested(r *http.Request) bool {
+	if truthyQueryParam(r, "debug") || truthyQueryParam(r, "search_debug") {
+		return true
+	}
+	return truthyHeader(r, "X-Agent-Search-Debug") || truthyHeader(r, "X-Search-Debug")
+}
+
+func searchTextMatchesRequested(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text-match") || truthyQueryParam(r, "text_matches")
+}
+
+func truthyQueryParam(r *http.Request, name string) bool {
+	return isTruthy(r.URL.Query().Get(name))
+}
+
+func truthyHeader(r *http.Request, name string) bool {
+	return isTruthy(r.Header.Get(name))
+}
+
+func isTruthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func addIssueSearchObservability(item map[string]any, result service.IssueSearchResult, includeDebug, includeTextMatches bool) {
+	item["score"] = result.Score
+	if includeDebug {
+		item["debug"] = searchDebugPayload(
+			result.Score,
+			result.LexicalRank,
+			result.SemanticRank,
+			result.LexicalScore,
+			result.SemanticDistance,
+			result.MatchedFields,
+			result.SearchPath,
+		)
+	}
+	if includeTextMatches && len(result.TextMatches) > 0 {
+		item["text_matches"] = transformSearchTextMatches(result.TextMatches)
+	}
+}
+
+func addPRSearchObservability(item map[string]any, result service.PRSearchResult, includeDebug, includeTextMatches bool) {
+	item["score"] = result.Score
+	if includeDebug {
+		item["debug"] = searchDebugPayload(
+			result.Score,
+			result.LexicalRank,
+			result.SemanticRank,
+			result.LexicalScore,
+			result.SemanticDistance,
+			result.MatchedFields,
+			result.SearchPath,
+		)
+	}
+	if includeTextMatches && len(result.TextMatches) > 0 {
+		item["text_matches"] = transformSearchTextMatches(result.TextMatches)
+	}
+}
+
+func searchDebugPayload(score float64, lexicalRank int, semanticRank int, lexicalScore float64, semanticDistance *float64, matchedFields []string, searchPath string) map[string]any {
+	payload := map[string]any{
+		"score":             score,
+		"lexical_rank":      lexicalRank,
+		"semantic_rank":     semanticRank,
+		"lexical_score":     lexicalScore,
+		"semantic_distance": nil,
+		"matched_fields":    matchedFields,
+		"search_path":       searchPath,
+	}
+	if semanticDistance != nil {
+		payload["semantic_distance"] = *semanticDistance
+	}
+	if matchedFields == nil {
+		payload["matched_fields"] = []string{}
+	}
+	return payload
+}
+
+func transformSearchTextMatches(matches []service.TextMatch) []any {
+	out := make([]any, 0, len(matches))
+	for _, match := range matches {
+		spans := make([]any, 0, len(match.Matches))
+		for _, span := range match.Matches {
+			spans = append(spans, map[string]any{
+				"indices": span.Indices,
+				"text":    span.Text,
+			})
+		}
+		out = append(out, map[string]any{
+			"fragment":    match.Fragment,
+			"matches":     spans,
+			"object_type": match.ObjectType,
+			"property":    match.Property,
+		})
+	}
+	return out
 }
 
 // SearchLabels handles GET /api/v3/search/labels
