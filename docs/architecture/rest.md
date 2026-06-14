@@ -185,7 +185,7 @@ Wiki path-slug hierarchy rules:
 - read/list/backlink operations also surface legacy on-disk wiki filenames that still contain uppercase letters, underscores, or dots
 - catalog-backed wiki read responses set `X-Wiki-Migration-In-Progress: true` while a stale repository is being replayed into the catalog in the background
 - live tree, search, and backlink responses must not emit page URLs that the current page endpoint would 404; Git, V2, and search-index projections are fallback/ref surfaces for this purpose, not live-link authority while catalog current rows exist
-- wiki search indexing is asynchronous after successful put/move/delete/label writes, so candidate selection can lag briefly; before paginating the response, stale missing pages are filtered out and surviving results are refreshed through the current live page read path so titles/snippets/labels reflect the latest page view, and when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
+- wiki search indexing is asynchronous after successful put/move/delete/label writes; the live search path uses current `wiki_search_documents` rows joined to `wiki_pages` (`deleted_at IS NULL` and matching head blob SHA) as the primary recall source, then hydrates only surviving candidates with current page metadata and labels; catalog body scans are reserved for missing/stale small-index fallback or missing search-index tables, so large repositories do not scan every wiki page body on ordinary misses; when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
 
 ### Wiki Page History
 
