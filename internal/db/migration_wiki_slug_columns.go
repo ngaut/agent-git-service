@@ -62,11 +62,39 @@ func MigrateWikiSlugColumns(database *gorm.DB) error {
 			return err
 		}
 	}
+	if err := rebuildWikiPagePrefixIndex(database); err != nil {
+		return err
+	}
 	for _, col := range obsoleteWikiSlugColumns {
 		if err := dropObsoleteWikiColumn(database, col); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func rebuildWikiPagePrefixIndex(database *gorm.DB) error {
+	migrator := database.Migrator()
+	const table = "wiki_pages"
+	const indexName = "idx_wiki_pages_repo_prefix"
+	if !migrator.HasTable(table) ||
+		!migrator.HasColumn(table, "slug_ci_v1") ||
+		!migrator.HasColumn(table, "slug") ||
+		!migrator.HasIndex(table, indexName) {
+		return nil
+	}
+
+	idx := wikiObsoleteIndex{table: table, name: indexName}
+	if err := dropObsoleteWikiIndex(database, idx); err != nil {
+		return err
+	}
+	if err := migrator.CreateIndex(&WikiPage{}, indexName); err != nil {
+		if migrator.HasIndex(table, indexName) || isAlreadyExistsErr(err) {
+			return nil
+		}
+		return fmt.Errorf("rebuild wiki_pages.%s: %w", indexName, err)
+	}
+	slog.Info("db: MigrateWikiSlugColumns: rebuilt prefix index", "table", table, "index", indexName)
 	return nil
 }
 

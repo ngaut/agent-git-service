@@ -3,6 +3,8 @@ package db
 import (
 	"path/filepath"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 func TestMigrateWikiSlugColumns_CleansCatalogSlugCI(t *testing.T) {
@@ -13,6 +15,9 @@ func TestMigrateWikiSlugColumns_CleansCatalogSlugCI(t *testing.T) {
 	if err := gdb.Exec("CREATE UNIQUE INDEX idx_wiki_pages_repo_slug_ci ON wiki_pages (repository_id, slug_ci_v1)").Error; err != nil {
 		t.Fatalf("create slug_ci index: %v", err)
 	}
+	if err := gdb.Exec("CREATE INDEX idx_wiki_pages_repo_prefix ON wiki_pages (repository_id, slug_ci_v1)").Error; err != nil {
+		t.Fatalf("create prefix index: %v", err)
+	}
 
 	if err := MigrateWikiSlugColumns(gdb); err != nil {
 		t.Fatalf("MigrateWikiSlugColumns: %v", err)
@@ -22,6 +27,12 @@ func TestMigrateWikiSlugColumns_CleansCatalogSlugCI(t *testing.T) {
 	}
 	if gdb.Migrator().HasColumn("wiki_pages", "slug_ci_v1") {
 		t.Fatal("expected wiki_pages.slug_ci_v1 to be dropped")
+	}
+	if !gdb.Migrator().HasIndex("wiki_pages", "idx_wiki_pages_repo_prefix") {
+		t.Fatal("expected idx_wiki_pages_repo_prefix to be rebuilt")
+	}
+	if cols := sqliteIndexColumns(t, gdb, "idx_wiki_pages_repo_prefix"); len(cols) != 2 || cols[0] != "repository_id" || cols[1] != "slug" {
+		t.Fatalf("idx_wiki_pages_repo_prefix columns = %v, want [repository_id slug]", cols)
 	}
 }
 
@@ -50,4 +61,19 @@ func TestMigrateWikiSlugColumnsBeforeAutoMigrate_RenamesLinkDstSlug(t *testing.T
 	if dst != "home" {
 		t.Fatalf("dst_slug = %q, want home", dst)
 	}
+}
+
+func sqliteIndexColumns(t *testing.T, gdb *gorm.DB, indexName string) []string {
+	t.Helper()
+	var rows []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := gdb.Raw("PRAGMA index_info(" + indexName + ")").Scan(&rows).Error; err != nil {
+		t.Fatalf("PRAGMA index_info(%s): %v", indexName, err)
+	}
+	cols := make([]string, 0, len(rows))
+	for _, row := range rows {
+		cols = append(cols, row.Name)
+	}
+	return cols
 }
