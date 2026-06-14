@@ -45,6 +45,7 @@ const (
 	wikiLexicalCandidateIDMax           = 5000
 	wikiLexicalHydrationMin             = 200
 	wikiLexicalHydrationMax             = 1000
+	wikiSearchTimingLogThreshold        = time.Second
 	wikiReindexWorkers                  = 4
 )
 
@@ -101,6 +102,22 @@ func wikiSearchRankWindow(limit, offset int) int {
 	return n
 }
 
+type wikiSearchTiming struct {
+	repoMS          int64
+	liveHeadMS      int64
+	catalogMS       int64
+	lexicalMS       int64
+	refreshTitlesMS int64
+	semanticWaitMS  int64
+	hydrateMS       int64
+
+	lexicalResults  int
+	semanticResults int
+	fusedResults    int
+	hydratedResults int
+	finalResults    int
+}
+
 func (s *Service) SearchWikiPages(ctx context.Context, repoFullName, query string, limit, offset int) (WikiSearchResponse, error) {
 	return s.SearchWikiPagesWithOptions(ctx, repoFullName, query, WikiSearchOptions{Limit: limit, Offset: offset})
 }
@@ -117,10 +134,13 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 		}, nil
 	}
 
+	timing := wikiSearchTiming{}
+	stageStart := time.Now()
 	repo, err := s.GetRepo(ctx, repoFullName)
 	if err != nil {
 		return WikiSearchResponse{}, err
 	}
+	timing.repoMS = time.Since(stageStart).Milliseconds()
 	limit := clampWikiSearchLimit(opts.Limit)
 	offset := normalizeWikiSearchOffset(opts.Offset)
 	rankWindow := wikiSearchRankWindow(limit, offset)
@@ -129,10 +149,13 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 	defer cancelSearch()
 	embeddingResultC := s.startWikiSearchEmbedding(searchCtx, query)
 	wikiRepoLive := false
+	stageStart = time.Now()
 	if _, err := s.Git.HeadSHA(searchCtx, wikiRepoFullName(repoFullName), wikiDefaultBranch); err == nil {
 		wikiRepoLive = true
 	}
+	timing.liveHeadMS = time.Since(stageStart).Milliseconds()
 	catalogSearchReady := false
+	stageStart = time.Now()
 	if s.WikiCatalog != nil {
 		if readyErr := s.ensureWikiCatalogCurrent(searchCtx, repoFullName); readyErr != nil {
 			slog.WarnContext(ctx, "wiki search catalog freshness check failed", "repo", repo.FullName, "error", readyErr)
@@ -143,33 +166,44 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 		}
 		catalogSearchReady = hasCatalogState
 	}
+	timing.catalogMS = time.Since(stageStart).Milliseconds()
 
 	method := "substring"
 	semanticResultC := s.startWikiSearchSemanticCandidates(searchCtx, repo.ID, query, embeddingResultC, labelFilters, rankWindow)
+	stageStart = time.Now()
 	lexical, err := s.searchWikiLexicalCandidates(searchCtx, repo, repoFullName, query, labelFilters, rankWindow, catalogSearchReady, wikiRepoLive)
 	if err != nil {
 		cancelSearch()
 		return WikiSearchResponse{}, err
 	}
+	timing.lexicalMS = time.Since(stageStart).Milliseconds()
+	timing.lexicalResults = len(lexical)
+	stageStart = time.Now()
 	if err := s.refreshWikiSearchTitlesForResults(searchCtx, repo.ID, lexical); err != nil {
 		cancelSearch()
 		return WikiSearchResponse{}, err
 	}
+	timing.refreshTitlesMS = time.Since(stageStart).Milliseconds()
 	results := lexical
 
 	if semanticResultC != nil {
+		stageStart = time.Now()
 		semanticResult := <-semanticResultC
+		timing.semanticWaitMS = time.Since(stageStart).Milliseconds()
 		if semanticResult.err != nil {
 			slog.WarnContext(ctx, "wiki search semantic path failed; falling back to substring", "repo", repo.FullName, "error", semanticResult.err)
 		} else if semanticResult.ok {
 			method = "vector"
+			timing.semanticResults = len(semanticResult.results)
 			results = fuseWikiSearchResults(lexical, semanticResult.results)
 		}
 	}
+	timing.fusedResults = len(results)
 
 	if wikiRepoLive {
 		results = truncateWikiSearchResultList(results, rankWindow)
 	}
+	stageStart = time.Now()
 	if catalogSearchReady {
 		var ok bool
 		results, ok, err = s.hydrateWikiSearchResultsFromCatalog(searchCtx, repo.ID, results, query, method == "substring")
@@ -188,14 +222,48 @@ func (s *Service) SearchWikiPagesWithOptions(ctx context.Context, repoFullName, 
 			return WikiSearchResponse{}, err
 		}
 	}
+	timing.hydrateMS = time.Since(stageStart).Milliseconds()
+	timing.hydratedResults = len(results)
 	results = paginateWikiSearchResultList(results, limit, offset)
+	timing.finalResults = len(results)
+	elapsed := time.Since(start)
+	logWikiSearchTiming(ctx, repo.FullName, method, query, limit, offset, rankWindow, wikiRepoLive, catalogSearchReady, elapsed, timing)
 
 	return WikiSearchResponse{
 		Results:   results,
 		Query:     query,
 		Method:    method,
-		ElapsedMS: time.Since(start).Milliseconds(),
+		ElapsedMS: elapsed.Milliseconds(),
 	}, nil
+}
+
+func logWikiSearchTiming(ctx context.Context, repoFullName, method, query string, limit, offset, rankWindow int, wikiRepoLive, catalogSearchReady bool, elapsed time.Duration, timing wikiSearchTiming) {
+	if elapsed < wikiSearchTimingLogThreshold {
+		return
+	}
+	slog.InfoContext(ctx, "wiki search timing",
+		"repo", repoFullName,
+		"search_method", method,
+		"query_tokens", len(wikiSearchTokens(query)),
+		"limit", limit,
+		"offset", offset,
+		"rank_window", rankWindow,
+		"wiki_repo_live", wikiRepoLive,
+		"catalog_search_ready", catalogSearchReady,
+		"total_ms", elapsed.Milliseconds(),
+		"repo_ms", timing.repoMS,
+		"live_head_ms", timing.liveHeadMS,
+		"catalog_ms", timing.catalogMS,
+		"lexical_ms", timing.lexicalMS,
+		"refresh_titles_ms", timing.refreshTitlesMS,
+		"semantic_wait_ms", timing.semanticWaitMS,
+		"hydrate_ms", timing.hydrateMS,
+		"lexical_results", timing.lexicalResults,
+		"semantic_results", timing.semanticResults,
+		"fused_results", timing.fusedResults,
+		"hydrated_results", timing.hydratedResults,
+		"final_results", timing.finalResults,
+	)
 }
 
 func (s *Service) searchWikiLexicalCandidates(ctx context.Context, repo db.Repository, repoFullName, query string, filters WikiLabelFilters, rankWindow int, catalogSearchReady, wikiRepoLive bool) ([]WikiSearchResult, error) {
@@ -1393,6 +1461,17 @@ func wikiSemanticANNCandidateLimit(limit, offset int) int {
 	return candidateLimit
 }
 
+func wikiSemanticRerankLimit(limit, offset int) int {
+	n := limit + offset
+	if n <= 0 {
+		return wikiSearchDefaultLimit
+	}
+	if n > wikiSemanticANNCandidateMax {
+		return wikiSemanticANNCandidateMax
+	}
+	return n
+}
+
 func buildWikiSemanticANNCandidateQuery(database *gorm.DB, vecLiteral string, limit, offset int) *gorm.DB {
 	return database.Table("wiki_search_documents").
 		Clauses(clause.OrderBy{
@@ -1429,7 +1508,7 @@ func (s *Service) searchWikiSemanticANN(ctx context.Context, repoID uint, query 
 	}
 
 	q := filteredQ.Where("wiki_search_documents.id IN ?", candidateIDs)
-	rows, err := s.scanWikiSemanticDBRows(q, query, vecLiteral, exactWindow, 0, 0)
+	rows, err := s.scanWikiSemanticDBRows(q, query, vecLiteral, exactWindow, wikiSemanticRerankLimit(limit, offset), 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1468,8 +1547,8 @@ func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query s
 	return s.buildWikiSemanticResultsFromDBRows(ctx, repoID, rows, query, limit, offset, exactWindow, paginateBeforeHydration, true)
 }
 
-func (s *Service) scanWikiSemanticDBRows(q *gorm.DB, query, vecLiteral string, exactWindow bool, limit, offset int) ([]wikiSemanticDBRow, error) {
-	selectSQL := "wiki_search_documents.*, VEC_COSINE_DISTANCE(wiki_search_documents.embedding, ?) AS semantic_distance"
+func buildWikiSemanticDBRowsQuery(q *gorm.DB, query, vecLiteral string, exactWindow bool, limit, offset int) *gorm.DB {
+	selectSQL := strings.Join(wikiSearchDocumentHydrationColumns(), ",") + ", VEC_COSINE_DISTANCE(wiki_search_documents.embedding, ?) AS semantic_distance"
 	orderSQL := "semantic_distance ASC, wiki_search_documents.updated_at DESC, wiki_search_documents.slug ASC"
 	selectArgs := []any{vecLiteral}
 	if !exactWindow {
@@ -1487,6 +1566,11 @@ func (s *Service) scanWikiSemanticDBRows(q *gorm.DB, query, vecLiteral string, e
 	if limit > 0 {
 		queryDB = queryDB.Limit(limit)
 	}
+	return queryDB
+}
+
+func (s *Service) scanWikiSemanticDBRows(q *gorm.DB, query, vecLiteral string, exactWindow bool, limit, offset int) ([]wikiSemanticDBRow, error) {
+	queryDB := buildWikiSemanticDBRowsQuery(q, query, vecLiteral, exactWindow, limit, offset)
 	var rows []wikiSemanticDBRow
 	if err := queryDB.Scan(&rows).Error; err != nil {
 		return nil, err

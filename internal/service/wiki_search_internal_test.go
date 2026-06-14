@@ -201,6 +201,28 @@ func TestWikiSemanticANNCandidateLimit(t *testing.T) {
 	}
 }
 
+func TestWikiSemanticRerankLimit(t *testing.T) {
+	tests := []struct {
+		name   string
+		limit  int
+		offset int
+		want   int
+	}{
+		{name: "default", limit: 0, offset: 0, want: wikiSearchDefaultLimit},
+		{name: "rank window", limit: wikiSearchMinRankWindow, offset: 0, want: wikiSearchMinRankWindow},
+		{name: "pagination window", limit: 50, offset: 500, want: 550},
+		{name: "caps at ANN candidate max", limit: 50, offset: 5000, want: wikiSemanticANNCandidateMax},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := wikiSemanticRerankLimit(tt.limit, tt.offset); got != tt.want {
+				t.Fatalf("wikiSemanticRerankLimit(%d, %d) = %d, want %d", tt.limit, tt.offset, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildWikiSemanticANNCandidateQuery_UsesIndexFriendlyShape(t *testing.T) {
 	gdb := newWikiSearchDryRunMySQLDB(t)
 
@@ -226,6 +248,43 @@ func TestBuildWikiSemanticANNCandidateQuery_UsesIndexFriendlyShape(t *testing.T)
 	}
 	if !strings.Contains(sql, "LIMIT 256") {
 		t.Fatalf("expected ANN candidate limit floor, got %q", sql)
+	}
+}
+
+func TestBuildWikiSemanticDBRowsQuery_LimitsRowsAndOmitsEmbeddingColumn(t *testing.T) {
+	gdb := newWikiSearchDryRunMySQLDB(t)
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		var rows []wikiSemanticDBRow
+		q := tx.Model(&db.WikiSearchDocument{}).
+			Where("wiki_search_documents.repository_id = ?", 42).
+			Where("wiki_search_documents.embedding IS NOT NULL").
+			Where("wiki_search_documents.id IN ?", []uint{7, 8, 9})
+		return buildWikiSemanticDBRowsQuery(q, "wiki-perf-seed-3000", "[0.1,0.2,0.3]", false, 100, 0).Scan(&rows)
+	})
+
+	for _, want := range []string{
+		"SELECT wiki_search_documents.id,wiki_search_documents.repository_id,wiki_search_documents.slug,wiki_search_documents.title,wiki_search_documents.body,wiki_search_documents.revision_sha,wiki_search_documents.label_digest,wiki_search_documents.created_at,wiki_search_documents.updated_at, VEC_COSINE_DISTANCE(wiki_search_documents.embedding",
+		"FROM `wiki_search_documents`",
+		"wiki_search_documents.repository_id = 42",
+		"wiki_search_documents.embedding IS NOT NULL",
+		"wiki_search_documents.id IN (7,8,9)",
+		"ORDER BY (semantic_distance - (label_score * 0.05)) ASC, wiki_search_documents.updated_at DESC, wiki_search_documents.slug ASC",
+		"LIMIT 100",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected semantic row SQL to contain %q, got %q", want, sql)
+		}
+	}
+	if strings.Contains(sql, "wiki_search_documents.*") || strings.Contains(sql, "SELECT *") {
+		t.Fatalf("expected semantic row SQL to avoid SELECT *, got %q", sql)
+	}
+	selectList := sql
+	if idx := strings.Index(selectList, "VEC_COSINE_DISTANCE"); idx >= 0 {
+		selectList = selectList[:idx]
+	}
+	if strings.Contains(selectList, "wiki_search_documents.embedding") || strings.Contains(selectList, "`embedding`") {
+		t.Fatalf("expected semantic row SQL to avoid selecting embedding column, got %q", sql)
 	}
 }
 
