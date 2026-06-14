@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,15 +37,10 @@ import (
 // gitSHA is set at build time via -ldflags.
 var gitSHA = "unknown"
 
-const restAPIPrefix = "/api/v3"
-
 // Server exposes a programmatic server instance for embedders.
 type Server struct {
-	cfg       config.Config
-	deps      *bootstrapDeps
-	handler   http.Handler
-	listeners []net.Listener
-	started   bool
+	deps    *bootstrapDeps
+	handler http.Handler
 }
 
 // Authenticator authenticates a request using host-provided identity. ok=false
@@ -684,7 +678,6 @@ func New(cfg config.Config, opts ...Option) (*Server, error) {
 		return nil, result.Err
 	}
 	return &Server{
-		cfg:     normalized,
 		deps:    result.Deps,
 		handler: result.Deps.Mux,
 	}, nil
@@ -692,88 +685,6 @@ func New(cfg config.Config, opts ...Option) (*Server, error) {
 
 // Handler returns the fully wired application handler tree.
 func (s *Server) Handler() http.Handler { return s.handler }
-
-// RESTHandler returns a mountable handler for REST endpoints relative to "/".
-func (s *Server) RESTHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clone := r.Clone(r.Context())
-		path := clone.URL.Path
-		if path == "" {
-			path = "/"
-		}
-		clone.URL.Path = restAPIPrefix + path
-		if clone.URL.RawPath != "" {
-			clone.URL.RawPath = restAPIPrefix + clone.URL.RawPath
-		}
-		s.handler.ServeHTTP(w, clone)
-	})
-}
-
-// GraphQLHandler returns a mountable handler for the GraphQL surface.
-func (s *Server) GraphQLHandler() http.Handler {
-	return srvmiddleware.TokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, embeddedAuthConfig(s.deps.Options))(http.HandlerFunc(s.deps.GqlSrv.Handler))
-}
-
-// GitHTTPHandler returns the mountable Git Smart HTTP handler.
-func (s *Server) GitHTTPHandler() http.Handler {
-	r := chi.NewRouter()
-	authMw := srvmiddleware.OptionalTokenAuthWithEmbeddedIdentity(s.deps.SvcDeps, embeddedAuthConfig(s.deps.Options))
-	r.With(authMw).Get("/{owner}/{repo}.git/info/refs", s.deps.GitHandler.InfoRefs)
-	r.With(authMw).Post("/{owner}/{repo}.git/git-upload-pack", s.deps.GitHandler.UploadPack)
-	r.With(authMw).Post("/{owner}/{repo}.git/git-receive-pack", s.deps.GitHandler.ReceivePack)
-	return r
-}
-
-// OAuthHandler returns a mountable handler for the OAuth device-flow surface.
-func (s *Server) OAuthHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clone := r.Clone(r.Context())
-		if !strings.HasPrefix(clone.URL.Path, "/login/") {
-			clone.URL.Path = "/login" + clone.URL.Path
-			if clone.URL.RawPath != "" {
-				clone.URL.RawPath = "/login" + clone.URL.RawPath
-			}
-		}
-		s.handler.ServeHTTP(w, clone)
-	})
-}
-
-// Start binds listeners and serves traffic in background goroutines.
-func (s *Server) Start() error {
-	if s.started {
-		return nil
-	}
-	listeners := make([]net.Listener, 0, len(s.deps.Servers))
-	for _, srv := range s.deps.Servers {
-		ln, err := net.Listen("tcp", srv.Addr)
-		if err != nil {
-			for _, opened := range listeners {
-				_ = opened.Close()
-			}
-			return err
-		}
-		listeners = append(listeners, ln)
-	}
-	s.listeners = listeners
-	for i, srv := range s.deps.Servers {
-		lbl := s.deps.Labels[i]
-		ln := s.listeners[i]
-		go func(srv *http.Server, ln net.Listener, label string) {
-			fmt.Printf("gh-server listening on %s\n", label)
-			var err error
-			if srv.TLSConfig != nil {
-				err = srv.Serve(tls.NewListener(ln, srv.TLSConfig))
-			} else {
-				err = srv.Serve(ln)
-			}
-			if err != nil && err != http.ErrServerClosed {
-				slog.Error("listener exited unexpectedly", "listener", label, "error", err)
-			}
-		}(srv, ln, lbl)
-	}
-	s.started = true
-	return nil
-}
 
 // Shutdown gracefully stops listeners and background work.
 func (s *Server) Shutdown(ctx context.Context) error {

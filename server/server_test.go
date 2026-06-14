@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -410,7 +408,7 @@ func TestNew_HandlerUsesHostAwareMuxAndPerServerTransformState(t *testing.T) {
 	assertMeta(t, alpha, "http://alpha.local/api/v3/openapi.json")
 }
 
-func TestNew_RESTHandlerUsesDefaultPrefixInResponseURLs(t *testing.T) {
+func TestNew_HandlerUsesDefaultPrefixInResponseURLs(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
 		DBdsn:       createBootstrapDSN(t, "server_rest_prefix"),
@@ -435,9 +433,9 @@ func TestNew_RESTHandlerUsesDefaultPrefixInResponseURLs(t *testing.T) {
 		t.Fatalf("CreateRepo: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/repos/admin/prefix-check", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v3/repos/admin/prefix-check", nil)
 	rec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -455,7 +453,7 @@ func TestNew_RESTHandlerUsesDefaultPrefixInResponseURLs(t *testing.T) {
 	}
 }
 
-func TestNew_GraphQLHandlerRequiresRouteEquivalentAuth(t *testing.T) {
+func TestNew_HandlerRequiresGraphQLAuth(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
 		DBdsn:       createBootstrapDSN(t, "server_graphql_auth"),
@@ -473,10 +471,10 @@ func TestNew_GraphQLHandlerRequiresRouteEquivalentAuth(t *testing.T) {
 		t.Fatalf("marshal query: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(query))
+	req := httptest.NewRequest(http.MethodPost, "/api/graphql", bytes.NewReader(query))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	srv.GraphQLHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -489,34 +487,13 @@ func TestNew_GraphQLHandlerRequiresRouteEquivalentAuth(t *testing.T) {
 		t.Fatalf("seed token: %v", err)
 	}
 
-	authReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(query))
+	authReq := httptest.NewRequest(http.MethodPost, "/api/graphql", bytes.NewReader(query))
 	authReq.Header.Set("Content-Type", "application/json")
 	authReq.Header.Set("Authorization", "token embed-token")
 	authRec := httptest.NewRecorder()
-	srv.GraphQLHandler().ServeHTTP(authRec, authReq)
+	srv.Handler().ServeHTTP(authRec, authReq)
 	if authRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", authRec.Code, authRec.Body.String())
-	}
-}
-
-func TestNew_GitHTTPHandlerIsGitOnly(t *testing.T) {
-	root := t.TempDir()
-	srv, err := New(config.Config{
-		DBdsn:       createBootstrapDSN(t, "server_git_only"),
-		GitRepoDir:  filepath.Join(root, "repos"),
-		BaseURL:     "http://embed.local",
-		ListenMode:  "production",
-		Environment: "production",
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v3/user", nil)
-	rec := httptest.NewRecorder()
-	srv.GitHTTPHandler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected git-only handler to return 404 for non-git paths, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -542,10 +519,10 @@ func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	restReq := httptest.NewRequest(http.MethodGet, "/user", nil)
+	restReq := httptest.NewRequest(http.MethodGet, "/api/v3/user", nil)
 	restReq.Header.Set("X-Embedded-User", "ok")
 	restRec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(restRec, restReq)
+	srv.Handler().ServeHTTP(restRec, restReq)
 	if restRec.Code != http.StatusOK {
 		t.Fatalf("embedded REST auth: expected 200, got %d: %s", restRec.Code, restRec.Body.String())
 	}
@@ -582,11 +559,11 @@ func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal GraphQL query: %v", err)
 	}
-	gqlReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(query))
+	gqlReq := httptest.NewRequest(http.MethodPost, "/api/graphql", bytes.NewReader(query))
 	gqlReq.Header.Set("Content-Type", "application/json")
 	gqlReq.Header.Set("X-Embedded-User", "ok")
 	gqlRec := httptest.NewRecorder()
-	srv.GraphQLHandler().ServeHTTP(gqlRec, gqlReq)
+	srv.Handler().ServeHTTP(gqlRec, gqlReq)
 	if gqlRec.Code != http.StatusOK {
 		t.Fatalf("embedded GraphQL auth: expected 200, got %d: %s", gqlRec.Code, gqlRec.Body.String())
 	}
@@ -597,7 +574,7 @@ func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 	gitReq := httptest.NewRequest(http.MethodGet, "/gateway-user/embedded-private.git/info/refs?service=git-upload-pack", nil)
 	gitReq.Header.Set("X-Embedded-User", "ok")
 	gitRec := httptest.NewRecorder()
-	srv.GitHTTPHandler().ServeHTTP(gitRec, gitReq)
+	srv.Handler().ServeHTTP(gitRec, gitReq)
 	if gitRec.Code != http.StatusOK {
 		t.Fatalf("embedded Git auth: expected 200, got %d: %s", gitRec.Code, gitRec.Body.String())
 	}
@@ -609,11 +586,11 @@ func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal create issue body: %v", err)
 	}
-	writeReq := httptest.NewRequest(http.MethodPost, "/repos/gateway-user/embedded-public/issues", bytes.NewReader(createIssueBody))
+	writeReq := httptest.NewRequest(http.MethodPost, "/api/v3/repos/gateway-user/embedded-public/issues", bytes.NewReader(createIssueBody))
 	writeReq.Header.Set("Content-Type", "application/json")
 	writeReq.Header.Set("X-Embedded-User", "ok")
 	writeRec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(writeRec, writeReq)
+	srv.Handler().ServeHTTP(writeRec, writeReq)
 	if writeRec.Code != http.StatusCreated {
 		t.Fatalf("embedded REST write auth: expected 201, got %d: %s", writeRec.Code, writeRec.Body.String())
 	}
@@ -625,10 +602,10 @@ func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 		t.Fatalf("issue title = %v, want embedded write", got)
 	}
 
-	rateReq := httptest.NewRequest(http.MethodGet, "/rate_limit", nil)
+	rateReq := httptest.NewRequest(http.MethodGet, "/api/v3/rate_limit", nil)
 	rateReq.Header.Set("X-Embedded-User", "ok")
 	rateRec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(rateRec, rateReq)
+	srv.Handler().ServeHTTP(rateRec, rateReq)
 	if rateRec.Code != http.StatusOK {
 		t.Fatalf("embedded rate_limit auth: expected 200, got %d: %s", rateRec.Code, rateRec.Body.String())
 	}
@@ -639,10 +616,10 @@ func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 	if err := srv.deps.SvcDeps.StarRepo(service.ContextWithUser(context.Background(), user), "gateway-user/embedded-private", user.Login); err != nil {
 		t.Fatalf("StarRepo private: %v", err)
 	}
-	starredReq := httptest.NewRequest(http.MethodGet, "/users/gateway-user/starred", nil)
+	starredReq := httptest.NewRequest(http.MethodGet, "/api/v3/users/gateway-user/starred", nil)
 	starredReq.Header.Set("X-Embedded-User", "ok")
 	starredRec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(starredRec, starredReq)
+	srv.Handler().ServeHTTP(starredRec, starredReq)
 	if starredRec.Code != http.StatusOK {
 		t.Fatalf("embedded starred auth: expected 200, got %d: %s", starredRec.Code, starredRec.Body.String())
 	}
@@ -696,16 +673,16 @@ func TestNew_EmbeddedIdentityPreservesAnonymousOptionalRoutes(t *testing.T) {
 		t.Fatalf("CreateRepo: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/repos/public-owner/public-repo", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v3/repos/public-owner/public-repo", nil)
 	rec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("anonymous optional route: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	rateReq := httptest.NewRequest(http.MethodGet, "/rate_limit", nil)
+	rateReq := httptest.NewRequest(http.MethodGet, "/api/v3/rate_limit", nil)
 	rateRec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(rateRec, rateReq)
+	srv.Handler().ServeHTTP(rateRec, rateReq)
 	if rateRec.Code != http.StatusOK {
 		t.Fatalf("anonymous rate_limit route: expected 200, got %d: %s", rateRec.Code, rateRec.Body.String())
 	}
@@ -728,9 +705,9 @@ func TestNew_EmbeddedIdentityPreservesAnonymousOptionalRoutes(t *testing.T) {
 		t.Fatalf("StarRepo private: %v", err)
 	}
 
-	starredReq := httptest.NewRequest(http.MethodGet, "/users/public-owner/starred", nil)
+	starredReq := httptest.NewRequest(http.MethodGet, "/api/v3/users/public-owner/starred", nil)
 	starredRec := httptest.NewRecorder()
-	srv.RESTHandler().ServeHTTP(starredRec, starredReq)
+	srv.Handler().ServeHTTP(starredRec, starredReq)
 	if starredRec.Code != http.StatusOK {
 		t.Fatalf("anonymous starred route: expected 200, got %d: %s", starredRec.Code, starredRec.Body.String())
 	}
@@ -743,110 +720,6 @@ func TestNew_EmbeddedIdentityPreservesAnonymousOptionalRoutes(t *testing.T) {
 	}
 	if got := starredBody[0]["full_name"]; got != "public-owner/public-repo" {
 		t.Fatalf("anonymous starred repo full_name = %v, want public-owner/public-repo", got)
-	}
-}
-
-func TestStart_BindsAllListenersBeforeServing(t *testing.T) {
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("occupy port: %v", err)
-	}
-	defer occupied.Close()
-
-	free1, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve free port 1: %v", err)
-	}
-	addr1 := free1.Addr().String()
-	free1.Close()
-
-	free2, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve free port 2: %v", err)
-	}
-	addr2 := free2.Addr().String()
-	free2.Close()
-
-	srv := &Server{
-		deps: &bootstrapDeps{
-			Servers: []*http.Server{
-				{Addr: addr1, Handler: http.NewServeMux()},
-				{Addr: occupied.Addr().String(), Handler: http.NewServeMux()},
-				{Addr: addr2, Handler: http.NewServeMux()},
-			},
-			Labels: []string{"one", "blocked", "two"},
-		},
-	}
-
-	err = srv.Start()
-	if err == nil {
-		t.Fatal("expected Start to fail when one listener cannot bind")
-	}
-	if srv.started {
-		t.Fatal("server should not be marked started on partial bind failure")
-	}
-	if len(srv.listeners) != 0 {
-		t.Fatalf("listeners should not be retained on failure, got %d", len(srv.listeners))
-	}
-
-	for _, addr := range []string{addr1, addr2} {
-		ln, listenErr := net.Listen("tcp", addr)
-		if listenErr != nil {
-			t.Fatalf("expected %s to be released after Start failure: %v", addr, listenErr)
-		}
-		ln.Close()
-	}
-}
-
-func TestStart_MarksStartedAfterSuccessfulBind(t *testing.T) {
-	addr1 := allocateLoopbackAddr(t)
-	addr2 := allocateLoopbackAddr(t)
-	handler := http.NewServeMux()
-	handler.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	srv := &Server{
-		deps: &bootstrapDeps{
-			Servers: []*http.Server{
-				{Addr: addr1, Handler: handler},
-				{Addr: addr2, Handler: handler},
-			},
-			Labels:    []string{"one", "two"},
-			SvcDeps:   &service.Service{},
-			SrvCancel: func() {},
-		},
-	}
-
-	if err := srv.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
-	})
-
-	if !srv.started {
-		t.Fatal("server should be marked started after successful Start")
-	}
-	if len(srv.listeners) != 2 {
-		t.Fatalf("expected 2 listeners, got %d", len(srv.listeners))
-	}
-
-	for _, addr := range []string{addr1, addr2} {
-		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/healthz", addr), nil)
-		if err != nil {
-			t.Fatalf("build request for %s: %v", addr, err)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("request %s: %v", addr, err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNoContent {
-			t.Fatalf("status for %s = %d, want %d", addr, resp.StatusCode, http.StatusNoContent)
-		}
 	}
 }
 
@@ -879,19 +752,6 @@ func TestShutdown_CancelsServerContextBeforeWaitingForWorkers(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected worker to exit after shutdown canceled server context")
 	}
-}
-
-func allocateLoopbackAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("allocate loopback addr: %v", err)
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatalf("release loopback addr: %v", err)
-	}
-	return addr
 }
 
 func TestInitServiceDeps_UsesConfiguredDataRootForWikiStorage(t *testing.T) {

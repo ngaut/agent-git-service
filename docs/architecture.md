@@ -45,7 +45,7 @@ full-text and vector-backed search behavior.
 |---|---|
 | `auth` | Public embedding identity types for external consumers |
 | `cmd/gh-server` | CLI entrypoint, signal handling, `.env` loading, and logging init |
-| `server` | Public startup/shutdown API, embeddable constructor/handlers, dependency wiring, TLS setup, and listeners |
+| `server` | Public startup/shutdown API, embeddable constructor/handler, dependency wiring, TLS setup, and listeners |
 | `config` | Environment-backed configuration exposed for external consumers |
 | `internal/db` | GORM models, migrations, seed data, shared state constants |
 | `internal/service` | Business logic over DB and Git storage |
@@ -75,8 +75,8 @@ full-text and vector-backed search behavior.
 
 `cmd/gh-server` is the binary entrypoint and `server` is the composition root.
 External embedders can use `server.Run` or construct a reusable instance with
-`server.New(config.Config, ...)`, mount `Handler()` or protocol-specific
-handler accessors, and manage listeners through `Start()` / `Shutdown(ctx)`.
+`server.New(config.Config, ...)`, mount `Handler()`, and manage their own
+listener lifecycle while calling `Shutdown(ctx)` during teardown.
 
 Embedded hosts may install `server.WithAuthenticator(...)` to inject a trusted
 request identity without minting AGS tokens first. The shared identity shape is
