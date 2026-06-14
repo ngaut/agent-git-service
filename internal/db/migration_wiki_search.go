@@ -74,15 +74,25 @@ func ensureWikiFullTextIndex(database *gorm.DB, idx wikiSearchFullTextIndex) {
 		return
 	}
 
-	sql := wikiFullTextIndexDDL(idx)
-	if err := database.Exec(sql).Error; err != nil {
-		if migrator.HasIndex(idx.table, idx.name) || isAlreadyExistsErr(err) {
+	var lastErr error
+	for _, sql := range fullTextIndexDDLs(idx.table, idx.name, idx.column) {
+		if err := quietCapabilityDB(database).Exec(sql).Error; err != nil {
+			if migrator.HasIndex(idx.table, idx.name) || isAlreadyExistsErr(err) {
+				return
+			}
+			lastErr = err
+			continue
+		}
+		if migrator.HasIndex(idx.table, idx.name) {
+			slog.Debug("db: MigrateWikiSearch: added fulltext index", "table", idx.table, "index", idx.name, "column", idx.column)
 			return
 		}
-		slog.Warn("db: MigrateWikiSearch: add fulltext index", "table", idx.table, "index", idx.name, "column", idx.column, "err", err)
-		return
 	}
-	slog.Debug("db: MigrateWikiSearch: added fulltext index", "table", idx.table, "index", idx.name, "column", idx.column)
+	if lastErr != nil {
+		slog.Debug("db: MigrateWikiSearch: fulltext index unavailable", "table", idx.table, "index", idx.name, "column", idx.column, "err", lastErr)
+	} else {
+		slog.Debug("db: MigrateWikiSearch: fulltext index unavailable", "table", idx.table, "index", idx.name, "column", idx.column)
+	}
 }
 
 func ensureWikiSearchVector(database *gorm.DB, dims int) {
@@ -183,12 +193,7 @@ func ensureWikiSearchVectorIndex(database *gorm.DB) {
 }
 
 func wikiFullTextIndexDDL(idx wikiSearchFullTextIndex) string {
-	return fmt.Sprintf(
-		"ALTER TABLE `%s` ADD FULLTEXT INDEX `%s` (`%s`) WITH PARSER MULTILINGUAL",
-		idx.table,
-		idx.name,
-		idx.column,
-	)
+	return fullTextIndexDDLFor(idx.table, idx.name, idx.column)
 }
 
 func wikiSearchAddTextEmbeddingDDL(database *gorm.DB) string {

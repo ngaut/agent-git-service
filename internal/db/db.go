@@ -206,6 +206,7 @@ func Init(dsn string) (*gorm.DB, error) {
 		}
 	}
 
+	logCapabilities(database)
 	slog.Info("db: connected and migrated.")
 	return database, nil
 }
