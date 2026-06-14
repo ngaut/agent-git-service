@@ -35,6 +35,19 @@ type IssueListDeps struct {
 
 // SearchIssues performs a hybrid search on the issues table.
 func SearchIssues(ctx context.Context, deps IssueSearchDeps, query string) ([]db.Issue, error) {
+	results, err := SearchIssuesDetailed(ctx, deps, query, SearchOptions{})
+	if err != nil {
+		return nil, err
+	}
+	issues := make([]db.Issue, 0, len(results))
+	for _, result := range results {
+		issues = append(issues, result.Issue)
+	}
+	return issues, nil
+}
+
+// SearchIssuesDetailed performs issue search and returns ranking observability.
+func SearchIssuesDetailed(ctx context.Context, deps IssueSearchDeps, query string, opts SearchOptions) ([]IssueSearchResult, error) {
 	if query == "" {
 		return nil, nil
 	}
@@ -60,7 +73,10 @@ func SearchIssues(ctx context.Context, deps IssueSearchDeps, query string) ([]db
 		}
 		var issues []db.Issue
 		err := q.Order(SortOrder(sortQualifier, "issues")).Limit(deps.DefaultListLimit).Find(&issues).Error
-		return issues, err
+		if err != nil {
+			return nil, err
+		}
+		return issueQualifierOnlyResults(issues, sq, opts), nil
 	}
 
 	freeText := strings.Join(sq.FreeText, " ")
@@ -81,25 +97,44 @@ func SearchIssues(ctx context.Context, deps IssueSearchDeps, query string) ([]db
 		vec = deps.EmbedQuery(ctx, freeText)
 	}
 	if vec == "" {
-		return preloadIssuesByID(ctx, deps, likeIDs)
+		ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(likeIDs), nil, explicitSort, deps.DefaultListLimit)
+		return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
 	}
 
-	vecIDs, err := searchIssueSemantic(ctx, baseQ, baseDB, sq, vec, deps.DefaultListLimit)
+	vecResults, err := searchIssueSemanticDetailed(ctx, baseQ, baseDB, sq, vec, deps.DefaultListLimit)
 	if err != nil {
 		slog.WarnContext(ctx, "issue search vector query failed; returning lexical results only", "error", err)
-		return preloadIssuesByID(ctx, deps, likeIDs)
+		ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(likeIDs), nil, explicitSort, deps.DefaultListLimit)
+		return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
 	}
 
-	var mergedIDs []uint
-	if explicitSort {
-		// Preserve explicit user-requested sort semantics when sort/order qualifiers are present.
-		mergedIDs = deduplicateOrderedIssueIDs(likeIDs, vecIDs, deps.DefaultListLimit)
-	} else {
-		// Step 3: Merge lexical and semantic ranks for default "best match" search.
-		mergedIDs = fuseIssueSearchResultIDs(likeIDs, vecIDs, deps.DefaultListLimit)
-	}
+	// Step 3: Merge lexical and semantic ranks for default "best match" search.
+	// Preserve explicit user-requested sort semantics when sort/order qualifiers are present.
+	ranks := fuseDetailedSearchRanks(issueIDsToRankedSearchIDs(likeIDs), vecResults, explicitSort, deps.DefaultListLimit)
+	return buildIssueDetailedResults(ctx, deps, baseDB, ranks, sq, opts)
+}
 
-	return preloadIssuesByID(ctx, deps, mergedIDs)
+func buildIssueDetailedResults(
+	ctx context.Context,
+	deps IssueSearchDeps,
+	baseDB *gorm.DB,
+	ranks []detailedSearchRank,
+	sq SearchQualifiers,
+	opts SearchOptions,
+) ([]IssueSearchResult, error) {
+	issues, err := preloadIssuesByID(ctx, deps, ranksToIDs(ranks))
+	if err != nil {
+		return nil, err
+	}
+	_, _, searchComments := resolveTextSearchTargets(sq.In)
+	commentBodies := map[searchCommentKey][]string(nil)
+	if searchComments {
+		commentBodies, err = loadCommentBodiesForIssues(baseDB, issues)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return issueResultsFromRanksWithComments(issues, ranks, sq, opts, commentBodies), nil
 }
 
 func searchIssueLexical(ctx context.Context, baseQ *gorm.DB, baseDB *gorm.DB, sq SearchQualifiers, sortQualifier string, explicitSort bool, limit int) ([]uint, error) {
@@ -148,6 +183,28 @@ func searchIssueSemantic(ctx context.Context, baseQ *gorm.DB, baseDB *gorm.DB, s
 	}
 }
 
+func searchIssueSemanticDetailed(ctx context.Context, baseQ *gorm.DB, baseDB *gorm.DB, sq SearchQualifiers, vec string, limit int) ([]rankedSearchID, error) {
+	if !supportsVectorDistance(baseDB) {
+		return nil, nil
+	}
+	if !supportsTiDBANN(baseDB) {
+		return searchIssueSemanticFilteredDetailed(baseQ, vec, limit)
+	}
+
+	switch semanticModeForQuery(sq, issueSemanticApplicable(sq.In)) {
+	case semanticModeDisabled:
+		return nil, nil
+	case semanticModeFilteredExact:
+		return searchIssueSemanticFilteredDetailed(baseQ, vec, limit)
+	default:
+		ids, err := searchIssueSemanticANN(ctx, baseQ, baseDB, vec, limit)
+		if err != nil {
+			return nil, err
+		}
+		return issueIDsToRankedSearchIDs(ids), nil
+	}
+}
+
 func buildIssueANNCandidateQuery(baseDB *gorm.DB, vec string, limit int) *gorm.DB {
 	// Keep the ANN candidate query free of WHERE predicates so TiDB can use
 	// the vector index for ORDER BY ... LIMIT candidate generation.
@@ -187,6 +244,31 @@ func buildIssueSemanticFilteredRankQuery(baseQ *gorm.DB, vec string) *gorm.DB {
 
 func searchIssueSemanticFiltered(baseQ *gorm.DB, vec string, limit int) ([]uint, error) {
 	return pluckIssueIDs(buildIssueSemanticFilteredRankQuery(baseQ, vec), limit)
+}
+
+func searchIssueSemanticFilteredDetailed(baseQ *gorm.DB, vec string, limit int) ([]rankedSearchID, error) {
+	q := buildIssueSemanticFilteredQuery(baseQ, vec).
+		Select("issues.id, VEC_COSINE_DISTANCE(issues.embedding, ?) AS semantic_distance", vec)
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	var rows []struct {
+		ID               uint
+		SemanticDistance float64 `gorm:"column:semantic_distance"`
+	}
+	if err := q.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	results := make([]rankedSearchID, 0, len(rows))
+	for _, row := range rows {
+		distance := row.SemanticDistance
+		results = append(results, rankedSearchID{
+			ID:       row.ID,
+			Score:    reciprocalRankScore(len(results) + 1),
+			Distance: &distance,
+		})
+	}
+	return results, nil
 }
 
 func pluckIssueIDs(q *gorm.DB, limit int) ([]uint, error) {

@@ -28,6 +28,16 @@ type CodeSearchQuery = searchsvc.CodeSearchQuery
 
 type IssueListFilter = searchsvc.IssueListFilter
 
+type SearchOptions = searchsvc.SearchOptions
+
+type TextMatch = searchsvc.TextMatch
+
+type TextMatchSpan = searchsvc.TextMatchSpan
+
+type IssueSearchResult = searchsvc.IssueSearchResult
+
+type PRSearchResult = searchsvc.PRSearchResult
+
 // ParseSearchQuery parses a GitHub-style search query into structured qualifiers.
 func ParseSearchQuery(query string) SearchQualifiers {
 	return searchsvc.ParseSearchQuery(query)
@@ -65,6 +75,18 @@ func (s *Service) SearchIssues(ctx context.Context, query string) ([]db.Issue, e
 	}, query)
 }
 
+// SearchIssuesDetailed performs issue search and returns ranking observability.
+func (s *Service) SearchIssuesDetailed(ctx context.Context, query string, opts SearchOptions) ([]IssueSearchResult, error) {
+	return searchsvc.SearchIssuesDetailed(ctx, searchsvc.IssueSearchDeps{
+		DBForCtx:           s.DBForCtx,
+		PreloadIssue:       preloadIssue,
+		DefaultListLimit:   defaultListLimit,
+		IssueSortQualifier: issueSortQualifier,
+		EmbedQuery:         s.embedQuery,
+		UserFromContext:    UserFromContext,
+	}, query, opts)
+}
+
 // SearchPRs performs a hybrid search on the pull_requests table.
 func (s *Service) SearchPRs(ctx context.Context, query string) ([]db.PullRequest, error) {
 	return searchsvc.SearchPRs(ctx, searchsvc.PRSearchDeps{
@@ -75,6 +97,18 @@ func (s *Service) SearchPRs(ctx context.Context, query string) ([]db.PullRequest
 		EmbedQuery:         s.embedQuery,
 		UserFromContext:    UserFromContext,
 	}, query)
+}
+
+// SearchPRsDetailed performs pull request search and returns ranking observability.
+func (s *Service) SearchPRsDetailed(ctx context.Context, query string, opts SearchOptions) ([]PRSearchResult, error) {
+	return searchsvc.SearchPRsDetailed(ctx, searchsvc.PRSearchDeps{
+		DBForCtx:           s.DBForCtx,
+		PreloadPR:          preloadPRFull,
+		DefaultListLimit:   defaultListLimit,
+		IssueSortQualifier: issueSortQualifier,
+		EmbedQuery:         s.embedQuery,
+		UserFromContext:    UserFromContext,
+	}, query, opts)
 }
 
 // ListIssuesFiltered returns issues for a repo with filterBy support.
