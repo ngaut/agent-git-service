@@ -100,7 +100,6 @@ func (d *Deps) createRepo(w http.ResponseWriter, r *http.Request, ownerLogin str
 		IsTemplate          bool   `json:"is_template"`
 		LicenseTemplate     string `json:"license_template"`
 		AutoInit            bool   `json:"auto_init"`
-		AddReadme           bool   `json:"add_readme"` // gh-server extension for --add-readme flag
 		DefaultBranch       string `json:"default_branch"`
 		AllowMergeCommit    *bool  `json:"allow_merge_commit"`
 		AllowSquashMerge    *bool  `json:"allow_squash_merge"`
@@ -139,7 +138,6 @@ func (d *Deps) createRepo(w http.ResponseWriter, r *http.Request, ownerLogin str
 		IsTemplate:          body.IsTemplate,
 		License:             body.LicenseTemplate,
 		AutoInit:            body.AutoInit,
-		AddReadme:           body.AddReadme,
 		DefaultBranch:       body.DefaultBranch,
 		AllowMergeCommit:    body.AllowMergeCommit,
 		AllowSquashMerge:    body.AllowSquashMerge,

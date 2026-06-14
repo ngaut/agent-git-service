@@ -304,7 +304,6 @@ type CreateRepoInput struct {
 	Homepage            string
 	IsTemplate          bool
 	License             string
-	AddReadme           bool
 	DefaultBranch       string
 	AutoInit            bool
 	AllowMergeCommit    *bool
@@ -506,8 +505,7 @@ func (s *Service) CreateRepo(ctx context.Context, in CreateRepoInput) (db.Reposi
 	}
 
 	fullName := rep.FullName
-	seedGit := in.AddReadme || in.AutoInit
-	if err := s.Git.Init(ctx, fullName, in.DefaultBranch, seedGit); err != nil {
+	if err := s.Git.Init(ctx, fullName, in.DefaultBranch, in.AutoInit); err != nil {
 		// Non-fatal, the repo object still gets returned.
 		slog.Error("CreateRepo: git init", "repo", fullName, "error", err)
 	}

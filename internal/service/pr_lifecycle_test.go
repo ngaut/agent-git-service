@@ -25,7 +25,7 @@ func setupPRWithRealBranches(t testing.TB, svc *service.Service, login, repoName
 		OwnerLogin:    login,
 		Name:          repoName,
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -385,7 +385,7 @@ func TestPRMergeLifecycle(t *testing.T) {
 			OwnerLogin:    "conflict-user",
 			Name:          "conflict-repo",
 			DefaultBranch: "main",
-			AddReadme:     true,
+			AutoInit:      true,
 		})
 		if err != nil {
 			t.Fatalf("create repo: %v", err)

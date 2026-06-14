@@ -50,7 +50,7 @@ Does not own:
 ```
 Init(fullName, seed)
   → go-git: create bare repo at GIT_REPO_DIR/{storage-key}.git
-  → if seed: create initial commit with README.md via go-git object APIs
+  → if seed: create initial commit with empty README.md via go-git object APIs
 
 Fork(src, dst)
   → cp -a src.git dst.git

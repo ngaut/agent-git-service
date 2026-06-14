@@ -68,7 +68,7 @@ func TestListPRsFiltered_MentionedUsesTokenBoundaries(t *testing.T) {
 		OwnerLogin:    "pruser",
 		Name:          "mention-pr-repo",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("failed to setup repo: %v", err)

@@ -53,7 +53,7 @@ func TestRepoLifecycle_ForkSuccess(t *testing.T) {
 		OwnerLogin:    "src-owner",
 		Name:          "upstream",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create source: %v", err)
@@ -98,7 +98,7 @@ func TestRepoLifecycle_TransferRepo(t *testing.T) {
 		OwnerLogin:    "alice",
 		Name:          "proj",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -157,7 +157,7 @@ func TestRepoLifecycle_TransferRepo_UpdatesAutolink(t *testing.T) {
 		OwnerLogin:    "alice",
 		Name:          "proj",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -215,7 +215,7 @@ func TestRepoLifecycle_TransferRepo_RollbackOnUpdateFailure(t *testing.T) {
 		OwnerLogin:    "alice",
 		Name:          "proj",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -296,7 +296,7 @@ func TestRepoLifecycle_DeleteDetachesForks(t *testing.T) {
 		OwnerLogin:    "base-owner",
 		Name:          "base",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create base: %v", err)
@@ -344,7 +344,7 @@ func TestRepoLifecycle_DeleteRenamedRepoRemovesRedirects(t *testing.T) {
 		OwnerLogin:    "owner",
 		Name:          "rename-me",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -458,7 +458,7 @@ func TestRepoLifecycle_EmptinessAndDiskUsage(t *testing.T) {
 		OwnerLogin:    "user",
 		Name:          "seeded-repo",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create seeded repo: %v", err)

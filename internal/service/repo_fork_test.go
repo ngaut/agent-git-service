@@ -27,7 +27,7 @@ func TestForkRepoGitFailureCompensatesDBAndGit(t *testing.T) {
 		OwnerLogin:    "fork-src",
 		Name:          "repo",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create source repo: %v", err)
@@ -65,7 +65,7 @@ func TestForkRepoDBFinalizeFailureCompensatesDBAndGit(t *testing.T) {
 		OwnerLogin:    "fork-src",
 		Name:          "repo",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create source repo: %v", err)
@@ -115,7 +115,7 @@ func TestForkRepoGitFailureCleanupFailureReturnsJoinedError(t *testing.T) {
 		OwnerLogin:    "fork-src",
 		Name:          "repo",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create source repo: %v", err)
@@ -164,7 +164,7 @@ func TestForkRepoDBFinalizeFailureCleanupFailureReturnsJoinedError(t *testing.T)
 		OwnerLogin:    "fork-src",
 		Name:          "repo",
 		DefaultBranch: "main",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create source repo: %v", err)
@@ -336,7 +336,7 @@ func TestForkRepo_CustomNameCopiesMetadata(t *testing.T) {
 		Description:   "source description",
 		Private:       true,
 		DefaultBranch: "dev",
-		AddReadme:     true,
+		AutoInit:      true,
 	})
 	if err != nil {
 		t.Fatalf("create source repo: %v", err)

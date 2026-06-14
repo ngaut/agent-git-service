@@ -26,7 +26,7 @@ func TestRenameRepo_DBTransactionFailureRollback(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "rollbackuser",
 		Name:       "oldrepo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -128,7 +128,7 @@ func TestSearchRepos_UserQualifier(t *testing.T) {
 		_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: login,
 			Name:       "repo",
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create repo for %s: %v", login, err)
@@ -161,7 +161,7 @@ func TestSearchRepos_OrgQualifier(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "testorg",
 		Name:       "org-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create org repo: %v", err)
@@ -188,7 +188,7 @@ func TestSearchRepos_LanguageQualifier(t *testing.T) {
 	repo1, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "languser",
 		Name:       "go-project",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo1: %v", err)
@@ -196,7 +196,7 @@ func TestSearchRepos_LanguageQualifier(t *testing.T) {
 	repo2, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "languser",
 		Name:       "python-project",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo2: %v", err)
@@ -238,7 +238,7 @@ func TestSearchRepos_TopicQualifier(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "topicuser",
 		Name:       "ml-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -267,7 +267,7 @@ func TestSearchRepos_MultiTopicQualifier(t *testing.T) {
 	repo1, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "multitopicuser",
 		Name:       "ml-ai-python",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo1: %v", err)
@@ -277,7 +277,7 @@ func TestSearchRepos_MultiTopicQualifier(t *testing.T) {
 	repo2, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "multitopicuser",
 		Name:       "ml-python",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo2: %v", err)
@@ -287,7 +287,7 @@ func TestSearchRepos_MultiTopicQualifier(t *testing.T) {
 	repo3, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "multitopicuser",
 		Name:       "ml-only",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo3: %v", err)
@@ -297,7 +297,7 @@ func TestSearchRepos_MultiTopicQualifier(t *testing.T) {
 	repo4, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "multitopicuser",
 		Name:       "ai-python",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo4: %v", err)
@@ -340,7 +340,7 @@ func TestSearchRepos_ArchivedQualifier(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "archuser",
 		Name:       "active-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo1: %v", err)
@@ -348,7 +348,7 @@ func TestSearchRepos_ArchivedQualifier(t *testing.T) {
 	_, err = svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "archuser",
 		Name:       "archived-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo2: %v", err)
@@ -386,7 +386,7 @@ func TestSearchRepos_ForkQualifier(t *testing.T) {
 	base, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "baseowner",
 		Name:       "upstream",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create base: %v", err)
@@ -395,7 +395,7 @@ func TestSearchRepos_ForkQualifier(t *testing.T) {
 	fork, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "forkowner",
 		Name:       "upstream",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create fork: %v", err)
@@ -460,7 +460,7 @@ func TestSearchRepos_VisibilityQualifier(t *testing.T) {
 	publicRepo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "visuser",
 		Name:       "public-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create public repo: %v", err)
@@ -469,7 +469,7 @@ func TestSearchRepos_VisibilityQualifier(t *testing.T) {
 		OwnerLogin: "visuser",
 		Name:       "private-repo",
 		Private:    true,
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create private repo: %v", err)
@@ -477,7 +477,7 @@ func TestSearchRepos_VisibilityQualifier(t *testing.T) {
 	internalRepo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "visuser",
 		Name:       "internal-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create internal repo: %v", err)
@@ -531,7 +531,7 @@ func TestSearchRepos_LicenseQualifier(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "licuser",
 		Name:       "mit-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo1: %v", err)
@@ -539,7 +539,7 @@ func TestSearchRepos_LicenseQualifier(t *testing.T) {
 	_, err = svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "licuser",
 		Name:       "apache-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo2: %v", err)
@@ -571,7 +571,7 @@ func TestSearchRepos_StarsRange(t *testing.T) {
 		repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: "staruser",
 			Name:       "star-repo-" + string(rune('0'+i)),
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create repo %d: %v", i, err)
@@ -606,7 +606,7 @@ func TestSearchRepos_ForksRange(t *testing.T) {
 	base, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "forkbase",
 		Name:       "base-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create base: %v", err)
@@ -619,7 +619,7 @@ func TestSearchRepos_ForksRange(t *testing.T) {
 		fork, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: forkOwner.Login,
 			Name:       "base-repo",
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create fork %d: %v", i, err)
@@ -651,7 +651,7 @@ func TestSearchRepos_CreatedDateRange(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "dateuser",
 		Name:       "old-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create old: %v", err)
@@ -682,7 +682,7 @@ func TestSearchRepos_SortByStars(t *testing.T) {
 		repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: "sortuser",
 			Name:       "sort-repo-" + string(rune('0'+i)),
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create repo %d: %v", i, err)
@@ -723,7 +723,7 @@ func TestSearchRepos_SortByUpdated(t *testing.T) {
 		_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: "sortuser2",
 			Name:       "upd-repo-" + string(rune('0'+i)),
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create repo %d: %v", i, err)
@@ -767,7 +767,7 @@ func TestSearchReposGQL_LanguageFilter(t *testing.T) {
 	repo1, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqluser2",
 		Name:       "rust-project",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo1: %v", err)
@@ -775,7 +775,7 @@ func TestSearchReposGQL_LanguageFilter(t *testing.T) {
 	repo2, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqluser2",
 		Name:       "java-project",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo2: %v", err)
@@ -805,7 +805,7 @@ func TestSearchReposGQL_TopicFilter(t *testing.T) {
 	repo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqltopicuser",
 		Name:       "web-framework",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -833,7 +833,7 @@ func TestSearchReposGQL_ArchivedFilter(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqlarchuser",
 		Name:       "active-gql",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo1: %v", err)
@@ -841,7 +841,7 @@ func TestSearchReposGQL_ArchivedFilter(t *testing.T) {
 	_, err = svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqlarchuser",
 		Name:       "archived-gql",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo2: %v", err)
@@ -873,7 +873,7 @@ func TestSearchReposGQL_ForkFilter(t *testing.T) {
 	base, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqlbase",
 		Name:       "original",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create base: %v", err)
@@ -882,7 +882,7 @@ func TestSearchReposGQL_ForkFilter(t *testing.T) {
 	fork, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqlforker",
 		Name:       "original",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create fork: %v", err)
@@ -933,7 +933,7 @@ func TestSearchReposGQL_VisibilityFilter(t *testing.T) {
 	publicRepo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqlvis",
 		Name:       "public-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create public repo: %v", err)
@@ -942,7 +942,7 @@ func TestSearchReposGQL_VisibilityFilter(t *testing.T) {
 		OwnerLogin: "gqlvis",
 		Name:       "private-repo",
 		Private:    true,
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create private repo: %v", err)
@@ -950,7 +950,7 @@ func TestSearchReposGQL_VisibilityFilter(t *testing.T) {
 	internalRepo, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "gqlvis",
 		Name:       "internal-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create internal repo: %v", err)
@@ -997,7 +997,7 @@ func TestSearchReposGQL_SortOptions(t *testing.T) {
 		_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: "gqlsortuser",
 			Name:       "gql-sort-" + string(rune('0'+i)),
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create repo %d: %v", i, err)
@@ -1033,7 +1033,7 @@ func TestListAllRepos_Limit1000(t *testing.T) {
 		_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 			OwnerLogin: "limituser",
 			Name:       "limit-repo-" + string(rune('0'+i%10)) + string(rune('0'+i/10)),
-			AddReadme:  true,
+			AutoInit:   true,
 		})
 		if err != nil {
 			t.Fatalf("create repo %d: %v", i, err)
@@ -1063,7 +1063,7 @@ func TestListAllRepos_PreloadOwner(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "preloaduser",
 		Name:       "preload-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -1104,7 +1104,7 @@ func TestTransferRepo_Success(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "srcowner",
 		Name:       "transfer-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -1152,7 +1152,7 @@ func TestTransferRepo_MissingTargetOwnerFails(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "transferuser",
 		Name:       "repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -1179,14 +1179,14 @@ func TestTransferRepo_TargetRepoAlreadyExistsReturnsConflict(t *testing.T) {
 	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "srcowner",
 		Name:       "transfer-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	}); err != nil {
 		t.Fatalf("create source repo: %v", err)
 	}
 	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "dstowner",
 		Name:       "transfer-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	}); err != nil {
 		t.Fatalf("create destination repo: %v", err)
 	}
@@ -1219,7 +1219,7 @@ func TestTransferRepo_TargetGitPathAlreadyExistsReturnsConflict(t *testing.T) {
 	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "pathsrc",
 		Name:       "transfer-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	}); err != nil {
 		t.Fatalf("create source repo: %v", err)
 	}
@@ -1257,7 +1257,7 @@ func TestTransferRepo_RollbackOnFailure(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "rollsrc",
 		Name:       "rollback-transfer",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
@@ -1322,7 +1322,7 @@ func TestTransferRepo_UpdatesAutolink(t *testing.T) {
 	_, err := svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: "autolinksrc",
 		Name:       "autolink-repo",
-		AddReadme:  true,
+		AutoInit:   true,
 	})
 	if err != nil {
 		t.Fatalf("create repo: %v", err)

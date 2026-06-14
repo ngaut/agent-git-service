@@ -59,7 +59,7 @@ create_repo() {
     -X POST "$BASE_URL/api/v3/user/repos" \
     -H "Authorization: token $GH_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"$REPO_NAME\",\"private\":true,\"add_readme\":true}"
+    -d "{\"name\":\"$REPO_NAME\",\"private\":true,\"auto_init\":true}"
 }
 
 create_file() {

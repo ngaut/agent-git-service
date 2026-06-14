@@ -22,7 +22,7 @@ func setupProtectedPR(t testing.TB, svc *service.Service, login, repoName string
 		OwnerLogin:     login,
 		Name:           repoName,
 		DefaultBranch:  "main",
-		AddReadme:      true,
+		AutoInit:       true,
 		AllowAutoMerge: &allowAutoMerge,
 	})
 	if err != nil {
