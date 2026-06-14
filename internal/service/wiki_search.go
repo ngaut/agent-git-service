@@ -35,6 +35,8 @@ const (
 	// queries do not get flooded by weak vector nearest-neighbor noise.
 	wikiSemanticOnlyMinScoreWithLexical = 0.5
 	wikiSemanticMaxExact                = wikiSearchMaxRankWindow
+	wikiSemanticANNCandidateMin         = 256
+	wikiSemanticANNCandidateMax         = 4096
 	wikiReindexWorkers                  = 4
 )
 
@@ -897,6 +899,15 @@ func (s *Service) searchWikiSemantic(ctx context.Context, repoID uint, query str
 	if !db.SupportsVectorDistance(s.DBForCtx(ctx)) {
 		return s.searchWikiSemanticInMemory(ctx, repoID, query, vec, limit, offset, filters, paginateBeforeHydration)
 	}
+	if db.SupportsTiDBSearch(s.DBForCtx(ctx)) {
+		if lexicalEmpty {
+			if paginateBeforeHydration {
+				return s.searchWikiSemanticANN(ctx, repoID, query, vec, limit, offset, filters, false, true)
+			}
+			return s.searchWikiSemanticANN(ctx, repoID, query, vec, rankLimit, 0, filters, false, false)
+		}
+		return s.searchWikiSemanticANN(ctx, repoID, query, vec, rankLimit, 0, filters, true, false)
+	}
 	if lexicalEmpty {
 		if paginateBeforeHydration {
 			return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters, false, true)
@@ -966,6 +977,80 @@ func wikiSemanticExactLimit(limit, offset int) int {
 	return n
 }
 
+func wikiSemanticANNCandidateLimit(limit, offset int) int {
+	n := limit + offset
+	if n <= 0 {
+		n = wikiSearchDefaultLimit
+	}
+	candidateLimit := n * 8
+	if candidateLimit < wikiSemanticANNCandidateMin {
+		candidateLimit = wikiSemanticANNCandidateMin
+	}
+	if candidateLimit > wikiSemanticANNCandidateMax {
+		candidateLimit = wikiSemanticANNCandidateMax
+	}
+	return candidateLimit
+}
+
+func buildWikiSemanticANNCandidateQuery(database *gorm.DB, vecLiteral string, limit, offset int) *gorm.DB {
+	return database.Table("wiki_search_documents").
+		Clauses(clause.OrderBy{
+			Expression: clause.Expr{
+				SQL:  "VEC_COSINE_DISTANCE(wiki_search_documents.embedding, ?) ASC",
+				Vars: []any{vecLiteral},
+			},
+		}).
+		Limit(wikiSemanticANNCandidateLimit(limit, offset))
+}
+
+func (s *Service) searchWikiSemanticANN(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, exactWindow, paginateBeforeHydration bool) ([]WikiSearchResult, bool, error) {
+	vecLiteral := embedding.FormatVector(vec)
+	database := s.DBForCtx(ctx)
+	var candidateIDs []uint
+	if err := buildWikiSemanticANNCandidateQuery(database, vecLiteral, limit, offset).Pluck("wiki_search_documents.id", &candidateIDs).Error; err != nil {
+		return nil, false, err
+	}
+	if len(candidateIDs) == 0 {
+		return nil, false, nil
+	}
+
+	filteredQ := database.Model(&db.WikiSearchDocument{}).
+		Where("wiki_search_documents.repository_id = ?", repoID).
+		Where("wiki_search_documents.embedding IS NOT NULL")
+	var noResults bool
+	var err error
+	filteredQ, noResults, err = s.applyWikiSearchLabelPredicates(ctx, repoID, filteredQ, filters)
+	if err != nil {
+		return nil, false, err
+	}
+	if noResults {
+		return nil, false, nil
+	}
+
+	var eligibleCount int64
+	if err := filteredQ.Count(&eligibleCount).Error; err != nil {
+		return nil, false, err
+	}
+	if eligibleCount == 0 {
+		return nil, false, nil
+	}
+
+	q := filteredQ.Where("wiki_search_documents.id IN ?", candidateIDs)
+	var filteredCandidateCount int64
+	if err := q.Count(&filteredCandidateCount).Error; err != nil {
+		return nil, false, err
+	}
+	if filteredCandidateCount < eligibleCount {
+		return s.searchWikiSemanticDB(ctx, repoID, query, vec, limit, offset, filters, exactWindow, paginateBeforeHydration)
+	}
+
+	rows, err := s.scanWikiSemanticDBRows(q, query, vecLiteral, exactWindow, 0, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	return s.buildWikiSemanticResultsFromDBRows(ctx, repoID, rows, query, limit, offset, exactWindow, paginateBeforeHydration, false)
+}
+
 func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query string, vec []float32, limit, offset int, filters WikiLabelFilters, exactWindow, paginateBeforeHydration bool) ([]WikiSearchResult, bool, error) {
 	candidateLimit := wikiSemanticPageLimit(limit)
 	dbOffset := offset
@@ -990,7 +1075,15 @@ func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query s
 	if noResults {
 		return nil, false, nil
 	}
-	var rows []wikiSemanticDBRow
+
+	rows, err := s.scanWikiSemanticDBRows(q, query, vecLiteral, exactWindow, candidateLimit, dbOffset)
+	if err != nil {
+		return nil, false, err
+	}
+	return s.buildWikiSemanticResultsFromDBRows(ctx, repoID, rows, query, limit, offset, exactWindow, paginateBeforeHydration, true)
+}
+
+func (s *Service) scanWikiSemanticDBRows(q *gorm.DB, query, vecLiteral string, exactWindow bool, limit, offset int) ([]wikiSemanticDBRow, error) {
 	selectSQL := "wiki_search_documents.*, VEC_COSINE_DISTANCE(wiki_search_documents.embedding, ?) AS semantic_distance"
 	orderSQL := "semantic_distance ASC, wiki_search_documents.updated_at DESC, wiki_search_documents.slug ASC"
 	selectArgs := []any{vecLiteral}
@@ -1002,13 +1095,21 @@ func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query s
 	}
 	queryDB := q.
 		Select(selectSQL, selectArgs...).
-		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: orderSQL}}).
-		Offset(dbOffset).
-		Limit(candidateLimit)
-	err = queryDB.Scan(&rows).Error
-	if err != nil {
-		return nil, false, err
+		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: orderSQL}})
+	if offset > 0 {
+		queryDB = queryDB.Offset(offset)
 	}
+	if limit > 0 {
+		queryDB = queryDB.Limit(limit)
+	}
+	var rows []wikiSemanticDBRow
+	if err := queryDB.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (s *Service) buildWikiSemanticResultsFromDBRows(ctx context.Context, repoID uint, rows []wikiSemanticDBRow, query string, limit, offset int, exactWindow, paginateBeforeHydration, rowsAlreadyPaginated bool) ([]WikiSearchResult, bool, error) {
 	if len(rows) == 0 {
 		return nil, false, nil
 	}
@@ -1045,7 +1146,10 @@ func (s *Service) searchWikiSemanticDB(ctx context.Context, repoID uint, query s
 	}
 	sortWikiScoredDocuments(scored)
 	if paginateBeforeHydration {
-		return buildWikiSearchResults(scored, query), true, nil
+		if rowsAlreadyPaginated {
+			return buildWikiSearchResults(scored, query), true, nil
+		}
+		return paginateWikiSearchResults(scored, query, limit, offset), true, nil
 	}
 	return buildWikiSearchResults(scored, query), true, nil
 }
