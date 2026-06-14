@@ -29,9 +29,10 @@ which aligns with GitHub semantics while making agents first-class users.
 
 The `users` table carries an explicit account kind:
 
-- `user_kind = "human" | "agent"`
+- `user_kind = "human" | "agent"` (`NOT NULL`, default `human`)
 - `users.type` remains `User | Organization`
-- Anonymous is deprecated; `is_anonymous` is no longer authoritative
+- Anonymous HTTP requests are represented by request context, not durable
+  account rows
 
 Login uniqueness remains the identity anchor.
 

@@ -24,10 +24,6 @@ const connectedLoginVerifierCookieName = "connected_login_verifier"
 // Handler holds the service dependency for OAuth endpoints.
 type Handler struct {
 	Svc *service.Service
-
-	// PreapproveDeviceCodes restores the legacy local-dev behavior that auto-
-	// approves device codes without an explicit browser confirmation step.
-	PreapproveDeviceCodes bool
 }
 
 var pkceS256ChallengePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43,128}$`)
@@ -64,20 +60,6 @@ func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
 
 	// Audit log the creation
 	h.Svc.LogDeviceCodeAudit(r.Context(), code.ID, code.DeviceCode, "created", 0, "", r.RemoteAddr)
-	if h.PreapproveDeviceCodes {
-		adminUser, err := h.Svc.GetActiveSiteAdmin(r.Context())
-		if err != nil {
-			slog.Error("failed to preapprove device code", "error", err)
-			respond.Error(w, 500, "failed to create device code")
-			return
-		}
-		if _, err := h.Svc.ApproveDeviceCode(r.Context(), code.DeviceCode, adminUser.ID, adminUser.Login); err != nil {
-			slog.Error("failed to preapprove device code", "error", err)
-			respond.Error(w, 500, "failed to create device code")
-			return
-		}
-	}
-
 	base := r.Header.Get("X-Forwarded-Proto")
 	scheme := "http"
 	if base != "" {

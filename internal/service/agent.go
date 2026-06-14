@@ -98,11 +98,10 @@ func (s *Service) RegisterAgent(ctx context.Context, prefixLogin, defaultRepoNam
 		login := prefix + "-" + randutil.Hex(agentSuffixLen)
 		err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 			u := db.User{
-				Login:       login,
-				Name:        login,
-				Type:        db.TypeUser,
-				UserKind:    db.UserKindAgent,
-				IsAnonymous: false,
+				Login:    login,
+				Name:     login,
+				Type:     db.TypeUser,
+				UserKind: db.UserKindAgent,
 			}
 			if err := tx.Create(&u).Error; err != nil {
 				if isDuplicateErr(err) {

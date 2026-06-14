@@ -245,6 +245,9 @@ func Migrate(database *gorm.DB) error {
 	if err := MigrateWikiSlugColumnsBeforeAutoMigrate(database); err != nil {
 		return err
 	}
+	if err := backfillEmptyUserKind(database); err != nil {
+		return err
+	}
 	if err := database.AutoMigrate(
 		&User{},
 		&OrganizationMember{},
@@ -336,7 +339,7 @@ func Migrate(database *gorm.DB) error {
 	if err := MigrateIssueCommentThreadingColumns(database); err != nil {
 		return err
 	}
-	// Backfill user_kind and clear legacy anonymous flags.
+	// Backfill empty user_kind values.
 	if err := MigrateUserKind(database); err != nil {
 		return err
 	}

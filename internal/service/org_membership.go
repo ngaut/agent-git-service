@@ -22,6 +22,10 @@ type OrganizationMembershipView struct {
 
 const organizationMembershipRoleValidationError = "role must be member or admin"
 
+func isHumanUser(user db.User) bool {
+	return user.Type == db.TypeUser && (user.UserKind == "" || user.UserKind == db.UserKindHuman)
+}
+
 func normalizeOrganizationRole(role string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "", db.OrganizationRoleMember:
@@ -258,7 +262,7 @@ func (s *Service) SetOrgMembership(ctx context.Context, orgID uint, username, ro
 	if err != nil {
 		return OrganizationMembershipView{}, err
 	}
-	if user.Type != db.TypeUser || user.IsAnonymous {
+	if !isHumanUser(user) {
 		return OrganizationMembershipView{}, ErrNotFound
 	}
 
@@ -366,7 +370,7 @@ func (s *Service) GetOrgMembership(ctx context.Context, orgID uint, username str
 	if err != nil {
 		return OrganizationMembershipView{}, err
 	}
-	if user.Type != db.TypeUser || user.IsAnonymous {
+	if !isHumanUser(user) {
 		return OrganizationMembershipView{}, ErrNotFound
 	}
 
@@ -407,7 +411,7 @@ func (s *Service) RemoveOrgMember(ctx context.Context, orgID uint, username stri
 	if err != nil {
 		return err
 	}
-	if user.Type != db.TypeUser || user.IsAnonymous {
+	if !isHumanUser(user) {
 		return ErrNotFound
 	}
 
@@ -436,7 +440,7 @@ func (s *Service) RemoveOrgMembership(ctx context.Context, orgID uint, username 
 	if err != nil {
 		return err
 	}
-	if user.Type != db.TypeUser || user.IsAnonymous {
+	if !isHumanUser(user) {
 		return ErrNotFound
 	}
 

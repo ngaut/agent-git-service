@@ -129,7 +129,7 @@ func (s *Service) EnsureOrg(ctx context.Context, login string) (db.User, error) 
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
-			u = db.User{Login: login, Name: login, Type: db.TypeOrganization}
+			u = db.User{Login: login, Name: login, Type: db.TypeOrganization, UserKind: db.UserKindHuman}
 			if err := tx.Create(&u).Error; err != nil {
 				// Handle race: another goroutine may have created it between First and Create.
 				if tx.First(&u, "login = ?", login).Error == nil {
@@ -178,6 +178,7 @@ func (s *Service) CreateOrg(ctx context.Context, login, name, defaultRepositoryP
 			Login:                       login,
 			Name:                        name,
 			Type:                        db.TypeOrganization,
+			UserKind:                    db.UserKindHuman,
 			DefaultRepositoryPermission: defaultRepositoryPermission,
 		}
 		if err := tx.Create(&org).Error; err != nil {
@@ -263,22 +264,6 @@ func (s *Service) GetCurrentUser(ctx context.Context) (db.User, error) {
 	var u db.User
 	err := s.DBForCtx(ctx).First(&u, "type = ? AND site_admin = ?", db.TypeUser, true).Error
 	return u, err
-}
-
-// GetActiveSiteAdmin returns the first site admin user eligible for legacy
-// local-dev OAuth flows.
-func (s *Service) GetActiveSiteAdmin(ctx context.Context) (db.User, error) {
-	var u db.User
-	if err := s.DBForCtx(ctx).
-		Where("type = ? AND site_admin = ?", db.TypeUser, true).
-		Order("id ASC").
-		First(&u).Error; err != nil {
-		return db.User{}, wrapErr(err)
-	}
-	if !isUserStatusActive(u.Status) {
-		return db.User{}, ErrForbidden
-	}
-	return u, nil
 }
 
 // ListOrgs returns all organisation-type users that the authenticated user belongs to.
