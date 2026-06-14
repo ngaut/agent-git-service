@@ -80,11 +80,14 @@ func buildTextWhere(ctx textWhereContext, inValues []string, text string) (strin
 	bodyField := ctx.bodyField
 	repoField := ctx.repoField
 	numberField := ctx.numberField
+	likeExpr := func(field string) string {
+		return "LOWER(" + field + ") LIKE LOWER(?)"
+	}
 
 	searchTitle, searchBody, searchComments := resolveTextSearchTargets(inValues)
 
 	// Helper for comments subquery: matches comments by (repository_id, issue_number)
-	commentSubquery := "EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = " + repoField + " AND issue_number = " + numberField + " AND body LIKE ?)"
+	commentSubquery := "EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = " + repoField + " AND issue_number = " + numberField + " AND " + likeExpr("issue_comments.body") + ")"
 
 	// If only comments, search issue_comments.body via subquery
 	if searchComments && !searchTitle && !searchBody {
@@ -93,32 +96,32 @@ func buildTextWhere(ctx textWhereContext, inValues []string, text string) (strin
 
 	// If comments + title (but not body), search title OR comments
 	if searchComments && searchTitle && !searchBody {
-		return "(" + titleField + " LIKE ? OR " + commentSubquery + ")", []any{text, text}
+		return "(" + likeExpr(titleField) + " OR " + commentSubquery + ")", []any{text, text}
 	}
 
 	// If comments + body (but not title), search body OR comments
 	if searchComments && searchBody && !searchTitle {
-		return "(" + bodyField + " LIKE ? OR " + commentSubquery + ")", []any{text, text}
+		return "(" + likeExpr(bodyField) + " OR " + commentSubquery + ")", []any{text, text}
 	}
 
 	// If all three (title, body, comments) or title+body, search all
 	if searchTitle && searchBody && searchComments {
-		return "(" + titleField + " LIKE ? OR " + bodyField + " LIKE ? OR " + commentSubquery + ")", []any{text, text, text}
+		return "(" + likeExpr(titleField) + " OR " + likeExpr(bodyField) + " OR " + commentSubquery + ")", []any{text, text, text}
 	}
 
 	// Fallback to title/body only (no comments)
 	if searchTitle && searchBody {
-		return "(" + titleField + " LIKE ? OR " + bodyField + " LIKE ?)", []any{text, text}
+		return "(" + likeExpr(titleField) + " OR " + likeExpr(bodyField) + ")", []any{text, text}
 	}
 	if searchTitle {
-		return titleField + " LIKE ?", []any{text}
+		return likeExpr(titleField), []any{text}
 	}
 	if searchBody {
-		return bodyField + " LIKE ?", []any{text}
+		return likeExpr(bodyField), []any{text}
 	}
 
 	// Fallback to default if no valid in: values
-	return "(" + titleField + " LIKE ? OR " + bodyField + " LIKE ?)", []any{text, text}
+	return "(" + likeExpr(titleField) + " OR " + likeExpr(bodyField) + ")", []any{text, text}
 }
 
 func applyTextTokens(q *gorm.DB, freeText []string, buildWhere func(string) (string, []any)) *gorm.DB {
@@ -407,9 +410,6 @@ func issueInteractionCountExpr(tableName string) string {
 }
 
 func contentIDExpr(baseDB *gorm.DB, prefix, idExpr string) string {
-	if baseDB != nil && baseDB.Dialector.Name() == "sqlite" {
-		return fmt.Sprintf("'%s' || CAST(%s AS TEXT)", prefix, idExpr)
-	}
 	return fmt.Sprintf("CONCAT('%s', %s)", prefix, idExpr)
 }
 
@@ -537,9 +537,6 @@ func normalizeTeamSlug(raw string) string {
 }
 
 func assigneeListMatchExpr(baseDB *gorm.DB, tableName, loginExpr string) string {
-	if baseDB != nil && baseDB.Dialector.Name() == "sqlite" {
-		return "(',' || COALESCE(" + tableName + ".assignee_logins, '') || ',') LIKE ('%,' || " + loginExpr + " || ',%')"
-	}
 	return "CONCAT(',', COALESCE(" + tableName + ".assignee_logins, ''), ',') LIKE CONCAT('%,', " + loginExpr + ", ',%')"
 }
 

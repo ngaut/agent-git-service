@@ -120,7 +120,7 @@ func (s *Service) RegisterAgent(ctx context.Context, prefixLogin, defaultRepoNam
 		if err == nil {
 			break
 		}
-		if errors.Is(err, ErrConflict) || isSQLiteLockErr(err) {
+		if errors.Is(err, ErrConflict) {
 			time.Sleep(retryDelay(attempt))
 			continue
 		}

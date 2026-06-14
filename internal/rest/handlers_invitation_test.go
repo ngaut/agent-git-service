@@ -2,8 +2,10 @@ package rest_test
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/testharness"
@@ -80,7 +82,7 @@ func TestInvitationHandlers(t *testing.T) {
 			t.Fatalf("failed to create invitee token: %v", err)
 		}
 
-		w := h.DoRESTWithToken(t, "PATCH", "/api/v3/user/repository_invitations/1", inviteeToken)
+		w := h.DoRESTWithToken(t, "PATCH", "/api/v3/user/repository_invitations/"+strconv.FormatUint(uint64(inv.ID), 10), inviteeToken)
 		assertStatusCode(t, w, http.StatusNoContent)
 
 		// Verify invitation was deleted
@@ -165,7 +167,7 @@ func TestInvitationHandlers(t *testing.T) {
 			t.Fatalf("failed to create invitee token: %v", err)
 		}
 
-		w := h.DoRESTWithToken(t, "DELETE", "/api/v3/user/repository_invitations/1", inviteeToken)
+		w := h.DoRESTWithToken(t, "DELETE", "/api/v3/user/repository_invitations/"+strconv.FormatUint(uint64(inv.ID), 10), inviteeToken)
 		assertStatusCode(t, w, http.StatusNoContent)
 
 		// Verify invitation was deleted
@@ -256,6 +258,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/triagetest")
 
 		user := db.User{Login: "triageuser", Name: "Triage User", Type: db.TypeUser}
 		if err := h.Svc.DB.Create(&user).Error; err != nil {
@@ -271,7 +274,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			t.Fatalf("expected permissions 'read', got %v", body["permissions"])
 		}
 
-		invs, err := h.Svc.ListRepoInvitations(h.Svc.Ctx, 1)
+		invs, err := h.Svc.ListRepoInvitations(h.Svc.Ctx, repoID)
 		if err != nil {
 			t.Fatalf("list invitations: %v", err)
 		}
@@ -311,6 +314,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/alreadytest")
 
 		// Create user to add as collaborator
 		collabUser := db.User{Login: "collabuser", Name: "Collab User", Type: db.TypeUser}
@@ -318,7 +322,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			t.Fatalf("failed to create collaborator: %v", err)
 		}
 
-		if err := h.Svc.AddCollaborator(ctx, 1, collabUser.ID, "read"); err != nil {
+		if err := h.Svc.AddCollaborator(ctx, repoID, collabUser.ID, "read"); err != nil {
 			t.Fatalf("seed collaborator: %v", err)
 		}
 
@@ -327,7 +331,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 		})
 		assertStatusCode(t, w, http.StatusNoContent)
 
-		isCollab, err := h.Svc.IsCollaborator(ctx, 1, collabUser.ID)
+		isCollab, err := h.Svc.IsCollaborator(ctx, repoID, collabUser.ID)
 		if err != nil {
 			t.Fatalf("IsCollaborator failed: %v", err)
 		}
@@ -336,7 +340,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 		}
 
 		var collab db.Collaborator
-		if err := h.Svc.DB.First(&collab, "repository_id = ? AND user_id = ?", 1, collabUser.ID).Error; err != nil {
+		if err := h.Svc.DB.First(&collab, "repository_id = ? AND user_id = ?", repoID, collabUser.ID).Error; err != nil {
 			t.Fatalf("failed to load collaborator: %v", err)
 		}
 		if collab.Permission != "write" {
@@ -345,7 +349,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 
 		var invitationCount int64
 		if err := h.Svc.DB.Model(&db.RepositoryInvitation{}).
-			Where("repository_id = ? AND invitee_id = ?", 1, collabUser.ID).
+			Where("repository_id = ? AND invitee_id = ?", repoID, collabUser.ID).
 			Count(&invitationCount).Error; err != nil {
 			t.Fatalf("count invitations: %v", err)
 		}
@@ -364,6 +368,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/addcollabtest")
 
 		// Create user to add
 		newCollab := db.User{Login: "newcollab", Name: "New Collab", Type: db.TypeUser}
@@ -422,7 +427,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 		}
 
 		// Verify invitation was created in DB
-		invs, err := h.Svc.ListRepoInvitations(ctx, 1)
+		invs, err := h.Svc.ListRepoInvitations(ctx, repoID)
 		if err != nil {
 			t.Fatalf("ListRepoInvitations failed: %v", err)
 		}
@@ -446,6 +451,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/reinvitependingtest")
 
 		invitee := db.User{Login: "pendinginvitee", Name: "Pending Invitee", Type: db.TypeUser}
 		if err := h.Svc.DB.Create(&invitee).Error; err != nil {
@@ -472,14 +478,22 @@ func TestCollaboratorHandlers(t *testing.T) {
 		if secondBody["id"] != firstID {
 			t.Fatalf("expected invitation ID %v to be preserved, got %v", firstID, secondBody["id"])
 		}
-		if secondCreatedAt != firstCreatedAt {
+		firstCreatedAtTime, err := time.Parse(time.RFC3339, firstCreatedAt)
+		if err != nil {
+			t.Fatalf("parse first created_at %q: %v", firstCreatedAt, err)
+		}
+		secondCreatedAtTime, err := time.Parse(time.RFC3339, secondCreatedAt)
+		if err != nil {
+			t.Fatalf("parse second created_at %q: %v", secondCreatedAt, err)
+		}
+		if !secondCreatedAtTime.Equal(firstCreatedAtTime) {
 			t.Fatalf("expected created_at %q to be preserved, got %q", firstCreatedAt, secondCreatedAt)
 		}
 		if secondBody["permissions"] != "write" {
 			t.Fatalf("expected permissions 'write', got %v", secondBody["permissions"])
 		}
 
-		invs, err := h.Svc.ListRepoInvitations(ctx, 1)
+		invs, err := h.Svc.ListRepoInvitations(ctx, repoID)
 		if err != nil {
 			t.Fatalf("ListRepoInvitations failed: %v", err)
 		}
@@ -504,6 +518,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/defaultpermtest")
 
 		// Create user
 		user := db.User{Login: "defaultuser", Name: "Default User", Type: db.TypeUser}
@@ -521,7 +536,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 		}
 
 		// Verify in DB
-		invs, err := h.Svc.ListRepoInvitations(ctx, 1)
+		invs, err := h.Svc.ListRepoInvitations(ctx, repoID)
 		if err != nil {
 			t.Fatalf("ListRepoInvitations failed: %v", err)
 		}
@@ -542,6 +557,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/invalidcollabbody")
 
 		user := db.User{Login: "invalidjsonuser", Name: "Invalid JSON User", Type: db.TypeUser}
 		if err := h.Svc.DB.Create(&user).Error; err != nil {
@@ -555,7 +571,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			t.Fatalf("expected invalid body message, got %v", body["message"])
 		}
 
-		invs, err := h.Svc.ListRepoInvitations(ctx, 1)
+		invs, err := h.Svc.ListRepoInvitations(ctx, repoID)
 		if err != nil {
 			t.Fatalf("ListRepoInvitations failed: %v", err)
 		}
@@ -596,6 +612,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/removecollabtest")
 
 		// Create user and add as collaborator
 		collabUser := db.User{Login: "removecollab", Name: "Remove Collab", Type: db.TypeUser}
@@ -603,12 +620,12 @@ func TestCollaboratorHandlers(t *testing.T) {
 			t.Fatalf("failed to create collaborator: %v", err)
 		}
 
-		if err := h.Svc.AddCollaborator(ctx, 1, collabUser.ID, "write"); err != nil {
+		if err := h.Svc.AddCollaborator(ctx, repoID, collabUser.ID, "write"); err != nil {
 			t.Fatalf("seed collaborator: %v", err)
 		}
 
 		// Verify collaborator exists
-		isCollab, err := h.Svc.IsCollaborator(ctx, 1, collabUser.ID)
+		isCollab, err := h.Svc.IsCollaborator(ctx, repoID, collabUser.ID)
 		if err != nil {
 			t.Fatalf("IsCollaborator failed: %v", err)
 		}
@@ -621,7 +638,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 		assertStatusCode(t, w, http.StatusNoContent)
 
 		// Verify collaborator was removed
-		isCollab, err = h.Svc.IsCollaborator(ctx, 1, collabUser.ID)
+		isCollab, err = h.Svc.IsCollaborator(ctx, repoID, collabUser.ID)
 		if err != nil {
 			t.Fatalf("IsCollaborator failed: %v", err)
 		}
@@ -639,12 +656,13 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/removeadminonlytest")
 
 		collabUser := db.User{Login: "admincheck", Name: "Admin Check", Type: db.TypeUser}
 		if err := h.Svc.DB.Create(&collabUser).Error; err != nil {
 			t.Fatalf("failed to create collaborator: %v", err)
 		}
-		if err := h.Svc.AddCollaborator(ctx, 1, collabUser.ID, "write"); err != nil {
+		if err := h.Svc.AddCollaborator(ctx, repoID, collabUser.ID, "write"); err != nil {
 			t.Fatalf("seed collaborator: %v", err)
 		}
 		_, outsiderToken := seedHarnessUser(t, h, "remove-outsider", false)
@@ -652,7 +670,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 		w = h.DoRESTWithToken(t, "DELETE", "/api/v3/repos/testuser/removeadminonlytest/collaborators/admincheck", outsiderToken)
 		assertStatusCode(t, w, http.StatusNotFound)
 
-		isCollab, err := h.Svc.IsCollaborator(ctx, 1, collabUser.ID)
+		isCollab, err := h.Svc.IsCollaborator(ctx, repoID, collabUser.ID)
 		if err != nil {
 			t.Fatalf("IsCollaborator failed: %v", err)
 		}
@@ -669,13 +687,14 @@ func TestCollaboratorHandlers(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/removependingtest")
 
 		user := db.User{Login: "pendinginvitee", Name: "Pending Invitee", Type: db.TypeUser}
 		if err := h.Svc.DB.Create(&user).Error; err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
 		inv := db.RepositoryInvitation{
-			RepositoryID: 1,
+			RepositoryID: repoID,
 			InviteeID:    user.ID,
 			InviterID:    h.User.ID,
 			Permissions:  "write",
@@ -689,7 +708,7 @@ func TestCollaboratorHandlers(t *testing.T) {
 
 		var invitationCount int64
 		if err := h.Svc.DB.Model(&db.RepositoryInvitation{}).
-			Where("repository_id = ? AND invitee_id = ?", 1, user.ID).
+			Where("repository_id = ? AND invitee_id = ?", repoID, user.ID).
 			Count(&invitationCount).Error; err != nil {
 			t.Fatalf("count invitations: %v", err)
 		}
@@ -771,13 +790,14 @@ func TestGetRepoInvitations(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/invsadmintest")
 
 		invitee := db.User{Login: "invited-admin-test", Name: "Invited Admin Test", Type: db.TypeUser}
 		if err := h.Svc.DB.Create(&invitee).Error; err != nil {
 			t.Fatalf("failed to create invitee: %v", err)
 		}
 		inv := db.RepositoryInvitation{
-			RepositoryID: 1,
+			RepositoryID: repoID,
 			InviteeID:    invitee.ID,
 			InviterID:    h.User.ID,
 			Permissions:  "read",
@@ -800,6 +820,7 @@ func TestGetRepoInvitations(t *testing.T) {
 			"auto_init": true,
 		})
 		assertStatusCode(t, w, http.StatusCreated)
+		repoID := mustHarnessRepoID(t, h, "testuser/invslisttest")
 
 		// Create users
 		user1 := db.User{Login: "invuser1", Name: "Inv User 1", Type: db.TypeUser}
@@ -813,13 +834,13 @@ func TestGetRepoInvitations(t *testing.T) {
 
 		// Create invitations
 		inv1 := db.RepositoryInvitation{
-			RepositoryID: 1,
+			RepositoryID: repoID,
 			InviteeID:    user1.ID,
 			InviterID:    h.User.ID,
 			Permissions:  "read",
 		}
 		inv2 := db.RepositoryInvitation{
-			RepositoryID: 1,
+			RepositoryID: repoID,
 			InviteeID:    user2.ID,
 			InviterID:    h.User.ID,
 			Permissions:  "write",
@@ -928,4 +949,13 @@ func TestListUserInvitations(t *testing.T) {
 			t.Fatalf("expected permissions 'admin', got %v", item["permissions"])
 		}
 	})
+}
+
+func mustHarnessRepoID(t *testing.T, h *testharness.Harness, fullName string) uint {
+	t.Helper()
+	var repo db.Repository
+	if err := h.Svc.DB.First(&repo, "full_name = ?", fullName).Error; err != nil {
+		t.Fatalf("load repo %s: %v", fullName, err)
+	}
+	return repo.ID
 }

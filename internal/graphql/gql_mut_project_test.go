@@ -380,6 +380,10 @@ func TestGraphQL_ProjectV2_BoardLifecycle(t *testing.T) {
 	projGQL := createResult["projectV2"].(map[string]any)
 	projNodeID := projGQL["id"].(string)
 	projNumber := projGQL["number"].(float64)
+	var proj db.Project
+	if err := svc.DB.First(&proj, "owner_login = ? AND number = ?", u.Login, int32(projNumber)).Error; err != nil {
+		t.Fatalf("load created project: %v", err)
+	}
 
 	if projGQL["title"] != "Sprint Board" {
 		t.Errorf("project title: got %v, want 'Sprint Board'", projGQL["title"])
@@ -387,7 +391,7 @@ func TestGraphQL_ProjectV2_BoardLifecycle(t *testing.T) {
 
 	// Step 2: Add a Status field to the project.
 	fieldStatus := &db.ProjectField{
-		ProjectID: uint(projNumber),
+		ProjectID: proj.ID,
 		Name:      "Status",
 		DataType:  "SINGLE_SELECT",
 		Options:   `[{"id":"opt-todo","name":"Todo"},{"id":"opt-inprogress","name":"In Progress"},{"id":"opt-done","name":"Done"}]`,
@@ -442,6 +446,13 @@ func TestGraphQL_ProjectV2_BoardLifecycle(t *testing.T) {
 	if item["type"] != "ISSUE" {
 		t.Errorf("item type: got %v, want ISSUE", item["type"])
 	}
+	var projectItem db.ProjectItem
+	if err := svc.DB.First(&projectItem, "project_id = ? AND content_id = ? AND type = ?", proj.ID, issueNodeID, "ISSUE").Error; err != nil {
+		t.Fatalf("load project item: %v", err)
+	}
+	if want := fmt.Sprintf("ProjectItem_%d", projectItem.ID); itemID != want {
+		t.Fatalf("project item id: got %q, want %q", itemID, want)
+	}
 
 	// Step 5: Move the item to "Todo" status.
 	updateToTodo := `
@@ -468,7 +479,7 @@ func TestGraphQL_ProjectV2_BoardLifecycle(t *testing.T) {
 	}
 
 	// Verify DB state after setting status to "opt-todo".
-	todoItemDB, err := svc.GetProjectItem(ctx, issue.ID)
+	todoItemDB, err := svc.GetProjectItem(ctx, projectItem.ID)
 	if err != nil {
 		t.Fatalf("GetProjectItem after todo status: %v", err)
 	}
@@ -493,7 +504,7 @@ func TestGraphQL_ProjectV2_BoardLifecycle(t *testing.T) {
 	}
 
 	// Verify DB state after setting status to "opt-inprogress".
-	inProgressItemDB, err := svc.GetProjectItem(ctx, issue.ID)
+	inProgressItemDB, err := svc.GetProjectItem(ctx, projectItem.ID)
 	if err != nil {
 		t.Fatalf("GetProjectItem after in-progress status: %v", err)
 	}
@@ -518,7 +529,7 @@ func TestGraphQL_ProjectV2_BoardLifecycle(t *testing.T) {
 	}
 
 	// Verify DB state after setting status to "opt-done".
-	doneItemDB, err := svc.GetProjectItem(ctx, issue.ID)
+	doneItemDB, err := svc.GetProjectItem(ctx, projectItem.ID)
 	if err != nil {
 		t.Fatalf("GetProjectItem after done status: %v", err)
 	}

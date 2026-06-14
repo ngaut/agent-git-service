@@ -146,7 +146,7 @@ attemptLoop:
 		if err == nil {
 			return out, nil
 		}
-		if errors.Is(err, ErrConflict) || isSQLiteLockErr(err) {
+		if errors.Is(err, ErrConflict) {
 			time.Sleep(retryDelay(attempt))
 			continue attemptLoop
 		}

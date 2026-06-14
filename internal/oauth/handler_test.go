@@ -5,14 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,9 +18,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/oauth"
 	"github.com/ngaut/agent-git-service/internal/service"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 // assertHex checks that s is exactly n characters of lowercase hex [0-9a-f].
@@ -36,15 +32,10 @@ func assertHex(t *testing.T, name, s string, n int) {
 	}
 }
 
-var testDBCounter atomic.Int64
-
 func setupTestService(t *testing.T) *service.Service {
 	t.Helper()
-	dsn := fmt.Sprintf("file:oauth_test_%d?mode=memory&cache=shared", testDBCounter.Add(1))
-	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open db: %v", err)
-	}
+	gdb, cleanup := testdb.OpenRaw(t, "oauth")
+	t.Cleanup(cleanup)
 	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}, &db.DeviceCodeAuditLog{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}

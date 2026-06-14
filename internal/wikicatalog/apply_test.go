@@ -3,33 +3,59 @@ package wikicatalog
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
-// applyTestEnv wires together a Catalog backed by an in-memory
-// SQLite database and a temp-dir BlobStore. Returns the catalog plus
-// a seeded repository id.
+var wikicatalogSchemaTemplate struct {
+	once sync.Once
+	pool *testdb.SchemaPool
+	err  error
+}
+
+func wikicatalogTemplatePool(tb testing.TB) *testdb.SchemaPool {
+	tb.Helper()
+	wikicatalogSchemaTemplate.once.Do(func() {
+		gdb, cleanup := testdb.OpenRaw(tb, "wikicatalog_template")
+		_ = cleanup
+		var templateDB string
+		if err := gdb.Raw("SELECT DATABASE()").Scan(&templateDB).Error; err != nil {
+			wikicatalogSchemaTemplate.err = err
+			return
+		}
+		if err := db.Migrate(gdb); err != nil {
+			wikicatalogSchemaTemplate.err = err
+			return
+		}
+		wikicatalogSchemaTemplate.pool = &testdb.SchemaPool{
+			TemplateDB: templateDB,
+			Prefix:     "wikicatalog",
+		}
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if wikicatalogSchemaTemplate.err != nil {
+		tb.Fatalf("prepare wikicatalog schema template: %v", wikicatalogSchemaTemplate.err)
+	}
+	if wikicatalogSchemaTemplate.pool == nil {
+		tb.Fatal("wikicatalog schema pool was not initialized")
+	}
+	return wikicatalogSchemaTemplate.pool
+}
+
+// applyTestEnv wires together a Catalog backed by TiDB and a temp-dir
+// BlobStore. Returns the catalog plus a seeded repository id.
 func applyTestEnv(t *testing.T) (*Catalog, uint, *gorm.DB) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "catalog.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
-	if err := db.Migrate(gdb); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	gdb, cleanup := wikicatalogTemplatePool(t).Open(t)
+	t.Cleanup(cleanup)
 	user := db.User{Login: "alice", Type: "User", Email: "a@example.com"}
 	if err := gdb.Create(&user).Error; err != nil {
 		t.Fatalf("seed user: %v", err)
@@ -998,7 +1024,11 @@ func TestApplyChangeSet_MultiRepoIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed a second repo under the same user.
-	repo2 := db.Repository{OwnerID: 1, Name: "wiki2", FullName: "alice/wiki2", DefaultBranch: "main"}
+	var repo1 db.Repository
+	if err := gdb.First(&repo1, repoA).Error; err != nil {
+		t.Fatalf("read repo1: %v", err)
+	}
+	repo2 := db.Repository{OwnerID: repo1.OwnerID, Name: "wiki2", FullName: "alice/wiki2", DefaultBranch: "main"}
 	if err := gdb.Create(&repo2).Error; err != nil {
 		t.Fatalf("seed repo2: %v", err)
 	}
@@ -1058,12 +1088,11 @@ func TestApplyChangeSet_MultiRepoIsolation(t *testing.T) {
 // We simulate the perpetual racer by inserting a Catalog test hook
 // (forceCASLoss) that flips casLost=true unconditionally on every
 // applyOnce attempt. This isolates the retry-budget logic from
-// dialect-specific concurrency semantics — SQLite's WAL would
-// serialize an external racer behind the catalog's transaction, so
-// the only reliable way to test the loop is to drive the lost-CAS
-// signal directly. The retry-and-succeed path is symmetric: any
-// attempt where forceCASLoss is off behaves like a normal write,
-// already covered by every other ApplyChangeSet test in this file.
+// dialect-specific concurrency semantics, so the most reliable way to test
+// the loop is to drive the lost-CAS signal directly. The retry-and-succeed
+// path is symmetric: any attempt where forceCASLoss is off behaves like a
+// normal write, already covered by every other ApplyChangeSet test in this
+// file.
 func TestApplyChangeSet_OCCRetryExhausted(t *testing.T) {
 	cat, repoID, _ := applyTestEnv(t)
 	ctx := context.Background()

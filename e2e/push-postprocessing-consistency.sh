@@ -9,7 +9,7 @@ BASE_URL=""
 SERVER_PORT=""
 ADMIN_LOGIN=""
 ADMIN_TOKEN=""
-SQLITE_DB=""
+TIDB_DB_NAME=""
 DB_DSN=""
 GIT_REPO_DIR=""
 WORK_DIR=""
@@ -89,23 +89,6 @@ wait_for() {
 repo_path() {
   local full_name="$1"
   echo "$GIT_REPO_DIR/$full_name.git"
-}
-
-sqlite_exec() {
-  local sql="$1"
-  SQLITE_DB="$SQLITE_DB" SQLITE_SQL="$sql" python3 - <<'PY'
-import os
-import sqlite3
-
-db_path = os.environ["SQLITE_DB"]
-sql = os.environ["SQLITE_SQL"]
-conn = sqlite3.connect(db_path, timeout=5)
-try:
-    conn.executescript(sql)
-    conn.commit()
-finally:
-    conn.close()
-PY
 }
 
 start_server() {
@@ -323,26 +306,6 @@ readyz_ok() {
   [[ "$status" == "ready" ]]
 }
 
-inject_workflow_insert_failure() {
-  local repo_id="$1"
-  local trigger_sql
-  trigger_sql=$(cat <<SQL
-DROP TRIGGER IF EXISTS e2e_workflow_insert_fail;
-CREATE TRIGGER e2e_workflow_insert_fail
-BEFORE INSERT ON workflows
-WHEN NEW.repository_id = $repo_id
-BEGIN
-  SELECT RAISE(FAIL, 'e2e workflow insert failure');
-END;
-SQL
-)
-  sqlite_exec "$trigger_sql"
-}
-
-clear_workflow_insert_failure() {
-  sqlite_exec "DROP TRIGGER IF EXISTS e2e_workflow_insert_fail;"
-}
-
 test_success_postprocessing() {
   local test_name="postprocessing-success"
   note "--- Success case: push workflows and sync ---"
@@ -542,82 +505,6 @@ test_workflow_sync_cleanup_after_push() {
   record_result "$test_name" "PASS" "rename/delete cleanup and stale dispatch rejection verified"
 }
 
-test_failure_postprocessing() {
-  local test_name="postprocessing-failure"
-  note "--- Failure case: inject workflow sync error ---"
-
-  local repo_name="pp-failure-$RANDOM_SUFFIX"
-  local repo_json
-  if ! repo_json="$(create_repo "$repo_name")"; then
-    record_result "$test_name" "FAIL" "repo creation failed"
-    return
-  fi
-
-  local repo_full repo_id
-  repo_full="$(jq -r '.full_name // empty' <<<"$repo_json")"
-  repo_id="$(jq -r '.id // empty' <<<"$repo_json")"
-  if [[ -z "$repo_full" || -z "$repo_id" || "$repo_id" == "null" ]]; then
-    record_result "$test_name" "FAIL" "missing repo identifiers"
-    return
-  fi
-
-  if ! inject_workflow_insert_failure "$repo_id"; then
-    record_result "$test_name" "FAIL" "failed to inject workflow insert fault"
-    return
-  fi
-
-  local repo_dir="$WORK_DIR/$repo_name"
-  local workflow_file="ci-failure.yml"
-  local workflow_name="CI Failure"
-  prepare_local_repo "$repo_dir" "master" "$workflow_name" "$workflow_file"
-  git -C "$repo_dir" remote add origin "$BASE_URL/$repo_full.git"
-
-  if ! git_push_with_auth "$repo_dir" "master"; then
-    clear_workflow_insert_failure || true
-    record_result "$test_name" "FAIL" "git push failed"
-    return
-  fi
-
-  local commit_sha
-  commit_sha="$(git -C "$repo_dir" rev-parse HEAD)"
-
-  local bare_repo
-  bare_repo="$(repo_path "$repo_full")"
-  if ! wait_for 10 0.2 check_head_ref "$bare_repo" "refs/heads/master"; then
-    clear_workflow_insert_failure || true
-    record_result "$test_name" "FAIL" "HEAD did not update after failure"
-    return
-  fi
-
-  local ref_sha
-  if ! ref_sha="$(fetch_ref_sha "$repo_full" "master")"; then
-    clear_workflow_insert_failure || true
-    record_result "$test_name" "FAIL" "failed to resolve ref via API"
-    return
-  fi
-  if [[ "$ref_sha" != "$commit_sha" ]]; then
-    clear_workflow_insert_failure || true
-    record_result "$test_name" "FAIL" "ref sha mismatch (api=$ref_sha local=$commit_sha)"
-    return
-  fi
-
-  local workflow_path=".github/workflows/$workflow_file"
-  if wait_for 5 0.5 workflow_present "$repo_full" "$workflow_path" "$workflow_name"; then
-    clear_workflow_insert_failure || true
-    record_result "$test_name" "FAIL" "workflow synced despite injected failure"
-    return
-  fi
-
-  if ! readyz_ok; then
-    clear_workflow_insert_failure || true
-    record_result "$test_name" "FAIL" "server not healthy after workflow sync failure"
-    return
-  fi
-
-  clear_workflow_insert_failure || true
-  record_result "$test_name" "PASS" "refs ok; workflow failure contained; server healthy"
-}
-
 cleanup() {
   note "Cleaning up..."
   if [[ -n "${SERVER_PID:-}" ]]; then
@@ -630,9 +517,7 @@ cleanup() {
   if [[ -n "${GIT_REPO_DIR:-}" && -d "$GIT_REPO_DIR" ]]; then
     rm -rf "$GIT_REPO_DIR"
   fi
-  if [[ -n "${SQLITE_DB:-}" && -f "$SQLITE_DB" ]]; then
-    rm -f "$SQLITE_DB"
-  fi
+  tidb_drop_database "$TIDB_DB_NAME"
 }
 trap cleanup EXIT
 
@@ -645,6 +530,7 @@ setup() {
   require_cmd jq
   require_cmd git
   require_cmd make
+  require_cmd mysql
   require_cmd python3
 
   RANDOM_SUFFIX="$(date +%s)-$RANDOM"
@@ -652,13 +538,14 @@ setup() {
   BASE_URL="http://localhost:$SERVER_PORT"
   ADMIN_LOGIN="e2e-admin-$RANDOM_SUFFIX"
   ADMIN_TOKEN="e2e-token-$RANDOM_SUFFIX"
-  SQLITE_DB="/tmp/gh-server-postprocess-e2e-$RANDOM_SUFFIX.db"
-  DB_DSN="sqlite:$SQLITE_DB"
+  TIDB_DB_NAME="postprocess_e2e_${RANDOM_SUFFIX//[^A-Za-z0-9_]/_}"
+  DB_DSN="$(tidb_dsn_for_database "$TIDB_DB_NAME")"
   GIT_REPO_DIR="$(mktemp -d /tmp/gh-server-postprocess-repos.XXXXXX)"
   WORK_DIR="$(mktemp -d /tmp/gh-server-postprocess-work.XXXXXX)"
   LOG_FILE="/tmp/gh-server-postprocess-e2e-$RANDOM_SUFFIX.log"
 
   note "=== Push Post-Processing Consistency E2E ==="
+  tidb_create_database "$TIDB_DB_NAME"
   start_server
 }
 
@@ -666,7 +553,6 @@ setup
 
 test_success_postprocessing
 test_workflow_sync_cleanup_after_push
-test_failure_postprocessing
 
 print_summary
 

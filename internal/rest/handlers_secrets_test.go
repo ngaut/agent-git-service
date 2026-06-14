@@ -7,46 +7,65 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/crypto"
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
+
+var secretSchemaTemplate struct {
+	once sync.Once
+	pool *testdb.SchemaPool
+	err  error
+}
 
 func setupSecretTestService(t *testing.T) (*service.Service, *gorm.DB) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("sqlite busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("sqlite journal_mode: %v", err)
-	}
-	if err := db.Migrate(gdb); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
-
-	sqlDB, err := gdb.DB()
-	if err != nil {
-		t.Fatalf("get sql db: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	gdb, cleanup := secretTemplatePool(t).Open(t)
+	t.Cleanup(cleanup)
 
 	svc := &service.Service{DB: gdb, BaseURL: "http://test.local"}
 	return svc, gdb
+}
+
+func secretTemplatePool(t *testing.T) *testdb.SchemaPool {
+	t.Helper()
+
+	secretSchemaTemplate.once.Do(func() {
+		gdb, cleanup := testdb.OpenRaw(t, "rest_secrets_template")
+		_ = cleanup
+		var templateDB string
+		if err := gdb.Raw("SELECT DATABASE()").Scan(&templateDB).Error; err != nil {
+			secretSchemaTemplate.err = err
+			return
+		}
+		if err := db.Migrate(gdb); err != nil {
+			secretSchemaTemplate.err = err
+			return
+		}
+		secretSchemaTemplate.pool = &testdb.SchemaPool{
+			TemplateDB: templateDB,
+			Prefix:     "rest_secrets",
+		}
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if secretSchemaTemplate.err != nil {
+		t.Fatalf("prepare secret schema template: %v", secretSchemaTemplate.err)
+	}
+	if secretSchemaTemplate.pool == nil {
+		t.Fatal("secret schema pool was not initialized")
+	}
+	return secretSchemaTemplate.pool
 }
 
 func seedUser(t *testing.T, gdb *gorm.DB, login, userType string) db.User {

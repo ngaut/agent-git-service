@@ -1,26 +1,9 @@
 package db
 
-import (
-	"path/filepath"
-	"testing"
+import "testing"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
-)
-
-func TestMigrateTeamOrgSlugIndex_SQLite(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "team-slug-index.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: gormlogger.Discard,
-	})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
-
+func TestMigrateTeamOrgSlugIndex_TiDB(t *testing.T) {
+	gdb := openTiDB(t)
 	if err := gdb.AutoMigrate(&User{}, &Team{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

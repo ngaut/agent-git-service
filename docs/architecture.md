@@ -65,7 +65,7 @@ full-text and vector-backed search behavior.
 | `internal/httputil` | Safe bounded helpers for outbound HTTP clients |
 | `internal/randutil` | Shared random-hex generation utility |
 | `internal/apperrors` | Sentinel application errors and error helpers |
-| `internal/testharness` | Reusable HTTP integration test harness |
+| `internal/testharness` | Reusable HTTP integration test harness (TiDB, real router) |
 | `internal/router` | Chi router registration and middleware wiring |
 | `cli/` | Vendored GitHub CLI plus compatibility tests |
 | `docs/module-contracts.md` | Dependency boundaries, ownership, and accepted couplings |

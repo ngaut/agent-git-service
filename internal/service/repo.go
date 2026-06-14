@@ -444,13 +444,16 @@ func (s *Service) CreateRepo(ctx context.Context, in CreateRepoInput) (db.Reposi
 			"updated_at":             rep.UpdatedAt,
 		}
 		if err := s.DBForCtx(ctx).Model(&db.Repository{}).Create(values).Error; err != nil {
-			if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(err.Error(), "UNIQUE constraint") {
+			if errors.Is(err, gorm.ErrDuplicatedKey) || isDuplicateErr(err) {
 				return db.Repository{}, fmt.Errorf("%w: repository %s already exists", ErrConflict, fullName)
 			}
 			return db.Repository{}, fmt.Errorf("service: create repo: db: %w", err)
 		}
 		if err := s.DBForCtx(ctx).First(&rep, "full_name = ?", fullName).Error; err != nil {
 			return db.Repository{}, fmt.Errorf("service: create repo: reload: %w", err)
+		}
+		if err := ensureIssuePRNumberCounterTx(s.DBForCtx(ctx), rep.ID); err != nil {
+			return db.Repository{}, fmt.Errorf("service: create repo: issue/pr counter: %w", err)
 		}
 		if owner.Type == db.TypeOrganization {
 			if in.SkipOrgBootstrap {
@@ -789,10 +792,8 @@ func (s *Service) deleteRepoCascade(tx *gorm.DB, repoID uint, fullName string) e
 
 	// Lock the repo row to prevent concurrent inserts/updates of FK-bound child rows
 	// during cascade delete (important for TiDB/MySQL FK enforcement).
-	if tx.Dialector.Name() != "sqlite" {
-		if err := del(tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&db.Repository{}, repoID)); err != nil {
-			return err
-		}
+	if err := del(tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&db.Repository{}, repoID)); err != nil {
+		return err
 	}
 
 	// Phase 1: Detach forks.
@@ -949,6 +950,9 @@ func (s *Service) deleteRepoCascade(tx *gorm.DB, repoID uint, fullName string) e
 		return err
 	}
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.Star{})); err != nil {
+		return err
+	}
+	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.IssuePRNumberCounter{})); err != nil {
 		return err
 	}
 	// Remove historical redirects before deleting the repo row itself.

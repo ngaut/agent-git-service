@@ -15,7 +15,7 @@ import (
 )
 
 func TestDeleteIssueByID_CascadeAndIsolation(t *testing.T) {
-	svc, cleanup := setupTestServiceWithSQLiteFK(t)
+	svc, cleanup := setupTestServiceWithRealDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -118,7 +118,7 @@ func TestDeleteIssueByID_CascadeAndIsolation(t *testing.T) {
 }
 
 func TestDeleteIssueByID_RollbackOnError(t *testing.T) {
-	svc, cleanup := setupTestServiceWithSQLiteFK(t)
+	svc, cleanup := setupTestServiceWithRealDB(t)
 	defer cleanup()
 
 	ctx := context.Background()

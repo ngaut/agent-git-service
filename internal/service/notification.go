@@ -45,7 +45,7 @@ func (s *Service) ListNotifications(ctx context.Context, userID uint, unreadOnly
 		Order("updated_at DESC").
 		Limit(limit)
 	if unreadOnly {
-		q = q.Where("read = ?", false)
+		q = q.Where("`read` = ?", false)
 	}
 	var notifications []db.Notification
 	if err := q.Find(&notifications).Error; err != nil {
@@ -62,7 +62,7 @@ func (s *Service) MarkAllNotificationsRead(ctx context.Context, userID uint) err
 	now := time.Now().UTC()
 	return s.DBForCtx(ctx).
 		Model(&db.Notification{}).
-		Where("user_id = ? AND read = ?", userID, false).
+		Where("user_id = ? AND `read` = ?", userID, false).
 		UpdateColumns(map[string]any{
 			"read":         true,
 			"last_read_at": &now,

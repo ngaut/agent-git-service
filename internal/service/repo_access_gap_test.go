@@ -12,7 +12,6 @@ import (
 // isPublicRepo is consumed by the anonymous-read branch of githttp and REST
 // authorization but previously had no direct test.
 func TestIsPublicRepo(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -63,7 +62,6 @@ func TestIsPublicRepo(t *testing.T) {
 // tests but never isolated — if the short-circuit breaks, a site admin
 // without an explicit collaborator grant would silently lose repo access.
 func TestHasRepoAccess_SiteAdminShortCircuit(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -96,7 +94,6 @@ func TestHasRepoAccess_SiteAdminShortCircuit(t *testing.T) {
 // row grants the specified permission. The existing org-base-permission
 // test exercises adjacent logic; this case covers the standalone path.
 func TestHasRepoAccess_OutsideCollaboratorRow(t *testing.T) {
-	t.Parallel()
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()

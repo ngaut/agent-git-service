@@ -178,7 +178,7 @@ attemptLoop:
 			slog.InfoContext(ctx, "oidc login succeeded", "user_login", out.Login, "user_id", out.UserID)
 			return out, nil
 		}
-		if errors.Is(err, ErrConflict) || isSQLiteLockErr(err) {
+		if errors.Is(err, ErrConflict) {
 			slog.WarnContext(ctx, "oidc login retry", "attempt", attempt+1, "error", err)
 			time.Sleep(retryDelay(attempt))
 			continue attemptLoop

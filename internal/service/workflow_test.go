@@ -961,8 +961,10 @@ func TestWorkflowService_CrossRepo_AuthBoundary(t *testing.T) {
 		if err := svc.DB.Create(&runJobs).Error; err != nil {
 			t.Fatalf("create run for jobs: %v", err)
 		}
+		now := time.Now()
 		job := db.WorkflowRunJob{
 			RunID: runJobs.ID, Name: "build", Status: db.RunCompleted, Conclusion: db.ConclusionSuccess,
+			StartedAt: now, CompletedAt: now,
 		}
 		if err := svc.DB.Create(&job).Error; err != nil {
 			t.Fatalf("create job: %v", err)

@@ -6,20 +6,17 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/connectedlogin"
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -30,10 +27,9 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest"
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
-
-var testDBCounter atomic.Int64
 
 type zeroReader struct{}
 
@@ -44,23 +40,51 @@ func (zeroReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// setupTestDeps creates an isolated in-memory SQLite DB, temp gitstore,
+var routerSchemaTemplate struct {
+	once sync.Once
+	pool *testdb.SchemaPool
+	err  error
+}
+
+func routerTemplatePool(t *testing.T) *testdb.SchemaPool {
+	t.Helper()
+	routerSchemaTemplate.once.Do(func() {
+		gdb, cleanup := testdb.OpenRaw(t, "router_template")
+		_ = cleanup
+		var templateDB string
+		if err := gdb.Raw("SELECT DATABASE()").Scan(&templateDB).Error; err != nil {
+			routerSchemaTemplate.err = err
+			return
+		}
+		if err := db.Migrate(gdb); err != nil {
+			routerSchemaTemplate.err = err
+			return
+		}
+		routerSchemaTemplate.pool = &testdb.SchemaPool{
+			TemplateDB: templateDB,
+			Prefix:     "router",
+		}
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if routerSchemaTemplate.err != nil {
+		t.Fatalf("prepare router schema template: %v", routerSchemaTemplate.err)
+	}
+	if routerSchemaTemplate.pool == nil {
+		t.Fatal("router schema pool was not initialized")
+	}
+	return routerSchemaTemplate.pool
+}
+
+// setupTestDeps creates an isolated TiDB database, temp gitstore,
 // and all handler dependencies. It seeds an admin user and a test token.
 // Callers wire these into a router themselves (see setupRouterTest).
 func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps, *githttp.Handler, *oauth.Handler) {
 	t.Helper()
 
-	dsn := fmt.Sprintf("file:router_test_%d?mode=memory&cache=shared", testDBCounter.Add(1))
-	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}, &db.DeviceCodeAuditLog{}, &db.AuthorizationCode{}, &db.Repository{}, &db.RepoRedirect{}, &db.Label{}, &db.WikiPageLabel{}, &db.WikiSearchDocument{},
-		&db.UserIdentity{},
-		&db.WikiPage{}, &db.WikiPageRevision{}, &db.WikiChangeset{}, &db.WikiRepoHead{}, &db.WikiDirIndex{}, &db.WikiPageLink{}, &db.WikiBlobRef{}, &db.WikiPendingBlob{},
-	); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	gdb, dbCleanup := routerTemplatePool(t).Open(t)
+	t.Cleanup(dbCleanup)
 
 	// Seed admin user (required by ExchangeDeviceCode).
 	admin := db.User{Login: "admin", Type: db.TypeUser, SiteAdmin: true}
@@ -99,7 +123,7 @@ func setupTestDeps(t *testing.T) (*service.Service, *graphql.Server, *rest.Deps,
 	return svc, gqlSrv, restDeps, gitHandler, oauthHandler
 }
 
-// setupRouterTest creates an isolated in-memory SQLite DB, temp gitstore,
+// setupRouterTest creates an isolated TiDB database, temp gitstore,
 // and fully-wired router. It seeds an admin user and a test token for
 // authenticated route testing.
 func setupRouterTest(t *testing.T) (*service.Service, http.Handler) {
@@ -768,7 +792,11 @@ func TestOAuth_AccessTokenExchange(t *testing.T) {
 	deviceCode := codeResp["device_code"].(string)
 
 	// Step 1.5: approve the device code (simulate user verification)
-	_, err := svc.ApproveDeviceCode(t.Context(), deviceCode, 1, "admin")
+	var admin db.User
+	if err := svc.DB.First(&admin, "login = ?", "admin").Error; err != nil {
+		t.Fatalf("load admin user: %v", err)
+	}
+	_, err := svc.ApproveDeviceCode(t.Context(), deviceCode, admin.ID, admin.Login)
 	if err != nil {
 		t.Fatalf("failed to approve device code: %v", err)
 	}
@@ -1138,10 +1166,14 @@ func TestGitHTTP_SingleModeAllowsUnauthenticatedRequests(t *testing.T) {
 func TestGitReceivePack_BypassesDefaultBodyLimit(t *testing.T) {
 	svc, gqlSrv, restDeps, gitHandler, oauthHandler := setupTestDeps(t)
 
+	var admin db.User
+	if err := svc.DB.First(&admin, "login = ?", "admin").Error; err != nil {
+		t.Fatalf("read admin user: %v", err)
+	}
 	repo := db.Repository{
 		Name:          "bigrepo",
 		FullName:      "admin/bigrepo",
-		OwnerID:       1,
+		OwnerID:       admin.ID,
 		DefaultBranch: "main",
 	}
 	if err := svc.DB.Create(&repo).Error; err != nil {

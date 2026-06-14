@@ -1,6 +1,6 @@
 // Package testharness provides a reusable, fully-wired router integration
 // test harness. It constructs the complete dependency graph used by production
-// (SQLite DB → service.Service → REST/GraphQL/GitHTTP/OAuth handlers → router mux)
+// (TiDB test DB → service.Service → REST/GraphQL/GitHTTP/OAuth handlers → router mux)
 // so that downstream test packages can exercise the real HTTP surface without
 // rebuilding ad-hoc wiring.
 package testharness
@@ -44,7 +44,7 @@ type Harness struct {
 	srvOnce       sync.Once
 }
 
-// New creates a fully-wired test harness with an isolated SQLite database,
+// New creates a fully-wired test harness with an isolated TiDB database,
 // temp gitstore directory, real service layer, and the full production router.
 // All resources are cleaned up via tb.Cleanup.
 func New(tb testing.TB) *Harness {

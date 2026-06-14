@@ -4,36 +4,29 @@ import (
 	"context"
 	"testing"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 func TestDBForCtx_WithContextDB(t *testing.T) {
-	// Create two distinct SQLite DBs to verify the right one is returned.
-	defaultDB, err := gorm.Open(sqlite.Open("file:dbforctx_default?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open default db: %v", err)
-	}
-	scopedDB, err := gorm.Open(sqlite.Open("file:dbforctx_scoped?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open scoped db: %v", err)
-	}
+	defaultDB, defaultCleanup := testdb.OpenRaw(t, "ctx_default")
+	t.Cleanup(defaultCleanup)
+	tenantDB, tenantCleanup := testdb.OpenRaw(t, "ctx_tenant")
+	t.Cleanup(tenantCleanup)
 
 	svc := &service.Service{DB: defaultDB}
 
-	// Inject scoped DB into context.
-	ctx := service.ContextWithDB(context.Background(), scopedDB)
+	// Inject tenant DB into context
+	ctx := service.ContextWithDB(context.Background(), tenantDB)
 	got := svc.DBForCtx(ctx)
 
-	// The returned DB should be derived from scopedDB, not defaultDB.
+	// The returned DB should be derived from tenantDB, not defaultDB.
 	// We verify by checking the underlying sql.DB pointer.
 	gotSQL, _ := got.DB()
-	scopedSQL, _ := scopedDB.DB()
+	tenantSQL, _ := tenantDB.DB()
 	defaultSQL, _ := defaultDB.DB()
 
-	if gotSQL != scopedSQL {
+	if gotSQL != tenantSQL {
 		t.Error("DBForCtx did not return the context-injected DB")
 	}
 	if gotSQL == defaultSQL {
@@ -42,10 +35,8 @@ func TestDBForCtx_WithContextDB(t *testing.T) {
 }
 
 func TestDBForCtx_FallsBackToServiceDB(t *testing.T) {
-	defaultDB, err := gorm.Open(sqlite.Open("file:dbforctx_fallback?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	defaultDB, cleanup := testdb.OpenRaw(t, "ctx_fallback")
+	t.Cleanup(cleanup)
 
 	svc := &service.Service{DB: defaultDB}
 
@@ -60,10 +51,8 @@ func TestDBForCtx_FallsBackToServiceDB(t *testing.T) {
 }
 
 func TestContextWithDB_RoundTrip(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:ctx_roundtrip?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	db, cleanup := testdb.OpenRaw(t, "ctx_roundtrip")
+	t.Cleanup(cleanup)
 
 	ctx := service.ContextWithDB(context.Background(), db)
 	got, ok := service.DBFromContext(ctx)

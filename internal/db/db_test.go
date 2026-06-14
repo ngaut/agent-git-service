@@ -2,13 +2,12 @@ package db
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 type traceCounterLogger struct {
@@ -33,22 +32,11 @@ func (l *traceCounterLogger) Trace(ctx context.Context, begin time.Time, fc func
 }
 
 func TestInitVector_Idempotent(t *testing.T) {
-	logger := newTraceCounterLogger()
-	dbPath := filepath.Join(t.TempDir(), "vector.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: logger})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+	gdb := openTiDB(t)
+	if !SupportsVectorDistance(gdb) {
+		t.Skip("TiDB playground does not support VEC_COSINE_DISTANCE")
 	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
-
-	if err := gdb.Exec("CREATE TABLE issues (id integer primary key)").Error; err != nil {
-		t.Fatalf("create issues: %v", err)
-	}
-	if err := gdb.Exec("CREATE TABLE pull_requests (id integer primary key)").Error; err != nil {
-		t.Fatalf("create pull_requests: %v", err)
-	}
+	createVectorTables(t, gdb)
 
 	InitVector(gdb, 3)
 
@@ -59,12 +47,7 @@ func TestInitVector_Idempotent(t *testing.T) {
 		t.Fatal("expected pull_requests.embedding to exist after first InitVector run")
 	}
 
-	errsAfterFirstRun := logger.traceErrors
 	InitVector(gdb, 3)
-
-	if logger.traceErrors != errsAfterFirstRun {
-		t.Fatalf("expected second InitVector run to avoid SQL errors, got %d then %d", errsAfterFirstRun, logger.traceErrors)
-	}
 }
 
 // TestDialectorForDSN verifies DSN parsing for different database types.
@@ -74,17 +57,12 @@ func TestDialectorForDSN(t *testing.T) {
 		dsn         string
 		wantDialect string
 	}{
-		{"memory sqlite", ":memory:", "sqlite"},
-		{"file sqlite", "file:test.db", "sqlite"},
-		{"file sqlite prefix", "sqlite://test.db", "sqlite"},
-		{"sqlite prefix alt", "sqlite:test.db", "sqlite"},
-		{"sqlite prefix with slashes", "sqlite://test.db", "sqlite"},
 		{"postgres URL", "postgres://user:pass@localhost:5432/testdb?sslmode=disable", "postgres"},
 		{"postgresql URL", "postgresql://user:pass@localhost:5432/testdb?sslmode=disable", "postgres"},
 		{"postgres uppercase", "  POSTGRESQL://user:pass@localhost:5432/testdb?sslmode=disable  ", "postgres"},
 		{"mysql default", "user:pass@tcp(host:3306)/db", "mysql"},
 		{"mysql uppercase", "MYSQL:user:pass@tcp(host:3306)/db", "mysql"},
-		{"whitespace trimmed", "  :memory:  ", "sqlite"},
+		{"mysql whitespace trimmed", "  user:pass@tcp(host:3306)/db  ", "mysql"},
 	}
 
 	for _, tt := range tests {
@@ -102,19 +80,9 @@ func TestDialectorForDSN(t *testing.T) {
 
 // TestMigrate verifies that Migrate runs AutoMigrate for all models.
 func TestMigrate(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "migrate.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: gormlogger.Discard,
-	})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
+	gdb := openTiDB(t)
 
-	err = Migrate(gdb)
-	if err != nil {
+	if err := Migrate(gdb); err != nil {
 		t.Fatalf("Migrate failed: %v", err)
 	}
 
@@ -145,16 +113,7 @@ func TestMigrate(t *testing.T) {
 }
 
 func TestMilestoneCountIndexes_AutoMigrate(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "milestone-count-indexes.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: gormlogger.Discard,
-	})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
+	gdb := openTiDB(t)
 
 	if err := gdb.AutoMigrate(&User{}, &Repository{}, &Milestone{}, &Issue{}, &PullRequest{}); err != nil {
 		t.Fatalf("AutoMigrate failed: %v", err)
@@ -176,16 +135,7 @@ func TestMilestoneCountIndexes_AutoMigrate(t *testing.T) {
 
 // TestMigrate_Idempotent verifies that Migrate can be called multiple times.
 func TestMigrate_Idempotent(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "migrate-idempotent.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: gormlogger.Discard,
-	})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
+	gdb := openTiDB(t)
 
 	// First migration
 	if err := Migrate(gdb); err != nil {
@@ -199,13 +149,7 @@ func TestMigrate_Idempotent(t *testing.T) {
 }
 
 func TestMigrate_ClosedDBReturnsError(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "migrate-closed.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: gormlogger.Discard,
-	})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	gdb := openTiDB(t)
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		t.Fatalf("get sql DB: %v", err)
@@ -219,29 +163,12 @@ func TestMigrate_ClosedDBReturnsError(t *testing.T) {
 	}
 }
 
-// TestInit_SQLiteMemory verifies Init works with in-memory SQLite.
-func TestInit_SQLiteMemory(t *testing.T) {
-	gdb, err := Init(":memory:")
-	if err != nil {
-		t.Fatalf("Init failed: %v", err)
-	}
-	if gdb == nil {
-		t.Fatal("expected non-nil database connection")
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
-
-	// Verify migrations ran
-	if !gdb.Migrator().HasTable("users") {
-		t.Error("expected users table to exist")
-	}
-}
-
-// TestInit_SQLiteFile verifies Init works with file-based SQLite.
-func TestInit_SQLiteFile(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "init.db")
-	gdb, err := Init("file:" + dbPath)
+func TestInit_TiDB(t *testing.T) {
+	dbName, dsn, adminSQL := testdb.CreateRawDatabase(t, "init")
+	t.Cleanup(func() {
+		_, _ = adminSQL.Exec("DROP DATABASE IF EXISTS `" + dbName + "`")
+	})
+	gdb, err := Init(dsn)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}

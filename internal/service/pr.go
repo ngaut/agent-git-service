@@ -85,7 +85,7 @@ func (s *Service) CreatePR(ctx context.Context, in CreatePRInput) (db.PullReques
 		return db.PullRequest{}, fmt.Errorf("service: create pr: head and base must be different branches")
 	}
 
-	const maxRetries = 5
+	const maxRetries = 25
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		var pr db.PullRequest
 		if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
@@ -119,7 +119,7 @@ func (s *Service) CreatePR(ctx context.Context, in CreatePRInput) (db.PullReques
 			}
 			return nil
 		}); err != nil {
-			if isDuplicateErr(err) || isSQLiteLockErr(err) {
+			if isDuplicateErr(err) {
 				time.Sleep(retryDelay(attempt))
 				continue
 			}

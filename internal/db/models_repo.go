@@ -42,6 +42,19 @@ type Repository struct {
 	UpdatedAt           time.Time
 }
 
+// IssuePRNumberCounter allocates the shared issue/PR number sequence per repository.
+type IssuePRNumberCounter struct {
+	RepositoryID uint       `gorm:"primaryKey;autoIncrement:false"`
+	Repository   Repository `gorm:"foreignKey:RepositoryID"`
+	NextNumber   int        `gorm:"not null;default:1"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (IssuePRNumberCounter) TableName() string {
+	return "issue_pr_number_counters"
+}
+
 // Label represents an issue/PR label owned by a repository.
 type Label struct {
 	ID           uint       `gorm:"primaryKey;autoIncrement"`

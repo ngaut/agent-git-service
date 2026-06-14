@@ -2,12 +2,10 @@ package service_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,10 +14,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
-
-	sqlite3 "github.com/mattn/go-sqlite3"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
 type semanticWikiEmbedder struct{}
@@ -129,6 +123,41 @@ func (e *concurrentWikiEmbedder) Stats() (called, maxConcurrent int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.called, e.maxConcurrent
+}
+
+func createWikiSearchDocument(t *testing.T, svc *service.Service, doc db.WikiSearchDocument, what string) {
+	t.Helper()
+	tx := svc.DB
+	if doc.Embedding == "" || !svc.DB.Migrator().HasColumn("wiki_search_documents", "embedding") {
+		tx = tx.Omit("Embedding")
+	}
+	if err := tx.Create(&doc).Error; err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+}
+
+func createWikiSearchDocuments(t *testing.T, svc *service.Service, docs []db.WikiSearchDocument, batchSize int, what string) {
+	t.Helper()
+	omitEmbedding := !svc.DB.Migrator().HasColumn("wiki_search_documents", "embedding")
+	for _, doc := range docs {
+		if doc.Embedding == "" {
+			omitEmbedding = true
+			break
+		}
+	}
+	tx := svc.DB
+	if omitEmbedding {
+		tx = tx.Omit("Embedding")
+	}
+	if batchSize > 0 {
+		if err := tx.CreateInBatches(docs, batchSize).Error; err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		return
+	}
+	if err := tx.Create(&docs).Error; err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
 }
 
 func TestWikiSearchTruncatesLongPageEmbeddingInput(t *testing.T) {
@@ -570,7 +599,7 @@ func TestWikiSearchFallsBackToGitWithoutCatalogRows(t *testing.T) {
 	}
 }
 
-func TestWikiSearchUsesCatalogBodyWhenGitProjectionLagsCatalogPage(t *testing.T) {
+func TestWikiSearchUsesCatalogBodyWhenSearchIndexLagsCatalogPage(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
 	ctx := context.Background()
@@ -595,8 +624,18 @@ func TestWikiSearchUsesCatalogBodyWhenGitProjectionLagsCatalogPage(t *testing.T)
 	}
 	svc.Wg.Wait()
 
-	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guides/auth.md", "update auth in git", []byte("# Auth\n\nFresh git-only snippet text.")); err != nil {
-		t.Fatalf("git write auth page: %v", err)
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	staleIndexedBody := []byte("# Auth\n\nFresh git-only snippet text.")
+	if err := svc.DB.Model(&db.WikiSearchDocument{}).
+		Where("repository_id = ? AND slug = ?", repo.ID, "guides/auth").
+		Updates(map[string]any{
+			"body":         db.LargeText(staleIndexedBody),
+			"revision_sha": wikicatalog.HashContent(staleIndexedBody),
+		}).Error; err != nil {
+		t.Fatalf("mutate stale search document: %v", err)
 	}
 
 	resp, err := svc.SearchWikiPages(ctx, full, "fresh git-only snippet text", 20, 0)
@@ -656,15 +695,13 @@ func TestWikiSearchDropsStaleIndexedRowsForDeletedPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRepo: %v", err)
 	}
-	if err := svc.DB.Create(&db.WikiSearchDocument{
+	createWikiSearchDocument(t, svc, db.WikiSearchDocument{
 		RepositoryID: repo.ID,
 		Slug:         "guides/auth",
 		Title:        "Auth",
 		Body:         db.LargeText("Delete me after indexing."),
 		RevisionSHA:  page.SHA,
-	}).Error; err != nil {
-		t.Fatalf("reinsert stale doc: %v", err)
-	}
+	}, "reinsert stale doc")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "delete me", 20, 0)
 	if err != nil {
@@ -717,9 +754,7 @@ func TestWikiSearchBackfillsPageAfterFilteringStaleIndexedRows(t *testing.T) {
 			UpdatedAt:    baseTime.Add(time.Duration(20-i) * time.Second),
 		})
 	}
-	if err := svc.DB.CreateInBatches(staleDocs, 20).Error; err != nil {
-		t.Fatalf("seed stale docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, staleDocs, 20, "seed stale docs")
 	if err := svc.DB.Model(&db.WikiSearchDocument{}).
 		Where("repository_id = ? AND slug = ?", repo.ID, "guides/live").
 		Updates(map[string]any{
@@ -774,15 +809,13 @@ func TestWikiSearchUsesCatalogLexicalWhenIndexedRowsMissLivePage(t *testing.T) {
 	if err := svc.DB.Where("repository_id = ? AND slug = ?", repo.ID, "guides/live").Delete(&db.WikiSearchDocument{}).Error; err != nil {
 		t.Fatalf("delete live search doc: %v", err)
 	}
-	if err := svc.DB.Create(&db.WikiSearchDocument{
+	createWikiSearchDocument(t, svc, db.WikiSearchDocument{
 		RepositoryID: repo.ID,
 		Slug:         "guides/stale",
 		Title:        "Stale",
 		Body:         db.LargeText("Fresh catalog-only recall text."),
 		RevisionSHA:  "stale-sha",
-	}).Error; err != nil {
-		t.Fatalf("seed stale search doc: %v", err)
-	}
+	}, "seed stale search doc")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "fresh catalog-only recall text", 20, 0)
 	if err != nil {
@@ -864,9 +897,7 @@ func TestWikiSearchLargeCurrentIndexMissDoesNotScanCatalog(t *testing.T) {
 	if err := svc.DB.CreateInBatches(pages, 50).Error; err != nil {
 		t.Fatalf("seed wiki pages: %v", err)
 	}
-	if err := svc.DB.CreateInBatches(docs, 50).Error; err != nil {
-		t.Fatalf("seed wiki search docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, docs, 50, "seed wiki search docs")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "catalog only needle", 20, 0)
 	if err != nil {
@@ -922,9 +953,7 @@ func TestWikiSearchSemanticBackfillsPageAfterFilteringStaleIndexedRows(t *testin
 			UpdatedAt:    baseTime.Add(time.Duration(20-i) * time.Second),
 		})
 	}
-	if err := svc.DB.CreateInBatches(staleDocs, 20).Error; err != nil {
-		t.Fatalf("seed stale docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, staleDocs, 20, "seed stale docs")
 	if err := svc.DB.Model(&db.WikiSearchDocument{}).
 		Where("repository_id = ? AND slug = ?", repo.ID, "guides/live").
 		Updates(map[string]any{
@@ -1167,28 +1196,15 @@ func TestReindexWikiSearchUsesConcurrentUpserts(t *testing.T) {
 	}
 }
 
-func TestWikiSearchSemanticUsesDatabaseVectorDistance(t *testing.T) {
-	var vectorCalls int64
-	driverName := fmt.Sprintf("sqlite3_wiki_vec_%d", time.Now().UnixNano())
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				atomic.AddInt64(&vectorCalls, 1)
-				if embedding == query {
-					return 0
-				}
-				return 1
-			}, true)
-		},
-	})
-
+func TestWikiSearchSemanticUsesTiDBVectorDistance(t *testing.T) {
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
 		Embedder: semanticWikiEmbedder{},
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
 	})
 	defer cleanup()
+	db.InitVector(svc.DB, 3)
+	if !db.SupportsVectorDistance(svc.DB) {
+		t.Skip("TiDB vector distance is unavailable")
+	}
 	ctx := context.Background()
 	if err := svc.DB.Create(&db.User{
 		Login: "testuser",
@@ -1225,31 +1241,17 @@ func TestWikiSearchSemanticUsesDatabaseVectorDistance(t *testing.T) {
 	if len(resp.Results) == 0 || resp.Results[0].Slug != "ops/session-expiry" {
 		t.Fatalf("semantic results = %#v, want ops/session-expiry first", resp.Results)
 	}
-	if got := atomic.LoadInt64(&vectorCalls); got < 2 {
-		t.Fatalf("VEC_COSINE_DISTANCE calls = %d, want database vector path to run", got)
-	}
 }
 
 func TestWikiSearchSemanticDBPaginationBeyondExactWindow(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_wiki_db_pagination_%d", time.Now().UnixNano())
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				if embedding == query {
-					return 0
-				}
-				return 1
-			}, true)
-		},
-	})
-
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
 		Embedder: semanticPaginationEmbedder{},
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
 	})
 	defer cleanup()
+	db.InitVector(svc.DB, 3)
+	if !db.SupportsVectorDistance(svc.DB) {
+		t.Skip("TiDB vector distance is unavailable")
+	}
 	ctx := context.Background()
 	if err := svc.DB.Create(&db.User{
 		Login: "testuser",
@@ -1284,9 +1286,7 @@ func TestWikiSearchSemanticDBPaginationBeyondExactWindow(t *testing.T) {
 			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
 		})
 	}
-	if err := svc.DB.CreateInBatches(docs, 200).Error; err != nil {
-		t.Fatalf("seed wiki search docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, docs, 200, "seed wiki search docs")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "semantic offset query", 20, 1000)
 	if err != nil {
@@ -1343,31 +1343,14 @@ func TestWikiSearchMatchesSlugSegmentsWithoutTitleOrBodyHit(t *testing.T) {
 }
 
 func TestWikiSearchHybridKeepsLexicalMatchAndFiltersWeakSemanticOnly(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_wiki_hybrid_vec_%d", time.Now().UnixNano())
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				switch embedding {
-				case "[1,0,0]":
-					return 0.43
-				case "[0,1,0]":
-					return 0.625
-				case "[0,0,1]":
-					return 0.735
-				default:
-					return 1
-				}
-			}, true)
-		},
-	})
-
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
 		Embedder: noisyWikiEmbedder{},
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
 	})
 	defer cleanup()
+	db.InitVector(svc.DB, 3)
+	if !db.SupportsVectorDistance(svc.DB) {
+		t.Skip("TiDB vector distance is unavailable")
+	}
 	ctx := context.Background()
 	if err := svc.DB.Create(&db.User{
 		Login: "testuser",
@@ -1440,9 +1423,7 @@ func TestWikiSearchHybridFallbackUsesFullSemanticRanking(t *testing.T) {
 		{RepositoryID: repo.ID, Slug: "c-third", Title: "C Third", Body: db.LargeText("fusion"), Embedding: "[1,0,0]", CreatedAt: baseTime.Add(2 * time.Second), UpdatedAt: baseTime.Add(2 * time.Second)},
 		{RepositoryID: repo.ID, Slug: "d-fourth", Title: "D Fourth", Body: db.LargeText("fusion"), Embedding: "[0.9,0.1,0]", CreatedAt: baseTime.Add(1 * time.Second), UpdatedAt: baseTime.Add(1 * time.Second)},
 	}
-	if err := svc.DB.Create(&docs).Error; err != nil {
-		t.Fatalf("seed wiki search docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, docs, 0, "seed wiki search docs")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "fusion", 2, 0)
 	if err != nil {
@@ -1498,9 +1479,7 @@ func TestWikiSearchLexicalPaginationBeyondSemanticWindow(t *testing.T) {
 			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
 		})
 	}
-	if err := svc.DB.CreateInBatches(docs, 200).Error; err != nil {
-		t.Fatalf("seed wiki search docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, docs, 200, "seed wiki search docs")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "needle", 20, 1000)
 	if err != nil {
@@ -1559,9 +1538,7 @@ func TestWikiSearchSemanticFallbackPaginationBeyondExactWindow(t *testing.T) {
 			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
 		})
 	}
-	if err := svc.DB.CreateInBatches(docs, 200).Error; err != nil {
-		t.Fatalf("seed wiki search docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, docs, 200, "seed wiki search docs")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "semantic offset query", 20, 1000)
 	if err != nil {
@@ -1582,35 +1559,14 @@ func TestWikiSearchSemanticFallbackPaginationBeyondExactWindow(t *testing.T) {
 }
 
 func TestWikiSearchSemanticDBPaginationReordersAfterLabelBoost(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_wiki_db_label_pagination_%d", time.Now().UnixNano())
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				switch embedding {
-				case "[1,0,0]":
-					return 0.01
-				case "[0.95,0.05,0]":
-					return 0.02
-				case "[0.7,0.3,0]":
-					return 0.03
-				case "[0.69,0.31,0]":
-					return 0.035
-				case "[0.68,0.32,0]":
-					return 0.04
-				default:
-					return 1
-				}
-			}, true)
-		},
-	})
-
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
 		Embedder: semanticPaginationEmbedder{},
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
 	})
 	defer cleanup()
+	db.InitVector(svc.DB, 3)
+	if !db.SupportsVectorDistance(svc.DB) {
+		t.Skip("TiDB vector distance is unavailable")
+	}
 	ctx := context.Background()
 	if err := svc.DB.Create(&db.User{
 		Login: "testuser",
@@ -1640,9 +1596,7 @@ func TestWikiSearchSemanticDBPaginationReordersAfterLabelBoost(t *testing.T) {
 		{RepositoryID: repo.ID, Slug: "rank-d", Title: "Rank D", Body: db.LargeText("unrelated"), Embedding: "[0.69,0.31,0]", CreatedAt: baseTime.Add(2 * time.Second), UpdatedAt: baseTime.Add(2 * time.Second)},
 		{RepositoryID: repo.ID, Slug: "rank-e", Title: "Rank E", Body: db.LargeText("unrelated"), Embedding: "[0.68,0.32,0]", CreatedAt: baseTime.Add(1 * time.Second), UpdatedAt: baseTime.Add(1 * time.Second)},
 	}
-	if err := svc.DB.Create(&docs).Error; err != nil {
-		t.Fatalf("seed wiki search docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, docs, 0, "seed wiki search docs")
 	if _, err := svc.CreateLabel(ctx, full, "offset-query", "0052CC", "label match"); err != nil {
 		t.Fatalf("CreateLabel: %v", err)
 	}
@@ -1677,30 +1631,14 @@ func TestWikiSearchSemanticDBPaginationReordersAfterLabelBoost(t *testing.T) {
 }
 
 func TestWikiSearchSemanticDBPaginationPromotesLabelBoostBeyondOldPrefix(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_wiki_db_label_boost_promotion_%d", time.Now().UnixNano())
-	var vectorCalls int64
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				atomic.AddInt64(&vectorCalls, 1)
-				if embedding == query {
-					return 0
-				}
-				if strings.HasPrefix(embedding, "[0.79,") {
-					return 0.21
-				}
-				return 0.10
-			}, true)
-		},
-	})
-
 	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
 		Embedder: semanticPaginationEmbedder{},
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
 	})
 	defer cleanup()
+	db.InitVector(svc.DB, 3)
+	if !db.SupportsVectorDistance(svc.DB) {
+		t.Skip("TiDB vector distance is unavailable")
+	}
 	ctx := context.Background()
 	if err := svc.DB.Create(&db.User{
 		Login: "testuser",
@@ -1748,9 +1686,7 @@ func TestWikiSearchSemanticDBPaginationPromotesLabelBoostBeyondOldPrefix(t *test
 			UpdatedAt:    baseTime.Add(time.Duration(i) * time.Second),
 		})
 	}
-	if err := svc.DB.CreateInBatches(docs, 50).Error; err != nil {
-		t.Fatalf("seed wiki search docs: %v", err)
-	}
+	createWikiSearchDocuments(t, svc, docs, 50, "seed wiki search docs")
 	if err := svc.DB.Create(&db.WikiPageLabel{
 		RepositoryID: repo.ID,
 		Slug:         "boosted-winner",
@@ -1771,9 +1707,6 @@ func TestWikiSearchSemanticDBPaginationPromotesLabelBoostBeyondOldPrefix(t *test
 	}
 	if resp.Results[0].Slug != "boosted-winner" {
 		t.Fatalf("results[0].Slug = %q, want boosted-winner", resp.Results[0].Slug)
-	}
-	if got := atomic.LoadInt64(&vectorCalls); got < 241 {
-		t.Fatalf("VEC_COSINE_DISTANCE calls = %d, want the promoted winner to be ranked past the old 200-row prefix", got)
 	}
 }
 
@@ -1922,10 +1855,12 @@ func TestWikiSearchCurrentIndexLabelFilterPreservesOlderMatch(t *testing.T) {
 	body := []byte("# Runbook\n\nrunbook details")
 	sha := wikicatalog.HashContent(body)
 	baseTime := time.Date(2026, time.January, 8, 0, 0, 0, 0, time.UTC)
+	pages := make([]db.WikiPage, 0, 1005)
+	docs := make([]db.WikiSearchDocument, 0, 1005)
 	for i := 0; i < 1005; i++ {
 		slug := fmt.Sprintf("runbook-%04d", i)
 		now := baseTime.Add(time.Duration(i) * time.Minute)
-		if err := svc.DB.Create(&db.WikiPage{
+		pages = append(pages, db.WikiPage{
 			RepositoryID:    repo.ID,
 			Slug:            slug,
 			Title:           fmt.Sprintf("Runbook %d", i),
@@ -1936,10 +1871,8 @@ func TestWikiSearchCurrentIndexLabelFilterPreservesOlderMatch(t *testing.T) {
 			HeadChangesetID: uint64(i + 1),
 			CreatedAt:       now,
 			UpdatedAt:       now,
-		}).Error; err != nil {
-			t.Fatalf("seed wiki page %d: %v", i, err)
-		}
-		if err := svc.DB.Create(&db.WikiSearchDocument{
+		})
+		docs = append(docs, db.WikiSearchDocument{
 			RepositoryID: repo.ID,
 			Slug:         slug,
 			Title:        fmt.Sprintf("Runbook %d", i),
@@ -1947,10 +1880,12 @@ func TestWikiSearchCurrentIndexLabelFilterPreservesOlderMatch(t *testing.T) {
 			RevisionSHA:  sha,
 			CreatedAt:    now,
 			UpdatedAt:    now,
-		}).Error; err != nil {
-			t.Fatalf("seed wiki search doc %d: %v", i, err)
-		}
+		})
 	}
+	if err := svc.DB.CreateInBatches(pages, 200).Error; err != nil {
+		t.Fatalf("seed wiki pages: %v", err)
+	}
+	createWikiSearchDocuments(t, svc, docs, 200, "seed wiki search docs")
 	if err := svc.DB.Create(&db.WikiPageLabel{RepositoryID: repo.ID, Slug: "runbook-0000", LabelID: label.ID}).Error; err != nil {
 		t.Fatalf("seed wiki page label: %v", err)
 	}
@@ -1989,10 +1924,12 @@ func TestWikiSearchCurrentIndexMultiTokenPreservesOlderIntersectionMatch(t *test
 	baseTime := time.Date(2026, time.January, 9, 0, 0, 0, 0, time.UTC)
 	commonBody := []byte("# Runbook\n\nrunbook only")
 	commonSHA := wikicatalog.HashContent(commonBody)
+	pages := make([]db.WikiPage, 0, 1006)
+	docs := make([]db.WikiSearchDocument, 0, 1006)
 	for i := 0; i < 1005; i++ {
 		slug := fmt.Sprintf("runbook-%04d", i)
 		now := baseTime.Add(time.Duration(i) * time.Minute)
-		if err := svc.DB.Create(&db.WikiPage{
+		pages = append(pages, db.WikiPage{
 			RepositoryID:    repo.ID,
 			Slug:            slug,
 			Title:           fmt.Sprintf("Runbook %d", i),
@@ -2003,10 +1940,8 @@ func TestWikiSearchCurrentIndexMultiTokenPreservesOlderIntersectionMatch(t *test
 			HeadChangesetID: uint64(i + 1),
 			CreatedAt:       now,
 			UpdatedAt:       now,
-		}).Error; err != nil {
-			t.Fatalf("seed wiki page %d: %v", i, err)
-		}
-		if err := svc.DB.Create(&db.WikiSearchDocument{
+		})
+		docs = append(docs, db.WikiSearchDocument{
 			RepositoryID: repo.ID,
 			Slug:         slug,
 			Title:        fmt.Sprintf("Runbook %d", i),
@@ -2014,15 +1949,13 @@ func TestWikiSearchCurrentIndexMultiTokenPreservesOlderIntersectionMatch(t *test
 			RevisionSHA:  commonSHA,
 			CreatedAt:    now,
 			UpdatedAt:    now,
-		}).Error; err != nil {
-			t.Fatalf("seed wiki search doc %d: %v", i, err)
-		}
+		})
 	}
 
 	targetBody := []byte("# Runbook\n\nrunbook special-token")
 	targetSHA := wikicatalog.HashContent(targetBody)
 	targetTime := baseTime.Add(-time.Minute)
-	if err := svc.DB.Create(&db.WikiPage{
+	pages = append(pages, db.WikiPage{
 		RepositoryID:    repo.ID,
 		Slug:            "runbook-special",
 		Title:           "Runbook Special",
@@ -2033,10 +1966,8 @@ func TestWikiSearchCurrentIndexMultiTokenPreservesOlderIntersectionMatch(t *test
 		HeadChangesetID: 5000,
 		CreatedAt:       targetTime,
 		UpdatedAt:       targetTime,
-	}).Error; err != nil {
-		t.Fatalf("seed target wiki page: %v", err)
-	}
-	if err := svc.DB.Create(&db.WikiSearchDocument{
+	})
+	docs = append(docs, db.WikiSearchDocument{
 		RepositoryID: repo.ID,
 		Slug:         "runbook-special",
 		Title:        "Runbook Special",
@@ -2044,9 +1975,11 @@ func TestWikiSearchCurrentIndexMultiTokenPreservesOlderIntersectionMatch(t *test
 		RevisionSHA:  targetSHA,
 		CreatedAt:    targetTime,
 		UpdatedAt:    targetTime,
-	}).Error; err != nil {
-		t.Fatalf("seed target wiki search doc: %v", err)
+	})
+	if err := svc.DB.CreateInBatches(pages, 200).Error; err != nil {
+		t.Fatalf("seed wiki pages: %v", err)
 	}
+	createWikiSearchDocuments(t, svc, docs, 200, "seed wiki search docs")
 
 	resp, err := svc.SearchWikiPages(ctx, full, "runbook special-token", 20, 0)
 	if err != nil {

@@ -37,6 +37,8 @@ const (
 	TokenValidationFailureAdminLookupError   TokenValidationFailure = "admin_lookup_error"
 )
 
+var errDeviceTokenNotVisible = errors.New("device token not visible after upsert")
+
 // withTokenQueryTimeout creates a context with timeout for token queries.
 func withTokenQueryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, tokenQueryTimeout)
@@ -352,10 +354,6 @@ func (s *Service) ExchangeAuthorizationCode(ctx context.Context, codeValue, code
 			accessToken = tok.Value
 			return nil
 		}); err != nil {
-			if isSQLiteLockErr(err) {
-				time.Sleep(retryDelay(attempt))
-				continue
-			}
 			return "", err
 		}
 		return accessToken, nil
@@ -421,8 +419,10 @@ func (s *Service) ExchangeDeviceCode(ctx context.Context, deviceCode string) (ac
 			now := time.Now().UTC()
 			tok := db.Token{UserID: approver.ID, Value: code.AccessToken, LastUsedAt: &now}
 			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "value"}},
-				DoNothing: true,
+				Columns: []clause.Column{{Name: "value"}},
+				DoUpdates: clause.Assignments(map[string]any{
+					"last_used_at": now,
+				}),
 			}).Create(&tok).Error; err != nil {
 				return err
 			}
@@ -430,6 +430,9 @@ func (s *Service) ExchangeDeviceCode(ctx context.Context, deviceCode string) (ac
 			// Ensure this token belongs to the approving user (defense in depth).
 			var persisted db.Token
 			if err := tx.Select("id", "user_id").Take(&persisted, "value = ?", code.AccessToken).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return errDeviceTokenNotVisible
+				}
 				return err
 			}
 			if persisted.UserID != approver.ID {
@@ -444,7 +447,7 @@ func (s *Service) ExchangeDeviceCode(ctx context.Context, deviceCode string) (ac
 			accessToken = code.AccessToken
 			return nil
 		}); err != nil {
-			if isSQLiteLockErr(err) {
+			if errors.Is(err, errDeviceTokenNotVisible) {
 				time.Sleep(retryDelay(attempt))
 				continue
 			}

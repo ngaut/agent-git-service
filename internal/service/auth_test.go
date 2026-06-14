@@ -37,8 +37,9 @@ func TestValidateToken_EmptyTable_AllowAnyTokenAccepts(t *testing.T) {
 func TestValidateToken_SeededTable_MatchingToken(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
-	svc.DB.Create(&db.User{Login: "admin", Type: db.TypeUser, SiteAdmin: true})
-	svc.DB.Create(&db.Token{UserID: 1, Value: "valid-token"})
+	admin := db.User{Login: "admin", Type: db.TypeUser, SiteAdmin: true}
+	svc.DB.Create(&admin)
+	svc.DB.Create(&db.Token{UserID: admin.ID, Value: "valid-token"})
 
 	if !svc.ValidateToken(context.Background(), "valid-token") {
 		t.Error("expected true for matching token")
@@ -48,8 +49,9 @@ func TestValidateToken_SeededTable_MatchingToken(t *testing.T) {
 func TestValidateToken_SeededTable_NonMatchingToken(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
-	svc.DB.Create(&db.User{Login: "admin", Type: db.TypeUser, SiteAdmin: true})
-	svc.DB.Create(&db.Token{UserID: 1, Value: "valid-token"})
+	admin := db.User{Login: "admin", Type: db.TypeUser, SiteAdmin: true}
+	svc.DB.Create(&admin)
+	svc.DB.Create(&db.Token{UserID: admin.ID, Value: "valid-token"})
 
 	if svc.ValidateToken(context.Background(), "wrong-token") {
 		t.Error("expected false for non-matching token")
@@ -59,9 +61,10 @@ func TestValidateToken_SeededTable_NonMatchingToken(t *testing.T) {
 func TestValidateToken_SeededTable_ExpiredToken(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
-	svc.DB.Create(&db.User{Login: "admin", Type: db.TypeUser, SiteAdmin: true})
+	admin := db.User{Login: "admin", Type: db.TypeUser, SiteAdmin: true}
+	svc.DB.Create(&admin)
 	expired := time.Now().Add(-1 * time.Hour).UTC()
-	svc.DB.Create(&db.Token{UserID: 1, Value: "expired-token", ExpiresAt: &expired})
+	svc.DB.Create(&db.Token{UserID: admin.ID, Value: "expired-token", ExpiresAt: &expired})
 
 	if svc.ValidateToken(context.Background(), "expired-token") {
 		t.Error("expected false for expired token")
@@ -102,8 +105,9 @@ func TestResolveUserByToken_EmptyTable_AllowAnyTokenReturnsAdmin(t *testing.T) {
 func TestResolveUserByToken_SeededTable_KnownToken(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
-	svc.DB.Create(&db.User{Login: "owner", Type: db.TypeUser, SiteAdmin: false})
-	svc.DB.Create(&db.Token{UserID: 1, Value: "owner-token"})
+	owner := db.User{Login: "owner", Type: db.TypeUser, SiteAdmin: false}
+	svc.DB.Create(&owner)
+	svc.DB.Create(&db.Token{UserID: owner.ID, Value: "owner-token"})
 
 	user, err := svc.ResolveUserByToken(context.Background(), "owner-token")
 	if err != nil {
@@ -117,8 +121,9 @@ func TestResolveUserByToken_SeededTable_KnownToken(t *testing.T) {
 func TestResolveUserByToken_SeededTable_UnknownToken(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
-	svc.DB.Create(&db.User{Login: "owner", Type: db.TypeUser, SiteAdmin: false})
-	svc.DB.Create(&db.Token{UserID: 1, Value: "owner-token"})
+	owner := db.User{Login: "owner", Type: db.TypeUser, SiteAdmin: false}
+	svc.DB.Create(&owner)
+	svc.DB.Create(&db.Token{UserID: owner.ID, Value: "owner-token"})
 
 	_, err := svc.ResolveUserByToken(context.Background(), "unknown-token")
 	if err == nil {

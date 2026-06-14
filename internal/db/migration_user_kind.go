@@ -29,8 +29,6 @@ func enforceUserKindNotNull(database *gorm.DB) error {
 			return err
 		}
 		return database.Exec(`ALTER TABLE "users" ALTER COLUMN "user_kind" SET NOT NULL`).Error
-	case "sqlite":
-		return nil
 	default:
 		return database.Migrator().AlterColumn(&User{}, "UserKind")
 	}

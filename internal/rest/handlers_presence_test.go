@@ -7,19 +7,25 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
+
+var presenceSchemaTemplate struct {
+	once sync.Once
+	pool *testdb.SchemaPool
+	err  error
+}
 
 func setupTestPresenceHandlers(t *testing.T) (*PresenceHandlers, *gorm.DB, func()) {
 	t.Helper()
@@ -28,21 +34,7 @@ func setupTestPresenceHandlers(t *testing.T) (*PresenceHandlers, *gorm.DB, func(
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to connect database: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("failed to set sqlite busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("failed to set sqlite journal_mode: %v", err)
-	}
-	if err := gdb.AutoMigrate(&db.User{}, &db.Repository{}, &db.Issue{}, &db.UserLastSeen{}); err != nil {
-		t.Fatalf("failed to migrate database: %v", err)
-	}
+	gdb, dbCleanup := presenceTemplatePool(t).Open(t)
 
 	gitStore, err := gitstore.New(tmpDir)
 	if err != nil {
@@ -58,10 +50,42 @@ func setupTestPresenceHandlers(t *testing.T) (*PresenceHandlers, *gorm.DB, func(
 	}
 
 	cleanup := func() {
+		dbCleanup()
 		_ = os.RemoveAll(tmpDir)
 	}
 
 	return &PresenceHandlers{Svc: svc, Hub: hub}, gdb, cleanup
+}
+
+func presenceTemplatePool(t *testing.T) *testdb.SchemaPool {
+	t.Helper()
+	presenceSchemaTemplate.once.Do(func() {
+		gdb, cleanup := testdb.OpenRaw(t, "rest_presence_template")
+		_ = cleanup
+		var templateDB string
+		if err := gdb.Raw("SELECT DATABASE()").Scan(&templateDB).Error; err != nil {
+			presenceSchemaTemplate.err = err
+			return
+		}
+		if err := db.Migrate(gdb); err != nil {
+			presenceSchemaTemplate.err = err
+			return
+		}
+		presenceSchemaTemplate.pool = &testdb.SchemaPool{
+			TemplateDB: templateDB,
+			Prefix:     "rest_presence",
+		}
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if presenceSchemaTemplate.err != nil {
+		t.Fatalf("prepare presence schema template: %v", presenceSchemaTemplate.err)
+	}
+	if presenceSchemaTemplate.pool == nil {
+		t.Fatal("presence schema pool was not initialized")
+	}
+	return presenceSchemaTemplate.pool
 }
 
 func seedPresenceUser(t *testing.T, database *gorm.DB, login string) db.User {
@@ -88,6 +112,7 @@ func seedPresenceIssue(t *testing.T, database *gorm.DB, owner db.User, name stri
 	}
 
 	issue := db.Issue{Number: 1, RepositoryID: repo.ID, Title: "Presence test issue"}
+	issue.AuthorID = owner.ID
 	if err := database.Create(&issue).Error; err != nil {
 		t.Fatalf("failed to create issue for %q: %v", name, err)
 	}

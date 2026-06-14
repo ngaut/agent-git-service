@@ -20,6 +20,15 @@ func findDeliveryByEventAction(deliveries []map[string]any, event, action string
 	return nil
 }
 
+func jsonIDString(t *testing.T, value any, field string) string {
+	t.Helper()
+	id, ok := value.(float64)
+	if !ok {
+		t.Fatalf("expected numeric %s, got %T (%v)", field, value, value)
+	}
+	return strconv.Itoa(int(id))
+}
+
 func TestWebhookHandlers_DeliveriesAndRedelivery(t *testing.T) {
 	h := testharness.New(t)
 	repo := "webhook-deliveries"
@@ -46,13 +55,15 @@ func TestWebhookHandlers_DeliveriesAndRedelivery(t *testing.T) {
 	if created["id"] == nil {
 		t.Fatalf("expected created webhook id, got %+v", created)
 	}
+	hookID := jsonIDString(t, created["id"], "hook id")
 
-	listResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/1/deliveries", full), nil)
+	listResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/%s/deliveries", full, hookID), nil)
 	assertStatusCode(t, listResp, http.StatusOK)
 	deliveries := testharness.DecodeJSONArray(t, listResp)
 	if len(deliveries) != 1 {
 		t.Fatalf("expected 1 delivery after ping, got %d", len(deliveries))
 	}
+	deliveryID := jsonIDString(t, deliveries[0]["id"], "delivery id")
 	if deliveries[0]["event"] != "ping" {
 		t.Fatalf("expected ping delivery, got %v", deliveries[0]["event"])
 	}
@@ -76,7 +87,7 @@ func TestWebhookHandlers_DeliveriesAndRedelivery(t *testing.T) {
 		t.Fatalf("expected request.payload object, got %T", request["payload"])
 	}
 
-	detailResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/1/deliveries/1", full), nil)
+	detailResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/%s/deliveries/%s", full, hookID, deliveryID), nil)
 	assertStatusCode(t, detailResp, http.StatusOK)
 	detail := testharness.DecodeJSON(t, detailResp)
 	if detail["guid"] == nil {
@@ -86,7 +97,7 @@ func TestWebhookHandlers_DeliveriesAndRedelivery(t *testing.T) {
 		t.Fatalf("expected GitHub-style detail status, got %v", detail["status"])
 	}
 
-	redeliverResp := h.DoRESTJSON(t, http.MethodPost, fmt.Sprintf("/api/v3/repos/%s/hooks/1/deliveries/1/attempts", full), nil)
+	redeliverResp := h.DoRESTJSON(t, http.MethodPost, fmt.Sprintf("/api/v3/repos/%s/hooks/%s/deliveries/%s/attempts", full, hookID, deliveryID), nil)
 	assertStatusCode(t, redeliverResp, http.StatusAccepted)
 	redelivery := testharness.DecodeJSON(t, redeliverResp)
 	if redelivery["redelivery"] != true {
@@ -96,7 +107,7 @@ func TestWebhookHandlers_DeliveriesAndRedelivery(t *testing.T) {
 		t.Fatalf("expected redelivery url %q, got %v", receiver.URL, redelivery["url"])
 	}
 
-	allResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/1/deliveries", full), nil)
+	allResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/%s/deliveries", full, hookID), nil)
 	assertStatusCode(t, allResp, http.StatusOK)
 	allDeliveries := testharness.DecodeJSONArray(t, allResp)
 	if len(allDeliveries) != 2 {
@@ -132,6 +143,8 @@ func TestWebhookHandlers_IssueMilestoneOnlyPatchDispatchesEditedEvent(t *testing
 		"events": []string{"issues"},
 	})
 	assertStatusCode(t, createResp, http.StatusCreated)
+	created := testharness.DecodeJSON(t, createResp)
+	hookID := jsonIDString(t, created["id"], "hook id")
 
 	issueResp := h.DoRESTJSON(t, http.MethodPost, fmt.Sprintf("/api/v3/repos/%s/issues", full), map[string]any{
 		"title": "issue webhook target",
@@ -148,7 +161,7 @@ func TestWebhookHandlers_IssueMilestoneOnlyPatchDispatchesEditedEvent(t *testing
 	})
 	assertStatusCode(t, patchResp, http.StatusOK)
 
-	listResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/1/deliveries", full), nil)
+	listResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/%s/deliveries", full, hookID), nil)
 	assertStatusCode(t, listResp, http.StatusOK)
 	deliveries := testharness.DecodeJSONArray(t, listResp)
 	if len(deliveries) != 3 {
@@ -174,6 +187,8 @@ func TestWebhookHandlers_PRMilestoneOnlyPatchDispatchesEditedEvent(t *testing.T)
 		"events": []string{"pull_request"},
 	})
 	assertStatusCode(t, createResp, http.StatusCreated)
+	created := testharness.DecodeJSON(t, createResp)
+	hookID := jsonIDString(t, created["id"], "hook id")
 
 	if err := h.Svc.Git.CreateBranch(ctx, full, "feature", "main"); err != nil {
 		t.Fatalf("create branch: %v", err)
@@ -200,7 +215,7 @@ func TestWebhookHandlers_PRMilestoneOnlyPatchDispatchesEditedEvent(t *testing.T)
 	})
 	assertStatusCode(t, patchResp, http.StatusOK)
 
-	listResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/1/deliveries", full), nil)
+	listResp := h.DoREST(t, http.MethodGet, fmt.Sprintf("/api/v3/repos/%s/hooks/%s/deliveries", full, hookID), nil)
 	assertStatusCode(t, listResp, http.StatusOK)
 	deliveries := testharness.DecodeJSONArray(t, listResp)
 	if len(deliveries) != 3 {

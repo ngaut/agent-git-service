@@ -888,6 +888,15 @@ func TestGraphQL_TransferIssue_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRepo (dest): %v", err)
 	}
+	destExisting, err := svc.CreateIssue(ctx, service.CreateIssueInput{
+		RepoFullName: fmt.Sprintf("%s/%s", u.Login, destRepo.Name),
+		Title:        "Existing destination issue",
+		Body:         "dest issue body",
+		AuthorLogin:  u.Login,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue (dest existing): %v", err)
+	}
 
 	// Create issue in source repo.
 	issue, err := svc.CreateIssue(ctx, service.CreateIssueInput{
@@ -926,6 +935,10 @@ func TestGraphQL_TransferIssue_Success(t *testing.T) {
 	if transferredIssue["id"] == nil {
 		t.Error("issue id should be present")
 	}
+	wantTransferredNumber := destExisting.Number + 1
+	if transferredIssue["number"] != float64(wantTransferredNumber) {
+		t.Errorf("transferred issue number: got %v, want %d", transferredIssue["number"], wantTransferredNumber)
+	}
 
 	// Verify issue is transferred in database.
 	storedIssue, err := svc.GetIssueByID(ctx, issue.ID)
@@ -934,6 +947,21 @@ func TestGraphQL_TransferIssue_Success(t *testing.T) {
 	}
 	if storedIssue.RepositoryID != destRepo.ID {
 		t.Errorf("repository_id: got %d, want %d", storedIssue.RepositoryID, destRepo.ID)
+	}
+	if storedIssue.Number != wantTransferredNumber {
+		t.Errorf("stored issue number: got %d, want %d", storedIssue.Number, wantTransferredNumber)
+	}
+	followUp, err := svc.CreateIssue(ctx, service.CreateIssueInput{
+		RepoFullName: fmt.Sprintf("%s/%s", u.Login, destRepo.Name),
+		Title:        "Follow-up destination issue",
+		Body:         "follow-up body",
+		AuthorLogin:  u.Login,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue (dest follow-up): %v", err)
+	}
+	if followUp.Number != wantTransferredNumber+1 {
+		t.Errorf("follow-up issue number: got %d, want %d", followUp.Number, wantTransferredNumber+1)
 	}
 }
 

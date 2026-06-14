@@ -198,9 +198,8 @@ func (s *Service) materializeChangesetToGit(ctx context.Context, repoFullName st
 	//      ref-pinned reads (GetWikiPageAtRef) and the history
 	//      endpoint resolve correctly.
 	//
-	// Both UPDATEs run in one transaction so a back-to-back write
-	// burst doesn't queue against SQLite's single-writer lock twice
-	// per ApplyChangeSet.
+	// Both UPDATEs run in one transaction so a back-to-back write burst
+	// applies the materialization state atomically per ApplyChangeSet.
 	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&db.WikiChangeset{}).
 			Where("changeset_id = ?", result.ChangesetID).

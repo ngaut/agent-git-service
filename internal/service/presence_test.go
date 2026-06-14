@@ -2,60 +2,20 @@ package service
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-
 	"github.com/ngaut/agent-git-service/internal/db"
-	"github.com/ngaut/agent-git-service/internal/gitstore"
 )
 
 func setupTestPresenceHub(t *testing.T) (*PresenceHub, func()) {
 	t.Helper()
 
-	// Setup local tmp gitstore
-	tmpDir, err := os.MkdirTemp("", "gh-server-presence-test-")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to connect database: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("failed to set sqlite busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("failed to set sqlite journal_mode: %v", err)
-	}
-
-	// Migrate required tables
-	err = gdb.AutoMigrate(
-		&db.User{},
-		&db.Repository{},
-		&db.Issue{},
-		&db.UserLastSeen{},
-	)
-	if err != nil {
-		t.Fatalf("failed to migrate database: %v", err)
-	}
-
-	gitStore, err := gitstore.New(tmpDir)
-	if err != nil {
-		t.Fatalf("failed to init gitstore: %v", err)
-	}
-	_ = gitStore // not used but required for service struct
-
+	gdb, dbCleanup := openMigratedServiceTestDB(t)
 	hub := NewPresenceHub(gdb)
 
 	cleanup := func() {
-		_ = os.RemoveAll(tmpDir)
+		dbCleanup()
 	}
 
 	return hub, cleanup
@@ -84,7 +44,7 @@ func seedPresenceIssue(t *testing.T, hub *PresenceHub, owner db.User, name strin
 		t.Fatalf("failed to create repo %q: %v", name, err)
 	}
 
-	issue := db.Issue{Number: 1, RepositoryID: repo.ID, Title: "Presence test issue"}
+	issue := db.Issue{Number: 1, RepositoryID: repo.ID, Title: "Presence test issue", AuthorID: owner.ID}
 	if err := hub.db.Create(&issue).Error; err != nil {
 		t.Fatalf("failed to create issue for %q: %v", name, err)
 	}

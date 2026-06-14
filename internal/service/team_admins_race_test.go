@@ -5,14 +5,12 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"gorm.io/driver/mysql"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	gormlogger "gorm.io/gorm/logger"
@@ -114,11 +112,8 @@ func openFakeTeamAdminsMySQLDB(t *testing.T, lastInsertID int64) (*gorm.DB, *fak
 // Create with clause.OnConflict{DoNothing} and re-reads when the returned
 // row has no ID.
 //
-// The race can't be driven end-to-end against SQLite: its single-writer file
-// lock serializes concurrent writers and manifests conflicts as "database is
-// locked", not as the TiDB-shape duplicate-key error the fix targets. This
-// test therefore verifies the fix in two complementary pieces that together
-// cover the full code path:
+// The race is verified in two complementary pieces that together cover the
+// full TiDB code path:
 //
 //  1. The OnConflict{DoNothing} mechanism — direct assertion that issuing
 //     Create() against a pre-seeded row absorbs the conflict without error
@@ -130,16 +125,8 @@ func openFakeTeamAdminsMySQLDB(t *testing.T, lastInsertID int64) (*gorm.DB, *fak
 //
 // All three are needed: remove any one and a regression could sneak through.
 func TestEnsureAdminsTeamTx_SurvivesLostRace(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "team-admins-race.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	sqlDB, _ := gdb.DB()
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.Migrate(gdb); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	gdb, cleanup := openMigratedServiceTestDB(t)
+	t.Cleanup(cleanup)
 
 	org := db.User{Login: "raceorg", Name: "raceorg", Type: db.TypeOrganization}
 	if err := gdb.Create(&org).Error; err != nil {
@@ -187,7 +174,7 @@ func TestEnsureAdminsTeamTx_SurvivesLostRace(t *testing.T) {
 	// here because First() hits; pre-fix this assertion held too, so its
 	// job is to catch a regression that breaks the fast path).
 	var got db.Team
-	err = gdb.Transaction(func(tx *gorm.DB) error {
+	err := gdb.Transaction(func(tx *gorm.DB) error {
 		var inner error
 		got, inner = ensureAdminsTeamTx(tx, org.ID)
 		return inner
@@ -216,16 +203,8 @@ func TestEnsureAdminsTeamTx_SurvivesLostRace(t *testing.T) {
 // row with a populated ID. Guards against an over-eager DoNothing that would
 // leave team.ID == 0 in the happy path.
 func TestEnsureAdminsTeamTx_NoTeamPathStillCreates(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "team-admins-create.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	sqlDB, _ := gdb.DB()
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.Migrate(gdb); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	gdb, cleanup := openMigratedServiceTestDB(t)
+	t.Cleanup(cleanup)
 
 	org := db.User{Login: "freshorg", Name: "freshorg", Type: db.TypeOrganization}
 	if err := gdb.Create(&org).Error; err != nil {
@@ -233,7 +212,7 @@ func TestEnsureAdminsTeamTx_NoTeamPathStillCreates(t *testing.T) {
 	}
 
 	var got db.Team
-	err = gdb.Transaction(func(tx *gorm.DB) error {
+	err := gdb.Transaction(func(tx *gorm.DB) error {
 		var inner error
 		got, inner = ensureAdminsTeamTx(tx, org.ID)
 		return inner

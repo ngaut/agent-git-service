@@ -10,7 +10,6 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
@@ -215,16 +214,6 @@ func dialectorForDSN(dsn string) (gorm.Dialector, string) {
 	raw := strings.TrimSpace(dsn)
 	lower := strings.ToLower(raw)
 	switch {
-	case lower == ":memory:":
-		return sqlite.Open(raw), "sqlite"
-	case strings.HasPrefix(lower, "file:"):
-		return sqlite.Open(raw), "sqlite"
-	case strings.HasPrefix(lower, "sqlite://"):
-		return sqlite.Open(raw[len("sqlite://"):]), "sqlite"
-	case strings.HasPrefix(lower, "sqlite:"):
-		trimmed := raw[len("sqlite:"):]
-		trimmed = strings.TrimPrefix(trimmed, "//")
-		return sqlite.Open(trimmed), "sqlite"
 	case strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://"):
 		return postgres.Open(raw), "postgres"
 	default:
@@ -233,7 +222,7 @@ func dialectorForDSN(dsn string) (gorm.Dialector, string) {
 }
 
 // DialectorForDSN returns the GORM dialector and dialect name for the given DSN.
-// Dialect name is one of "postgres", "mysql", "sqlite".
+// Dialect name is one of "postgres" or "mysql".
 // Used by callers outside this package that need dialect-aware DB opens.
 func DialectorForDSN(raw string) (gorm.Dialector, string) {
 	return dialectorForDSN(raw)
@@ -256,6 +245,7 @@ func Migrate(database *gorm.DB) error {
 		&TeamMember{},
 		&TeamRepository{},
 		&Repository{},
+		&IssuePRNumberCounter{},
 		&RepoRedirect{},
 		&Token{},
 		&UserIdentity{},
@@ -389,7 +379,7 @@ func InitVector(database *gorm.DB, dims int) {
 	isPostgres := database.Dialector.Name() == "postgres"
 	for _, table := range tables {
 		if migrator.HasColumn(table, "embedding") {
-			slog.Info("db: InitVector: embedding column already exists", "table", table)
+			slog.Debug("db: InitVector: embedding column already exists", "table", table)
 			continue
 		}
 		var sql string
@@ -403,12 +393,12 @@ func InitVector(database *gorm.DB, dims int) {
 			if migrator.HasColumn(table, "embedding") ||
 				strings.Contains(msg, "duplicate column") ||
 				strings.Contains(msg, "already exists") {
-				slog.Info("db: InitVector: embedding column already exists", "table", table)
+				slog.Debug("db: InitVector: embedding column already exists", "table", table)
 				continue
 			}
 			slog.Warn("db: InitVector: "+table, "error", err)
 		} else {
-			slog.Info("db: InitVector: added embedding column", "table", table, "dims", dims)
+			slog.Debug("db: InitVector: added embedding column", "table", table, "dims", dims)
 		}
 	}
 

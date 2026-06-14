@@ -7,24 +7,79 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+
+	appdb "github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 var testDBCounter atomic.Int64
 
+var bootstrapSchemaTemplate struct {
+	once sync.Once
+	name string
+	err  error
+}
+
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("file:readyz_%d?mode=memory&cache=shared", testDBCounter.Add(1))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
+	db, cleanup := testdb.OpenRaw(t, fmt.Sprintf("readyz_%d", testDBCounter.Add(1)))
+	t.Cleanup(cleanup)
 	return db
+}
+
+func createBootstrapDSN(t *testing.T, prefix string) string {
+	t.Helper()
+	templateDB := bootstrapTemplateDB(t)
+	dbName, dsn, adminSQL := testdb.CreateDatabase(t, testdb.Options{Prefix: prefix})
+	if err := testdb.CloneSchema(t.Context(), adminSQL, templateDB, dbName); err != nil {
+		_, _ = adminSQL.Exec("DROP DATABASE IF EXISTS `" + dbName + "`")
+		t.Fatalf("clone bootstrap schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = adminSQL.Exec("DROP DATABASE IF EXISTS `" + dbName + "`")
+	})
+	return dsn
+}
+
+func createEmptyBootstrapDSN(t *testing.T, prefix string) string {
+	t.Helper()
+	dbName, dsn, adminSQL := testdb.CreateRawDatabase(t, prefix)
+	t.Cleanup(func() {
+		_, _ = adminSQL.Exec("DROP DATABASE IF EXISTS `" + dbName + "`")
+	})
+	return dsn
+}
+
+func bootstrapTemplateDB(t *testing.T) string {
+	t.Helper()
+	bootstrapSchemaTemplate.once.Do(func() {
+		gdb, cleanup := testdb.OpenRaw(t, "bootstrap_template")
+		_ = cleanup
+		if err := gdb.Raw("SELECT DATABASE()").Scan(&bootstrapSchemaTemplate.name).Error; err != nil {
+			bootstrapSchemaTemplate.err = err
+			return
+		}
+		if err := appdb.Migrate(gdb); err != nil {
+			bootstrapSchemaTemplate.err = err
+			return
+		}
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if bootstrapSchemaTemplate.err != nil {
+		t.Fatalf("prepare bootstrap schema template: %v", bootstrapSchemaTemplate.err)
+	}
+	if bootstrapSchemaTemplate.name == "" {
+		t.Fatal("bootstrap schema template has no database name")
+	}
+	return bootstrapSchemaTemplate.name
 }
 
 // setupBootstrapEnv sets up standard bootstrap environment variables for tests.
@@ -32,8 +87,16 @@ func openTestDB(t *testing.T) *gorm.DB {
 func setupBootstrapEnv(t *testing.T, overrides map[string]string) {
 	t.Helper()
 
+	dbDSN := ""
+	if overrides != nil {
+		dbDSN = overrides["DB_DSN"]
+	}
+	if dbDSN == "" {
+		dbDSN = createBootstrapDSN(t, "bootstrap_main")
+	}
+
 	defaults := map[string]string{
-		"DB_DSN":       "file:test?mode=memory&cache=shared",
+		"DB_DSN":       dbDSN,
 		"ADMIN_LOGIN":  "admin",
 		"ADMIN_TOKEN":  "token",
 		"GIT_REPO_DIR": t.TempDir(),
@@ -65,7 +128,7 @@ func setupBootstrapEnv(t *testing.T, overrides map[string]string) {
 func TestBootstrap_Success_Minimal(t *testing.T) {
 	// Set up minimal required environment variables.
 	setupBootstrapEnv(t, map[string]string{
-		"DB_DSN": "file:test_bootstrap_success?mode=memory&cache=shared",
+		"DB_DSN": createEmptyBootstrapDSN(t, "bootstrap_empty_main"),
 	})
 
 	result := bootstrap()

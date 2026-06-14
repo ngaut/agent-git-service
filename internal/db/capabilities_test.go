@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
@@ -25,6 +25,8 @@ type fakeMySQLCapabilityConfig struct {
 	tidbVersion       string
 	versionErr        error
 	version           string
+	fullTextErr       error
+	fullTextScore     float64
 	vectorDistanceErr error
 	vectorDistance    float64
 	vectorDistanceNil bool
@@ -94,6 +96,11 @@ func (c *fakeMySQLCapabilityConn) QueryContext(_ context.Context, query string, 
 			value = float64(0)
 		}
 		return &singleValueRows{columns: []string{"COALESCE(VEC_COSINE_DISTANCE(?, ?), 0)"}, values: []driver.Value{value}}, nil
+	case "select fts_match_word(?, ?)":
+		if c.driver.cfg.fullTextErr != nil {
+			return nil, c.driver.cfg.fullTextErr
+		}
+		return &singleValueRows{columns: []string{"FTS_MATCH_WORD(?, ?)"}, values: []driver.Value{c.driver.cfg.fullTextScore}}, nil
 	default:
 		return nil, fmt.Errorf("unexpected query: %s", query)
 	}
@@ -198,9 +205,64 @@ func TestSupportsTiDBSearch(t *testing.T) {
 }
 
 func TestSupportsTiDBSearch_NonMySQLFalse(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "capabilities.db"))
+	gdb := &gorm.DB{Config: &gorm.Config{Dialector: postgres.Open("postgres://user:pass@localhost:5432/testdb?sslmode=disable")}}
 	if SupportsTiDBSearch(gdb) {
-		t.Fatal("expected sqlite to report no TiDB search support")
+		t.Fatal("expected postgres to report no TiDB search support")
+	}
+}
+
+func TestSupportsTiDBFullText_MySQLRequiresTiDBAndFunction(t *testing.T) {
+	tests := []struct {
+		name              string
+		cfg               fakeMySQLCapabilityConfig
+		want              bool
+		wantFullTextProbe bool
+	}{
+		{
+			name: "tidb with fts_match_word",
+			cfg: fakeMySQLCapabilityConfig{
+				tidbVersion:   "Release Version: v8.5.0",
+				fullTextScore: 1,
+			},
+			want:              true,
+			wantFullTextProbe: true,
+		},
+		{
+			name: "tidb without fts_match_word",
+			cfg: fakeMySQLCapabilityConfig{
+				tidbVersion: "Release Version: v8.1.0",
+				fullTextErr: errors.New("function FTS_MATCH_WORD does not exist"),
+			},
+			want:              false,
+			wantFullTextProbe: true,
+		},
+		{
+			name: "plain mysql skips fts probe",
+			cfg: fakeMySQLCapabilityConfig{
+				tidbVersionErr: errors.New("function tidb_version does not exist"),
+				version:        "8.0.36 MySQL Community Server",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gdb, fakeDriver := openFakeMySQLCapabilityDB(t, tt.cfg)
+			if got := SupportsTiDBFullText(gdb); got != tt.want {
+				t.Fatalf("SupportsTiDBFullText() = %v, want %v", got, tt.want)
+			}
+
+			sawFullTextProbe := false
+			for _, query := range fakeDriver.Queries() {
+				if strings.Contains(strings.ToUpper(query), "FTS_MATCH_WORD") {
+					sawFullTextProbe = true
+				}
+			}
+			if sawFullTextProbe != tt.wantFullTextProbe {
+				t.Fatalf("full-text probe presence = %v, want %v; queries=%#v", sawFullTextProbe, tt.wantFullTextProbe, fakeDriver.Queries())
+			}
+		})
 	}
 }
 

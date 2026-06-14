@@ -1,29 +1,17 @@
 package db
 
 import (
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
 // TestWikiCatalogAutoMigrate is the guard rail for the catalog DDL. It
-// fails fast if a model declaration is invalid on SQLite, which is the
-// dialect every unit-test path uses.
+// fails fast if a model declaration is invalid on TiDB, matching the
+// production database dialect.
 func TestWikiCatalogAutoMigrate(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "wiki-catalog.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := gdb.DB(); err == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
+	gdb := openTiDB(t)
 
 	if err := Migrate(gdb); err != nil {
 		t.Fatalf("Migrate failed: %v", err)
@@ -99,15 +87,10 @@ func gormTag(t *testing.T, model any, fieldName string) string {
 }
 
 // TestWikiCatalogRoundTrip exercises insertion/retrieval against each
-// new table. This catches column-type mismatches (e.g. forgetting that
-// SQLite has no native BIGINT autoinc semantics) before the catalog
-// primitive ever runs against real data.
+// new table. This catches TiDB column-type and constraint mismatches before
+// the catalog primitive ever runs against real data.
 func TestWikiCatalogRoundTrip(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "wiki-catalog-rt.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormlogger.Discard})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	gdb := openTiDB(t)
 	if err := Migrate(gdb); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

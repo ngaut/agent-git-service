@@ -44,120 +44,12 @@ func hasCorrectIndexShape(db *gorm.DB, tableName, indexName string, expectedColu
 	dialect := db.Dialector.Name()
 
 	switch dialect {
-	case "sqlite":
-		return hasCorrectIndexShapeSQLite(db, tableName, indexName, expectedColumns)
 	case "postgres":
 		return hasCorrectIndexShapePostgres(db, tableName, indexName, expectedColumns)
 	default:
 		// MySQL/TiDB use SHOW INDEX syntax.
 		return hasCorrectIndexShapeMySQL(db, tableName, indexName, expectedColumns)
 	}
-}
-
-// hasCorrectIndexShapeSQLite checks index shape using SQLite PRAGMA commands.
-// SQLite PRAGMAs cannot be parameterized, so identifier substitution flows
-// exclusively through safePragmaRows which rejects anything non-identifier.
-func hasCorrectIndexShapeSQLite(db *gorm.DB, tableName, indexName string, expectedColumns []string) (bool, error) {
-	// First, check if the index exists using PRAGMA index_list
-	rows, err := safePragmaRows(db, "index_list", tableName)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	indexExists := false
-	for rows.Next() {
-		var (
-			seq     int
-			name    string
-			unique  int
-			origin  sql.NullString
-			partial int
-		)
-		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
-			return false, err
-		}
-		if name == indexName {
-			indexExists = true
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-
-	if !indexExists {
-		return false, nil
-	}
-
-	// Get the columns in the index using PRAGMA index_info
-	rows, err = safePragmaRows(db, "index_info", indexName)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	var columns []string
-	for rows.Next() {
-		var (
-			seq     int
-			colID   sql.NullInt64
-			colName sql.NullString
-		)
-		if err := rows.Scan(&seq, &colID, &colName); err != nil {
-			return false, err
-		}
-		if colName.Valid {
-			columns = append(columns, colName.String)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-
-	// Compare columns
-	if len(columns) != len(expectedColumns) {
-		return false, nil
-	}
-	for i, col := range columns {
-		if !strings.EqualFold(col, expectedColumns[i]) {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-// safePragmaRows runs `PRAGMA <name>(<ident>)` after validating the identifier.
-// SQLite PRAGMAs do not accept parameters, so every caller must route identifier
-// substitution through this helper to keep the injection guard centralized.
-func safePragmaRows(db *gorm.DB, pragma, ident string) (*sql.Rows, error) {
-	if !isValidSQLIdentifier(pragma) {
-		return nil, fmt.Errorf("invalid PRAGMA name %q", pragma)
-	}
-	if !isValidSQLIdentifier(ident) {
-		return nil, fmt.Errorf("invalid identifier %q", ident)
-	}
-	return db.Raw(fmt.Sprintf("PRAGMA %s(%s)", pragma, ident)).Rows()
-}
-
-// isValidSQLIdentifier checks if a string is a valid SQL identifier
-// (alphanumeric + underscore, starting with letter or underscore)
-func isValidSQLIdentifier(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for i, r := range s {
-		if i == 0 {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_') {
-				return false
-			}
-		} else {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // hasCorrectIndexShapeMySQL checks index shape using MySQL/TiDB SHOW INDEX syntax.

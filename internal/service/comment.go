@@ -522,7 +522,7 @@ func (s *Service) AttachLabelsAndAssignees(ctx context.Context, issueID *uint, p
 
 // attachLabels resolves GQL label node IDs ("Label_<dbID>") and inserts
 // join-table rows for the target issue or PR.
-// Uses INSERT … WHERE NOT EXISTS for MySQL/SQLite portability.
+// Uses INSERT … WHERE NOT EXISTS for idempotent TiDB/MySQL-compatible writes.
 func (s *Service) attachLabels(ctx context.Context, issueID *uint, prID *uint, labelIDs []string) error {
 	for _, idStr := range labelIDs {
 		if !strings.HasPrefix(idStr, "Label_") {

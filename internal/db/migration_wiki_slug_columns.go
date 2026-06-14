@@ -127,7 +127,7 @@ func dropObsoleteWikiColumn(database *gorm.DB, col wikiObsoleteColumn) error {
 	var err error
 	if database.Dialector != nil {
 		switch database.Dialector.Name() {
-		case "mysql", "sqlite", "postgres":
+		case "mysql", "postgres":
 			err = database.Exec(dropWikiColumnDDL(database, col)).Error
 		default:
 			err = migrator.DropColumn(col.table, col.column)

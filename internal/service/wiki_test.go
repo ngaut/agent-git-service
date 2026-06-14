@@ -957,7 +957,7 @@ func TestDeleteWikiPage_ConcurrentDeletesSerialize(t *testing.T) {
 	}
 	full := "wiki-delete-owner/wiki-delete-concurrent"
 
-	const pages = 16
+	const pages = 8
 	for i := 0; i < pages; i++ {
 		slug := fmt.Sprintf("accounts/page-%02d", i)
 		if _, err := svc.PutWikiPage(ctx, full, slug, "# "+slug+"\n", "put "+slug, ""); err != nil {

@@ -197,22 +197,13 @@ func (s *Server) doTransferIssue(ctx context.Context, req gqlRequest) map[string
 		if destFullName != "" {
 			destRepo, err := s.Svc.GetRepo(ctx, destFullName)
 			if err == nil {
-				// Update the issue's repository and assign a new number in the destination repo
-				newNumber, numErr := s.Svc.NextIssueNumber(ctx, destRepo.ID)
-				if numErr != nil {
-					return errResp(numErr.Error())
-				}
-				if err := s.Svc.UpdateIssueFields(ctx, dbIssueID, map[string]any{
-					"repository_id": destRepo.ID,
-					"number":        newNumber,
-				}); err != nil {
+				issue, err := s.Svc.TransferIssueToRepo(ctx, dbIssueID, destRepo.ID)
+				if err != nil {
 					return errResp(err.Error())
 				}
-				if issue, err := s.Svc.ReloadIssue(ctx, dbIssueID); err == nil {
-					return wrap("transferIssue", map[string]any{
-						"issue": s.issueGQL(ctx, issue),
-					})
-				}
+				return wrap("transferIssue", map[string]any{
+					"issue": s.issueGQL(ctx, issue),
+				})
 			}
 		}
 	}

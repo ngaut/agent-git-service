@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 	"time"
@@ -18,8 +17,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/service"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 const benchmarkPRCreateCommits = 24
@@ -78,26 +76,11 @@ func newPRBenchmarkDeps(b *testing.B) (*Deps, *service.Service, db.User) {
 	}
 	b.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
-	dbPath := filepath.Join(tmpDir, "bench.sqlite")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		b.Fatalf("open sqlite: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		b.Fatalf("busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		b.Fatalf("journal_mode: %v", err)
-	}
+	gdb, dbCleanup := testdb.OpenRaw(b, "rest_pr_bench")
+	b.Cleanup(dbCleanup)
 	if err := db.Migrate(gdb); err != nil {
 		b.Fatalf("migrate: %v", err)
 	}
-
-	sqlDB, err := gdb.DB()
-	if err != nil {
-		b.Fatalf("sql db: %v", err)
-	}
-	b.Cleanup(func() { _ = sqlDB.Close() })
 
 	store, err := gitstore.New(tmpDir)
 	if err != nil {

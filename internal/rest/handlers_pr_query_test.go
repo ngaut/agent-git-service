@@ -6,14 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -26,6 +23,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 type queryCounterLogger struct {
@@ -59,26 +57,11 @@ func TestCreatePR_QueryCount(t *testing.T) {
 	tmpDir := t.TempDir()
 	logger := newQueryCounterLogger()
 
-	dbPath := filepath.Join(tmpDir, "query-count.sqlite")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: logger})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("journal_mode: %v", err)
-	}
+	gdb, cleanup := testdb.Open(t, testdb.Options{Prefix: "rest_pr_query", Logger: logger})
+	t.Cleanup(cleanup)
 	if err := db.Migrate(gdb); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-
-	sqlDB, err := gdb.DB()
-	if err != nil {
-		t.Fatalf("sql db: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	store, err := gitstore.New(tmpDir)
 	if err != nil {

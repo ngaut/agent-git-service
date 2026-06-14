@@ -19,14 +19,15 @@ require_cmd jq
 require_cmd make
 require_cmd git
 require_cmd python3
+require_cmd mysql
 
 RANDOM_SUFFIX="$(date +%s)-$RANDOM"
 SERVER_PORT="${E2E_PORT:-$((RANDOM % 10000 + 20000))}"
 BASE_URL="http://localhost:$SERVER_PORT"
 ADMIN_LOGIN="e2e-admin-$RANDOM_SUFFIX"
 ADMIN_TOKEN="e2e-token-$RANDOM_SUFFIX"
-SQLITE_DB="/tmp/gh-server-transfer-e2e-$RANDOM_SUFFIX.db"
-DB_DSN="sqlite:$SQLITE_DB"
+TIDB_DB_NAME="transfer_e2e_${RANDOM_SUFFIX//[^A-Za-z0-9_]/_}"
+DB_DSN="$(tidb_dsn_for_database "$TIDB_DB_NAME")"
 GIT_REPO_DIR="$(mktemp -d /tmp/gh-server-transfer-repos.XXXXXX)"
 LOG_FILE="/tmp/gh-server-transfer-e2e.log"
 
@@ -44,11 +45,11 @@ cleanup() {
   if [[ -n "${GIT_REPO_DIR:-}" && -d "$GIT_REPO_DIR" ]]; then
     rm -rf "$GIT_REPO_DIR"
   fi
-  if [[ -f "$SQLITE_DB" ]]; then
-    rm -f "$SQLITE_DB"
-  fi
+  tidb_drop_database "$TIDB_DB_NAME"
 }
 trap cleanup EXIT
+
+tidb_create_database "$TIDB_DB_NAME"
 
 start_server() {
   note "Building gh-server..."

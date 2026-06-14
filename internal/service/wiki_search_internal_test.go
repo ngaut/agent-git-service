@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,9 +10,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
 	"gorm.io/driver/mysql"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -62,12 +59,7 @@ func TestWikiSearchLikeEscapeClauseByDialect(t *testing.T) {
 			want: ` ESCAPE '\\'`,
 		},
 		{
-			name: "sqlite keeps single backslash escape character",
-			db:   &gorm.DB{Config: &gorm.Config{Dialector: sqlite.Open(":memory:")}},
-			want: ` ESCAPE '\'`,
-		},
-		{
-			name: "nil database uses portable fallback",
+			name: "nil database uses non-mysql fallback",
 			db:   nil,
 			want: ` ESCAPE '\'`,
 		},
@@ -403,38 +395,24 @@ func TestWikiSearchCurrentHydrationQuery_OmitsEmbedding(t *testing.T) {
 }
 
 func TestSearchWikiSemanticANN_PostFiltersWithoutExactRepoFallback(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_wiki_ann_fallback_%d", time.Now().UnixNano())
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				switch embedding {
-				case "[1,0,0]":
-					return 0
-				case "[0.8,0.2,0]":
-					return 0.1
-				default:
-					return 1
-				}
-			}, true)
-		},
-	})
-
-	gdb, err := gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: "file::memory:?cache=shared"}, &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	if err := gdb.AutoMigrate(&db.Repository{}, &db.Label{}, &db.WikiSearchDocument{}, &db.WikiPageLabel{}); err != nil {
-		t.Fatalf("AutoMigrate: %v", err)
-	}
-	if err := gdb.Exec("ALTER TABLE wiki_search_documents ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("add embedding column: %v", err)
+	gdb, cleanup := openVectorServiceTestDB(t)
+	t.Cleanup(cleanup)
+	if !db.SupportsVectorDistance(gdb) {
+		t.Skip("TiDB vector distance is unavailable")
 	}
 	svc := &Service{DB: gdb}
 
 	ctx := context.Background()
+	owners := []db.User{
+		{ID: 1, Login: "target", Name: "Target"},
+		{ID: 2, Login: "noise", Name: "Noise"},
+	}
+	if err := svc.DB.Create(&owners).Error; err != nil {
+		t.Fatalf("seed owners: %v", err)
+	}
 	repos := []db.Repository{
-		{ID: 1, Name: "wiki-target", FullName: "target/wiki-target"},
-		{ID: 2, Name: "wiki-noise", FullName: "noise/wiki-noise"},
+		{ID: 1, Name: "wiki-target", FullName: "target/wiki-target", OwnerID: owners[0].ID},
+		{ID: 2, Name: "wiki-noise", FullName: "noise/wiki-noise", OwnerID: owners[1].ID},
 	}
 	if err := svc.DB.Create(&repos).Error; err != nil {
 		t.Fatalf("seed repos: %v", err)

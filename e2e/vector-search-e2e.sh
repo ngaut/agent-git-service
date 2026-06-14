@@ -3,7 +3,7 @@
 # Tests semantic search end-to-end plus failure handling.
 #
 # Prerequisites:
-# - TiDB running (SQLite doesn't support VECTOR operations for the success case)
+# - TiDB running
 # - Go installed (for mock server and gh-server build)
 # - gh CLI configured
 #
@@ -39,8 +39,6 @@ else
   DEFAULT_DB_DSN="root:@tcp(127.0.0.1:4000)/${TIDB_DB_NAME}?parseTime=true&timeout=10s"
   DROP_TIDB_DB_ON_CLEANUP="true"
 fi
-SQLITE_DB="/tmp/gh-server-vector-e2e-$RANDOM_STRING.db"
-SQLITE_DSN="sqlite:$SQLITE_DB"
 GIT_REPO_DIR="$(mktemp -d /tmp/gh-server-e2e-repos.XXXXXX)"
 
 REPOS_TO_DELETE=()
@@ -116,9 +114,6 @@ cleanup() {
   fi
   if [ -n "${GIT_REPO_DIR:-}" ]; then
     rm -rf "$GIT_REPO_DIR"
-  fi
-  if [ -f "$SQLITE_DB" ]; then
-    rm -f "$SQLITE_DB"
   fi
   if [ "$DROP_TIDB_DB_ON_CLEANUP" = "true" ] && [ -n "$TIDB_DB_NAME" ]; then
     mysql_exec "DROP DATABASE IF EXISTS \`$TIDB_DB_NAME\`" 2>/dev/null || true
@@ -370,27 +365,5 @@ assert_issue_present "$RATE_LIMIT_RESP" "$RATE_LIMIT_TITLE"
 code="$(http_code --max-time 5 "$BASE_URL/api/v3/")"
 assert_eq "$code" "200"
 ok "rate limit handled without crash/hang"
-
-# Step 10: Vector DB query failure handling (SQLite has no VEC_COSINE_DISTANCE)
-note "Restarting gh-server with SQLite to force vector query failure..."
-stop_gh_server
-start_gh_server "$SQLITE_DSN"
-
-REPO_NAME_SQLITE="vector-e2e-sqlite-$RANDOM_STRING"
-VEC_FAIL_TITLE="Vector DB failure case $RANDOM_STRING"
-
-note "Creating SQLite repository $ORG/$REPO_NAME_SQLITE..."
-create_repo "$REPO_NAME_SQLITE" > /dev/null
-add_repo_cleanup "$ORG/$REPO_NAME_SQLITE"
-
-create_issue "$ORG/$REPO_NAME_SQLITE" "$VEC_FAIL_TITLE" "vector-db-failure" > /dev/null
-
-note "Case: vector DB query failure"
-VEC_FAIL_RESP="$(search_issues "vector-db-failure repo:$ORG/$REPO_NAME_SQLITE" 15)"
-assert_search_contract "$VEC_FAIL_RESP"
-assert_issue_present "$VEC_FAIL_RESP" "$VEC_FAIL_TITLE"
-code="$(http_code --max-time 5 "$BASE_URL/api/v3/")"
-assert_eq "$code" "200"
-ok "vector query failure handled without crash/hang"
 
 note "=== Vector Search E2E Test PASSED ==="

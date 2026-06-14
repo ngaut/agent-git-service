@@ -63,7 +63,7 @@ The public import surface is intentionally small:
 | `rest` | REST decoding and response orchestration | `service`, `rest/respond`, `rest/transform`, DB model types for shapes | direct GORM queries for business behavior |
 | `router` | route registration and host rewrite | REST, GraphQL, Git HTTP, OAuth, middleware | direct DB/Git operations |
 | `service` | business rules and orchestration | `db`, `gitstore`, embedding/OIDC helpers, metrics/logging | transport response packages |
-| `testharness` | real-router integration harness | server-adjacent packages, SQLite test DB | production-only process setup |
+| `testharness` | real-router integration harness | server-adjacent packages, TiDB test schemas | production-only process setup |
 | `wikicatalog` | wiki catalog indexing support | DB/Git-adjacent helpers | transport routing |
 | `wikiv2` | wiki V2 storage helpers | Git/storage helpers | transport routing |
 

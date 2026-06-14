@@ -128,36 +128,27 @@ func TestDeployment_CrossRepoIsolation(t *testing.T) {
 
 	t.Run("GetDeploymentStatus_cross_repo_denied", func(t *testing.T) {
 		// Try to get status1 using repo2's ID (cross-repo access)
-		// Note: GetDeploymentStatus currently doesn't verify repo ownership
-		// This test documents the current behavior
 		_, err := svc.GetDeploymentStatus(ctx, repo2.ID, deployment1.ID, status1.ID)
 		if err == nil {
-			// Current implementation doesn't check repo boundary for statuses
-			// This is a known gap that should be fixed
-			t.Logf("GetDeploymentStatus currently allows cross-repo access (known gap)")
+			t.Error("expected error when accessing deployment status from different repo, got nil")
 		}
 	})
 
-	t.Run("ListDeploymentStatuses_cross_repo_not_isolated", func(t *testing.T) {
+	t.Run("ListDeploymentStatuses_cross_repo_isolated", func(t *testing.T) {
 		// Try to list statuses for deployment1 using repo2's context
-		// Note: ListDeploymentStatuses currently doesn't verify repo ownership
 		statuses, err := svc.ListDeploymentStatuses(ctx, repo2.ID, deployment1.ID)
 		if err != nil {
 			t.Fatalf("list deployment statuses: %v", err)
 		}
-		// Current implementation returns statuses regardless of repo boundary
-		// This is a known gap - the repoID parameter is not used for filtering
-		if len(statuses) != 1 {
-			t.Errorf("expected 1 status (current behavior ignores repo boundary), got %d", len(statuses))
+		if len(statuses) != 0 {
+			t.Errorf("expected 0 statuses for cross-repo access, got %d", len(statuses))
 		}
-		t.Logf("ListDeploymentStatuses currently ignores repo boundary (known gap)")
 	})
 }
 
-// TestDeploymentStatus_RepoBoundaryGap tests the current behavior where
-// GetDeploymentStatus and ListDeploymentStatuses don't enforce repo boundaries.
-// This documents the security gap identified in issue #409.
-func TestDeploymentStatus_RepoBoundaryGap(t *testing.T) {
+// TestDeploymentStatus_RepoBoundaryEnforced verifies status access checks the
+// owning deployment's repository boundary.
+func TestDeploymentStatus_RepoBoundaryEnforced(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -200,34 +191,22 @@ func TestDeploymentStatus_RepoBoundaryGap(t *testing.T) {
 		t.Fatalf("create status: %v", err)
 	}
 
-	t.Run("GetDeploymentStatus_does_not_verify_repo", func(t *testing.T) {
-		// GetDeploymentStatus only checks deployment_id and status_id,
-		// not whether the deployment belongs to the specified repo.
-		// This is a security gap.
+	t.Run("GetDeploymentStatus_rejects_wrong_repo", func(t *testing.T) {
 		wrongRepoID := uint(99999) // Non-existent repo ID
-		foundStatus, err := svc.GetDeploymentStatus(ctx, wrongRepoID, deployment.ID, status.ID)
-		if err != nil {
-			t.Fatalf("GetDeploymentStatus failed: %v", err)
+		if _, err := svc.GetDeploymentStatus(ctx, wrongRepoID, deployment.ID, status.ID); err == nil {
+			t.Fatal("expected error for wrong repo, got nil")
 		}
-		if foundStatus.ID != status.ID {
-			t.Errorf("expected status ID %d, got %d", status.ID, foundStatus.ID)
-		}
-		t.Logf("GetDeploymentStatus returned status without verifying repo ownership (security gap)")
 	})
 
-	t.Run("ListDeploymentStatuses_does_not_verify_repo", func(t *testing.T) {
-		// ListDeploymentStatuses only checks deployment_id,
-		// not whether the deployment belongs to the specified repo.
-		// This is a security gap.
+	t.Run("ListDeploymentStatuses_rejects_wrong_repo", func(t *testing.T) {
 		wrongRepoID := uint(99999) // Non-existent repo ID
 		statuses, err := svc.ListDeploymentStatuses(ctx, wrongRepoID, deployment.ID)
 		if err != nil {
 			t.Fatalf("ListDeploymentStatuses failed: %v", err)
 		}
-		if len(statuses) != 1 {
-			t.Errorf("expected 1 status, got %d", len(statuses))
+		if len(statuses) != 0 {
+			t.Errorf("expected 0 statuses for wrong repo, got %d", len(statuses))
 		}
-		t.Logf("ListDeploymentStatuses returned statuses without verifying repo ownership (security gap)")
 	})
 }
 
