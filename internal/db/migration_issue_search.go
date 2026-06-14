@@ -55,7 +55,7 @@ var issueSearchVectorIndexes = []issueSearchVectorIndex{
 // On TiDB variants without the required full-text/vector capabilities, each
 // individual DDL attempt logs a warning and startup continues.
 func MigrateIssueSearch(database *gorm.DB) error {
-	if !SupportsTiDBSearch(database) {
+	if !IsTiDB(database) {
 		return nil
 	}
 
@@ -161,7 +161,7 @@ func ensureFullTextIndex(database *gorm.DB, idx issueSearchFullTextIndex) {
 }
 
 func ensureVectorIndexes(database *gorm.DB) {
-	if !SupportsTiDBSearch(database) {
+	if !IsTiDB(database) {
 		return
 	}
 	migrator := database.Migrator()
