@@ -84,16 +84,6 @@ func wikiCompactProjectionRef(committedAt time.Time) string {
 	return wikiCompactRefPrefix + committedAt.UTC().Format("20060102-150405")
 }
 
-func (s *Service) updateWikiCompactRef(ctx context.Context, repoFullName, ref, commitSHA string) error {
-	if s.Git == nil {
-		return errors.New("git store unavailable")
-	}
-	full := wikiRepoFullName(repoFullName)
-	return s.Git.WithRepoLock(ctx, full, func() error {
-		return s.updateWikiCompactRefLocked(ctx, repoFullName, ref, commitSHA)
-	})
-}
-
 func (s *Service) updateWikiCompactRefLocked(ctx context.Context, repoFullName, ref, commitSHA string) error {
 	if s.testWikiCompactRefUpdateFailure != nil {
 		if err := s.testWikiCompactRefUpdateFailure(repoFullName, commitSHA); err != nil {
