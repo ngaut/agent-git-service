@@ -65,9 +65,10 @@ func (s *Service) ListIssuesForRESTPage(ctx context.Context, filter IssueListPag
 		return IssueListPage{}, nil
 	}
 
-	pageSQL, pageArgs := buildIssueListPageQuery(rep.ID, normalized, labelNames, labelIDsByName, true, normalized.sort == "comments", normalized.perPage+1)
+	database := s.DBForCtx(ctx)
+	pageSQL, pageArgs := buildIssueListPageQuery(database, rep.ID, normalized, labelNames, labelIDsByName, true, normalized.sort == "comments", normalized.perPage+1)
 	var rows []issueListPageRow
-	if err := s.DBForCtx(ctx).Raw(pageSQL, pageArgs...).Scan(&rows).Error; err != nil {
+	if err := database.Raw(pageSQL, pageArgs...).Scan(&rows).Error; err != nil {
 		return IssueListPage{}, err
 	}
 	hasMore := len(rows) > normalized.perPage
@@ -133,9 +134,10 @@ func (s *Service) issueListPageTotal(
 }
 
 func (s *Service) countIssueListPageRows(ctx context.Context, repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint) (int64, error) {
-	countSQL, countArgs := buildIssueListPageQuery(repoID, filter, labelNames, labelIDsByName, false, false, 0)
+	database := s.DBForCtx(ctx)
+	countSQL, countArgs := buildIssueListPageQuery(database, repoID, filter, labelNames, labelIDsByName, false, false, 0)
 	var total int64
-	if err := s.DBForCtx(ctx).Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
+	if err := database.Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
 		return 0, err
 	}
 	return total, nil
@@ -256,16 +258,16 @@ func splitIssueListPageLabels(raw string) []string {
 	return names
 }
 
-func buildIssueListPageQuery(repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, paginate bool, includeComments bool, limit int) (string, []any) {
+func buildIssueListPageQuery(database *gorm.DB, repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, paginate bool, includeComments bool, limit int) (string, []any) {
 	parts := make([]string, 0, 2)
 	args := make([]any, 0)
 	if filter.kind == "all" || filter.kind == "issue" {
-		issueSQL, issueArgs := buildIssueListPageEntitySQL("issue", "issues", repoID, filter, labelNames, labelIDsByName, includeComments)
+		issueSQL, issueArgs := buildIssueListPageEntitySQL(database, "issue", "issues", repoID, filter, labelNames, labelIDsByName, includeComments)
 		parts = append(parts, issueSQL)
 		args = append(args, issueArgs...)
 	}
 	if filter.kind == "all" || filter.kind == "pull" {
-		prSQL, prArgs := buildIssueListPageEntitySQL("pr", "pull_requests", repoID, filter, labelNames, labelIDsByName, includeComments)
+		prSQL, prArgs := buildIssueListPageEntitySQL(database, "pr", "pull_requests", repoID, filter, labelNames, labelIDsByName, includeComments)
 		parts = append(parts, prSQL)
 		args = append(args, prArgs...)
 	}
@@ -299,7 +301,7 @@ func buildIssueListPageQuery(repoID uint, filter normalizedIssueListPageFilter, 
 		"FROM (" + pageSQL + ") AS page", args
 }
 
-func buildIssueListPageEntitySQL(kind, table string, repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, includeComments bool) (string, []any) {
+func buildIssueListPageEntitySQL(database *gorm.DB, kind, table string, repoID uint, filter normalizedIssueListPageFilter, labelNames []string, labelIDsByName map[string][]uint, includeComments bool) (string, []any) {
 	where := []string{table + ".repository_id = ?"}
 	args := []any{repoID}
 	if table == "issues" {
@@ -323,7 +325,7 @@ func buildIssueListPageEntitySQL(kind, table string, repoID uint, filter normali
 		args = append(args, *filter.since)
 	}
 	if filter.titlePrefix != "" {
-		where = append(where, "LOWER("+table+".title) LIKE ? ESCAPE '\\'")
+		where = append(where, "LOWER("+table+".title) LIKE ?"+sqlLikeEscapeClause(database))
 		args = append(args, strings.ToLower(escapeSQLLike(filter.titlePrefix))+"%")
 	}
 	where, args = appendIssueListPageMilestoneWhere(where, args, table, repoID, filter.milestone)
