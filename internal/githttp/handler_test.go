@@ -13,11 +13,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -29,6 +29,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 // skipIfNoBackend skips the test if git-http-backend is not available.
@@ -68,18 +69,8 @@ func setupTestServer(t *testing.T, owner, repo, defaultBranch string, seed bool)
 	skipIfNoBackend(t)
 
 	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("sqlite busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("sqlite journal_mode: %v", err)
-	}
+	gdb, dbCleanup := testdb.OpenRaw(t, "githttp")
+	t.Cleanup(dbCleanup)
 	if err := gdb.AutoMigrate(
 		&db.User{}, &db.Team{}, &db.TeamMember{}, &db.TeamRepository{},
 		&db.Repository{}, &db.RepoRedirect{}, &db.Token{}, &db.Label{}, &db.Workflow{}, &db.Collaborator{},
@@ -236,9 +227,9 @@ func TestReceivePackDispatchesPushWebhook(t *testing.T) {
 		t.Fatalf("find repo: %v", err)
 	}
 
-	var hits int
+	var hits atomic.Int64
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -266,25 +257,7 @@ func TestReceivePackDispatchesPushWebhook(t *testing.T) {
 	runGit(t, cloneDir, "commit", "-m", "push webhook test")
 	runGit(t, cloneDir, "push", "origin", "main")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var count int64
-		if err := env.DB.Model(&db.HookDelivery{}).Where("repository_id = ?", repo.ID).Count(&count).Error; err != nil {
-			t.Fatalf("count hook deliveries: %v", err)
-		}
-		if count == 1 && hits == 1 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	if hits != 1 {
-		t.Fatalf("expected 1 outbound push webhook request, got %d", hits)
-	}
-	var delivery db.HookDelivery
-	if err := env.DB.Where("repository_id = ?", repo.ID).First(&delivery).Error; err != nil {
-		t.Fatalf("find delivery: %v", err)
-	}
+	delivery := waitForPushWebhookDelivery(t, env.DB, repo.ID, &hits)
 	if delivery.Event != "push" {
 		t.Fatalf("expected push delivery, got %q", delivery.Event)
 	}
@@ -336,6 +309,28 @@ func TestReceivePackDispatchesPushWebhook(t *testing.T) {
 	}
 }
 
+func waitForPushWebhookDelivery(t *testing.T, database *gorm.DB, repoID uint, hits *atomic.Int64) db.HookDelivery {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastDelivery db.HookDelivery
+	for time.Now().Before(deadline) {
+		var delivery db.HookDelivery
+		err := database.Where("repository_id = ?", repoID).First(&delivery).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			t.Fatalf("find delivery: %v", err)
+		}
+		if err == nil {
+			lastDelivery = delivery
+			if hits.Load() == 1 && delivery.Status != "pending" {
+				return delivery
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected completed push webhook delivery, got hits=%d delivery=%#v", hits.Load(), lastDelivery)
+	return db.HookDelivery{}
+}
+
 func TestReceivePackDispatchesPushWebhookForNewBranchWithoutAncestorHistory(t *testing.T) {
 	env := setupTestServer(t, "pushhook", "repo", "main", true)
 
@@ -344,9 +339,9 @@ func TestReceivePackDispatchesPushWebhookForNewBranchWithoutAncestorHistory(t *t
 		t.Fatalf("find repo: %v", err)
 	}
 
-	var hits int
+	var hits atomic.Int64
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -372,24 +367,9 @@ func TestReceivePackDispatchesPushWebhookForNewBranchWithoutAncestorHistory(t *t
 	runGit(t, cloneDir, "commit", "-m", "feature branch push")
 	runGit(t, cloneDir, "push", "origin", "feature")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var count int64
-		if err := env.DB.Model(&db.HookDelivery{}).Where("repository_id = ?", repo.ID).Count(&count).Error; err != nil {
-			t.Fatalf("count hook deliveries: %v", err)
-		}
-		if count == 1 && hits == 1 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	if hits != 1 {
-		t.Fatalf("expected 1 outbound push webhook request, got %d", hits)
-	}
-	var delivery db.HookDelivery
-	if err := env.DB.Where("repository_id = ?", repo.ID).First(&delivery).Error; err != nil {
-		t.Fatalf("find delivery: %v", err)
+	delivery := waitForPushWebhookDelivery(t, env.DB, repo.ID, &hits)
+	if delivery.Status != "ok" {
+		t.Fatalf("expected ok delivery status, got %q", delivery.Status)
 	}
 
 	var payload struct {
@@ -472,19 +452,8 @@ var _ githttp.Store = (*stubStore)(nil)
 
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("sqlite busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("sqlite journal_mode: %v", err)
-	}
+	gdb, dbCleanup := testdb.OpenRaw(t, "githttp")
+	t.Cleanup(dbCleanup)
 	if err := gdb.AutoMigrate(
 		&db.User{}, &db.Team{}, &db.TeamMember{}, &db.TeamRepository{},
 		&db.Repository{}, &db.RepoRedirect{}, &db.Token{}, &db.Label{}, &db.Workflow{}, &db.Collaborator{},
@@ -758,18 +727,8 @@ func TestEnsureRepo_MissingRepo(t *testing.T) {
 // TestEnsureRepo_AutoInit tests auto-init behavior when repo is in DB but not on disk.
 func TestEnsureRepo_AutoInit(t *testing.T) {
 	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.sqlite")
-
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		t.Fatalf("sqlite busy_timeout: %v", err)
-	}
-	if err := gdb.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		t.Fatalf("sqlite journal_mode: %v", err)
-	}
+	gdb, dbCleanup := testdb.OpenRaw(t, "githttp")
+	t.Cleanup(dbCleanup)
 	if err := gdb.AutoMigrate(&db.User{}, &db.Repository{}, &db.RepoRedirect{}, &db.Label{}, &db.Workflow{}); err != nil {
 		t.Fatalf("auto-migrate: %v", err)
 	}

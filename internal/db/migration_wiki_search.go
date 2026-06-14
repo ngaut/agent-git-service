@@ -62,7 +62,7 @@ func ensureWikiSearchEmbeddingTextColumn(database *gorm.DB) {
 		slog.Warn("db: MigrateWikiSearch: add embedding column", "table", "wiki_search_documents", "err", err)
 		return
 	}
-	slog.Info("db: MigrateWikiSearch: added embedding column", "table", "wiki_search_documents")
+	slog.Debug("db: MigrateWikiSearch: added embedding column", "table", "wiki_search_documents")
 }
 
 func ensureWikiFullTextIndex(database *gorm.DB, idx wikiSearchFullTextIndex) {
@@ -82,7 +82,7 @@ func ensureWikiFullTextIndex(database *gorm.DB, idx wikiSearchFullTextIndex) {
 		slog.Warn("db: MigrateWikiSearch: add fulltext index", "table", idx.table, "index", idx.name, "column", idx.column, "err", err)
 		return
 	}
-	slog.Info("db: MigrateWikiSearch: added fulltext index", "table", idx.table, "index", idx.name, "column", idx.column)
+	slog.Debug("db: MigrateWikiSearch: added fulltext index", "table", idx.table, "index", idx.name, "column", idx.column)
 }
 
 func ensureWikiSearchVector(database *gorm.DB, dims int) {
@@ -102,7 +102,7 @@ func ensureWikiSearchVector(database *gorm.DB, dims int) {
 	}
 
 	if wikiSearchEmbeddingColumnIsVector(database) {
-		slog.Info("db: InitVector: embedding column already exists", "table", "wiki_search_documents")
+		slog.Debug("db: InitVector: embedding column already exists", "table", "wiki_search_documents")
 		ensureWikiSearchVectorIndex(database)
 		return
 	}
@@ -128,7 +128,7 @@ func addWikiSearchVectorColumn(database *gorm.DB, dims int) bool {
 	sql := fmt.Sprintf("ALTER TABLE `wiki_search_documents` ADD COLUMN `embedding` VECTOR(%d)", dims)
 	if err := database.Exec(sql).Error; err != nil {
 		if wikiSearchEmbeddingColumnIsVector(database) {
-			slog.Info("db: InitVector: embedding column already exists", "table", "wiki_search_documents")
+			slog.Debug("db: InitVector: embedding column already exists", "table", "wiki_search_documents")
 			return true
 		}
 		if isAlreadyExistsErr(err) {
@@ -138,7 +138,7 @@ func addWikiSearchVectorColumn(database *gorm.DB, dims int) bool {
 		slog.Warn("db: InitVector: wiki_search_documents", "error", err)
 		return false
 	}
-	slog.Info("db: InitVector: added embedding column", "table", "wiki_search_documents", "dims", dims)
+	slog.Debug("db: InitVector: added embedding column", "table", "wiki_search_documents", "dims", dims)
 	return true
 }
 
@@ -168,19 +168,23 @@ func ensureWikiSearchVectorIndex(database *gorm.DB) {
 		return
 	}
 	sql := wikiVectorIndexDDL(wikiSearchVectorIndex)
-	if err := database.Exec(sql).Error; err != nil {
+	if err := quietCapabilityDB(database).Exec(sql).Error; err != nil {
 		if migrator.HasIndex(wikiSearchVectorIndex.table, wikiSearchVectorIndex.name) || isAlreadyExistsErr(err) {
+			return
+		}
+		if isUnsupportedVectorIndexErr(err) {
+			slog.Debug("db: InitVector: skip unavailable vector index", "table", wikiSearchVectorIndex.table, "index", wikiSearchVectorIndex.name, "err", err)
 			return
 		}
 		slog.Warn("db: InitVector: add vector index", "table", wikiSearchVectorIndex.table, "index", wikiSearchVectorIndex.name, "err", err)
 		return
 	}
-	slog.Info("db: InitVector: added vector index", "table", wikiSearchVectorIndex.table, "index", wikiSearchVectorIndex.name)
+	slog.Debug("db: InitVector: added vector index", "table", wikiSearchVectorIndex.table, "index", wikiSearchVectorIndex.name)
 }
 
 func wikiFullTextIndexDDL(idx wikiSearchFullTextIndex) string {
 	return fmt.Sprintf(
-		"ALTER TABLE `%s` ADD FULLTEXT INDEX `%s` (`%s`) WITH PARSER MULTILINGUAL ADD_COLUMNAR_REPLICA_ON_DEMAND",
+		"ALTER TABLE `%s` ADD FULLTEXT INDEX `%s` (`%s`) WITH PARSER MULTILINGUAL",
 		idx.table,
 		idx.name,
 		idx.column,

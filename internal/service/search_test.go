@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -830,13 +828,8 @@ func TestGetExtensionsForLanguage(t *testing.T) {
 
 func setupSearchFilterDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "search-filters.db")), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open sqlite memory db: %v", err)
-	}
-	if err := gdb.AutoMigrate(&db.User{}, &db.Repository{}, &db.Label{}, &db.Milestone{}, &db.Issue{}, &db.PullRequest{}); err != nil {
-		t.Fatalf("failed to auto-migrate search filter tables: %v", err)
-	}
+	gdb, cleanup := openMigratedServiceTestDB(t)
+	t.Cleanup(cleanup)
 	return gdb
 }
 
@@ -861,25 +854,29 @@ func prNumbers(prs []db.PullRequest) []int {
 func TestSearchQualifierRepoFilters(t *testing.T) {
 	gdb := setupSearchFilterDB(t)
 
+	owner := db.User{Login: "octo", Name: "Octo"}
+	if err := gdb.Create(&owner).Error; err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
 	repos := []db.Repository{
-		{Name: "public", FullName: "octo/public", Visibility: "public", Fork: false, Language: "Go"},
-		{Name: "private-fork", FullName: "octo/private-fork", Visibility: "private", Fork: true, Language: "Python"},
+		{Name: "public", FullName: "octo/public", OwnerID: owner.ID, Visibility: "public", Fork: false, Language: "Go"},
+		{Name: "private-fork", FullName: "octo/private-fork", OwnerID: owner.ID, Visibility: "private", Fork: true, Language: "Python"},
 	}
 	if err := gdb.Create(&repos).Error; err != nil {
 		t.Fatalf("failed to create repositories: %v", err)
 	}
 
 	issues := []db.Issue{
-		{Number: 1, RepositoryID: repos[0].ID, Title: "Issue public"},
-		{Number: 2, RepositoryID: repos[1].ID, Title: "Issue private fork"},
+		{Number: 1, RepositoryID: repos[0].ID, Title: "Issue public", AuthorID: owner.ID},
+		{Number: 2, RepositoryID: repos[1].ID, Title: "Issue private fork", AuthorID: owner.ID},
 	}
 	if err := gdb.Create(&issues).Error; err != nil {
 		t.Fatalf("failed to create issues: %v", err)
 	}
 
 	prs := []db.PullRequest{
-		{Number: 1, RepositoryID: repos[0].ID, Title: "PR public"},
-		{Number: 2, RepositoryID: repos[1].ID, Title: "PR private fork"},
+		{Number: 1, RepositoryID: repos[0].ID, HeadRepositoryID: repos[0].ID, Title: "PR public", AuthorID: owner.ID},
+		{Number: 2, RepositoryID: repos[1].ID, HeadRepositoryID: repos[1].ID, Title: "PR private fork", AuthorID: owner.ID},
 	}
 	if err := gdb.Create(&prs).Error; err != nil {
 		t.Fatalf("failed to create pull requests: %v", err)
@@ -955,26 +952,30 @@ func TestSearchQualifierRepoFilters(t *testing.T) {
 func TestSearchQualifierRepoScopedLabelFilters(t *testing.T) {
 	gdb := setupSearchFilterDB(t)
 
+	owner := db.User{Login: "octo", Name: "Octo"}
+	if err := gdb.Create(&owner).Error; err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
 	repos := []db.Repository{
-		{Name: "public", FullName: "octo/public"},
-		{Name: "private", FullName: "octo/private"},
+		{Name: "public", FullName: "octo/public", OwnerID: owner.ID},
+		{Name: "private", FullName: "octo/private", OwnerID: owner.ID},
 	}
 	if err := gdb.Create(&repos).Error; err != nil {
 		t.Fatalf("failed to create repositories: %v", err)
 	}
 
 	issues := []db.Issue{
-		{Number: 1, RepositoryID: repos[0].ID, Title: "public bug"},
-		{Number: 2, RepositoryID: repos[0].ID, Title: "public wontfix"},
-		{Number: 3, RepositoryID: repos[1].ID, Title: "private bug"},
+		{Number: 1, RepositoryID: repos[0].ID, Title: "public bug", AuthorID: owner.ID},
+		{Number: 2, RepositoryID: repos[0].ID, Title: "public wontfix", AuthorID: owner.ID},
+		{Number: 3, RepositoryID: repos[1].ID, Title: "private bug", AuthorID: owner.ID},
 	}
 	if err := gdb.Create(&issues).Error; err != nil {
 		t.Fatalf("failed to create issues: %v", err)
 	}
 
 	prs := []db.PullRequest{
-		{Number: 1, RepositoryID: repos[0].ID, Title: "public bug pr"},
-		{Number: 2, RepositoryID: repos[1].ID, Title: "private bug pr"},
+		{Number: 1, RepositoryID: repos[0].ID, HeadRepositoryID: repos[0].ID, Title: "public bug pr", AuthorID: owner.ID},
+		{Number: 2, RepositoryID: repos[1].ID, HeadRepositoryID: repos[1].ID, Title: "private bug pr", AuthorID: owner.ID},
 	}
 	if err := gdb.Create(&prs).Error; err != nil {
 		t.Fatalf("failed to create pull requests: %v", err)
@@ -1298,63 +1299,63 @@ func TestBuildIssueTextWhere(t *testing.T) {
 			name:       "empty defaults to title and body",
 			inValues:   []string{},
 			text:       "%test%",
-			wantClause: "(issues.title LIKE ? OR issues.body LIKE ?)",
+			wantClause: "(LOWER(issues.title) LIKE LOWER(?) OR LOWER(issues.body) LIKE LOWER(?))",
 			wantArgs:   []any{"%test%", "%test%"},
 		},
 		{
 			name:       "in:title only",
 			inValues:   []string{"title"},
 			text:       "%test%",
-			wantClause: "issues.title LIKE ?",
+			wantClause: "LOWER(issues.title) LIKE LOWER(?)",
 			wantArgs:   []any{"%test%"},
 		},
 		{
 			name:       "in:body only",
 			inValues:   []string{"body"},
 			text:       "%test%",
-			wantClause: "issues.body LIKE ?",
+			wantClause: "LOWER(issues.body) LIKE LOWER(?)",
 			wantArgs:   []any{"%test%"},
 		},
 		{
 			name:       "in:comments only",
 			inValues:   []string{"comments"},
 			text:       "%test%",
-			wantClause: "EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND body LIKE ?)",
+			wantClause: "EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND LOWER(issue_comments.body) LIKE LOWER(?))",
 			wantArgs:   []any{"%test%"},
 		},
 		{
 			name:       "in:title,comments",
 			inValues:   []string{"title", "comments"},
 			text:       "%test%",
-			wantClause: "(issues.title LIKE ? OR EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND body LIKE ?))",
+			wantClause: "(LOWER(issues.title) LIKE LOWER(?) OR EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND LOWER(issue_comments.body) LIKE LOWER(?)))",
 			wantArgs:   []any{"%test%", "%test%"},
 		},
 		{
 			name:       "in:body,comments",
 			inValues:   []string{"body", "comments"},
 			text:       "%test%",
-			wantClause: "(issues.body LIKE ? OR EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND body LIKE ?))",
+			wantClause: "(LOWER(issues.body) LIKE LOWER(?) OR EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND LOWER(issue_comments.body) LIKE LOWER(?)))",
 			wantArgs:   []any{"%test%", "%test%"},
 		},
 		{
 			name:       "in:title,body,comments",
 			inValues:   []string{"title", "body", "comments"},
 			text:       "%test%",
-			wantClause: "(issues.title LIKE ? OR issues.body LIKE ? OR EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND body LIKE ?))",
+			wantClause: "(LOWER(issues.title) LIKE LOWER(?) OR LOWER(issues.body) LIKE LOWER(?) OR EXISTS (SELECT 1 FROM issue_comments WHERE repository_id = issues.repository_id AND issue_number = issues.number AND LOWER(issue_comments.body) LIKE LOWER(?)))",
 			wantArgs:   []any{"%test%", "%test%", "%test%"},
 		},
 		{
 			name:       "in:title,body (no comments)",
 			inValues:   []string{"title", "body"},
 			text:       "%test%",
-			wantClause: "(issues.title LIKE ? OR issues.body LIKE ?)",
+			wantClause: "(LOWER(issues.title) LIKE LOWER(?) OR LOWER(issues.body) LIKE LOWER(?))",
 			wantArgs:   []any{"%test%", "%test%"},
 		},
 		{
 			name:       "invalid in values fallback",
 			inValues:   []string{"unknown"},
 			text:       "%test%",
-			wantClause: "(issues.title LIKE ? OR issues.body LIKE ?)",
+			wantClause: "(LOWER(issues.title) LIKE LOWER(?) OR LOWER(issues.body) LIKE LOWER(?))",
 			wantArgs:   []any{"%test%", "%test%"},
 		},
 	}

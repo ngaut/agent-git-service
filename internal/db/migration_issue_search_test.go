@@ -1,52 +1,21 @@
 package db
 
 import (
-	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestMigrateIssueSearch_NonMySQLNoOp(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "issue-search.db"))
-	if err := gdb.Exec("CREATE TABLE issues (id integer primary key, title text, body text)").Error; err != nil {
+func TestMigrateIssueSearch_TiDBTables(t *testing.T) {
+	gdb := openTiDB(t)
+	if err := gdb.Exec("CREATE TABLE issues (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, title TEXT, body TEXT)").Error; err != nil {
 		t.Fatalf("create issues: %v", err)
 	}
-	if err := gdb.Exec("CREATE TABLE pull_requests (id integer primary key, title text, body text, commit_messages text, filenames text)").Error; err != nil {
+	if err := gdb.Exec("CREATE TABLE pull_requests (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, title TEXT, body TEXT, commit_messages TEXT, filenames TEXT)").Error; err != nil {
 		t.Fatalf("create pull_requests: %v", err)
 	}
 
-	sink := captureLogs(t)
 	if err := MigrateIssueSearch(gdb); err != nil {
 		t.Fatalf("MigrateIssueSearch: %v", err)
-	}
-	entries := sink.Entries()
-	if len(entries) != 0 {
-		t.Fatalf("expected no logs for non-MySQL backend, got %#v", entries)
-	}
-}
-
-func TestInitVector_WithExistingColumnsStaysIdempotentOnSQLite(t *testing.T) {
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "issue-search-vector.db"))
-	createVectorTables(t, gdb)
-
-	if err := gdb.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("add issues.embedding: %v", err)
-	}
-	if err := gdb.Exec("ALTER TABLE pull_requests ADD COLUMN embedding TEXT").Error; err != nil {
-		t.Fatalf("add pull_requests.embedding: %v", err)
-	}
-
-	sink := captureLogs(t)
-	InitVector(gdb, 3)
-	entries := sink.Entries()
-
-	assertLogEntry(t, entries, slog.LevelInfo, "db: InitVector: embedding column already exists", "table", "issues")
-	assertLogEntry(t, entries, slog.LevelInfo, "db: InitVector: embedding column already exists", "table", "pull_requests")
-	for _, entry := range entries {
-		if entry.level == slog.LevelWarn {
-			t.Fatalf("expected no warn logs, got %#v", entries)
-		}
 	}
 }
 
@@ -62,8 +31,8 @@ func TestIssueSearchDDLBuilders(t *testing.T) {
 	if !strings.Contains(fullText, "WITH PARSER MULTILINGUAL") {
 		t.Fatalf("expected multilingual parser in full-text DDL, got %q", fullText)
 	}
-	if !strings.Contains(fullText, "ADD_COLUMNAR_REPLICA_ON_DEMAND") {
-		t.Fatalf("expected on-demand columnar replica in full-text DDL, got %q", fullText)
+	if strings.Contains(fullText, "ADD_COLUMNAR_REPLICA_ON_DEMAND") {
+		t.Fatalf("expected playground-compatible full-text DDL, got %q", fullText)
 	}
 
 	dropIndex := dropIndexDDL(issueSearchFullTextIndex{
@@ -112,11 +81,11 @@ func TestIssueSearchFullTextIndexesReady(t *testing.T) {
 		{table: "pull_requests", name: "idx_pull_requests_fts_title", column: "title"},
 	}
 
-	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "issue-search-ready.db"))
-	if err := gdb.Exec("CREATE TABLE issues (id integer primary key, title text)").Error; err != nil {
+	gdb := openTiDB(t)
+	if err := gdb.Exec("CREATE TABLE issues (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, title VARCHAR(255))").Error; err != nil {
 		t.Fatalf("create issues: %v", err)
 	}
-	if err := gdb.Exec("CREATE TABLE pull_requests (id integer primary key, title text)").Error; err != nil {
+	if err := gdb.Exec("CREATE TABLE pull_requests (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, title VARCHAR(255))").Error; err != nil {
 		t.Fatalf("create pull_requests: %v", err)
 	}
 	if issueSearchFullTextIndexesReady(gdb) {

@@ -2,8 +2,6 @@ package service_test
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"testing"
 	"time"
 
@@ -11,8 +9,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
@@ -37,23 +33,7 @@ func (l *queryCounterLogger) Trace(ctx context.Context, begin time.Time, fc func
 }
 
 func TestSearchIssues_CombinedSearchPreloadsOnce(t *testing.T) {
-	driverName := fmt.Sprintf("sqlite3_vec_%d", time.Now().UnixNano())
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("VEC_COSINE_DISTANCE", func(embedding, query string) float64 {
-				if embedding == query {
-					return 0
-				}
-				return 1
-			}, true)
-		},
-	})
-
-	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{
-		OpenDB: func(dbPath string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Dialector{DriverName: driverName, DSN: dbPath}, &gorm.Config{})
-		},
-	})
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
 	defer cleanup()
 	ctx := context.Background()
 
@@ -118,6 +98,9 @@ func TestSearchIssues_CombinedSearchPreloadsOnce(t *testing.T) {
 	}
 
 	db.InitVector(svc.DB, 3)
+	if !db.SupportsVectorDistance(svc.DB) {
+		t.Skip("TiDB vector distance is unavailable")
+	}
 	vec := "[0.1,0.2,0.3]"
 	if err := svc.DB.Model(&db.Issue{}).Where("id IN ?", []uint{iss1.ID, iss2.ID}).Update("embedding", vec).Error; err != nil {
 		t.Fatalf("set embeddings: %v", err)
@@ -126,6 +109,11 @@ func TestSearchIssues_CombinedSearchPreloadsOnce(t *testing.T) {
 	svc.Embedder = &FakeEmbedder{Vec: []float32{0.1, 0.2, 0.3}}
 	counter := newQueryCounterLogger()
 	svc.DB = svc.DB.Session(&gorm.Session{Logger: counter})
+
+	if _, err := svc.SearchIssues(ctx, "repo:countuser/countrepo vector search"); err != nil {
+		t.Fatalf("warm SearchIssues err: %v", err)
+	}
+	counter.count = 0
 
 	got, err := svc.SearchIssues(ctx, "repo:countuser/countrepo vector search")
 	if err != nil {

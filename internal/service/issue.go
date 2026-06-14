@@ -81,7 +81,7 @@ func (s *Service) CreateIssue(ctx context.Context, in CreateIssueInput) (db.Issu
 		}
 	}
 
-	const maxRetries = 5
+	const maxRetries = 25
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Pre-resolve labels before transaction to avoid holding locks during lookups.
 		var resolvedLabels []db.Label
@@ -207,7 +207,7 @@ func (s *Service) CreateIssue(ctx context.Context, in CreateIssueInput) (db.Issu
 
 			return nil
 		}); err != nil {
-			if isDuplicateErr(err) || isSQLiteLockErr(err) {
+			if isDuplicateErr(err) {
 				time.Sleep(retryDelay(attempt))
 				continue
 			}
@@ -659,6 +659,36 @@ func (s *Service) UpdateIssueFields(ctx context.Context, id uint, updates map[st
 		}
 	}
 	return nil
+}
+
+// TransferIssueToRepo moves an issue to another repository and allocates the
+// destination issue/PR number in the same transaction.
+func (s *Service) TransferIssueToRepo(ctx context.Context, issueID, destRepoID uint) (db.Issue, error) {
+	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		var issue db.Issue
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&issue, issueID).Error; err != nil {
+			return wrapErr(err)
+		}
+		if err := lockRepoForNumbering(tx, destRepoID); err != nil {
+			return wrapErr(err)
+		}
+		newNumber, err := nextIssueOrPRNumberTx(tx, destRepoID)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&db.Issue{}).
+			Where("id = ?", issueID).
+			Updates(map[string]any{
+				"repository_id": destRepoID,
+				"number":        newNumber,
+			}).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return db.Issue{}, err
+	}
+	return s.ReloadIssue(ctx, issueID)
 }
 
 // DeleteIssueByID deletes an issue by its DB ID within a transaction.

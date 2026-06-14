@@ -2,29 +2,21 @@ package graphql
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
-
-var testDBSeqPRStatus atomic.Uint64
 
 // setupTestServer creates a minimal Server instance for testing.
 func setupTestServer(t *testing.T) *Server {
-	seq := testDBSeqPRStatus.Add(1)
-	dsn := fmt.Sprintf("file:memdb_prstatus_%d?mode=memory&cache=shared", seq)
-	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
+	gdb, dbCleanup := testdb.OpenRaw(t, "gql_pr_status")
 
 	_ = gdb.AutoMigrate(
 		&db.User{}, &db.Repository{}, &db.RepoRedirect{}, &db.PullRequest{}, &db.Token{},
@@ -49,9 +41,7 @@ func setupTestServer(t *testing.T) *Server {
 	srv := NewServer(svc)
 
 	t.Cleanup(func() {
-		if sqlDB, err := gdb.DB(); err == nil {
-			sqlDB.Close()
-		}
+		dbCleanup()
 		os.RemoveAll(tmpDir)
 	})
 

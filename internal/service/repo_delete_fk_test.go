@@ -9,19 +9,15 @@ import (
 	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
-// setupTestServiceWithSQLiteFK builds a service fixture with SQLite foreign
-// keys enabled and the connection pool pinned to a single connection. Used
-// only by cascade-delete tests — most service tests should use
-// setupTestService instead.
-func setupTestServiceWithSQLiteFK(t *testing.T) (*service.Service, func()) {
-	return testharness.NewService(t, testharness.ServiceConfig{
-		ForeignKeys:  true,
-		MaxOpenConns: 1,
-	})
+// setupTestServiceWithRealDB builds a service fixture with the real test DB
+// and the connection pool pinned to a single connection. Used only by
+// cascade-delete tests — most service tests should use setupTestService.
+func setupTestServiceWithRealDB(t *testing.T) (*service.Service, func()) {
+	return testharness.NewService(t, testharness.ServiceConfig{MaxOpenConns: 1})
 }
 
 func TestDeleteRepo_CascadeHonorsFKs(t *testing.T) {
-	svc, cleanup := setupTestServiceWithSQLiteFK(t)
+	svc, cleanup := setupTestServiceWithRealDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -101,13 +97,12 @@ func TestDeleteRepo_CascadeHonorsFKs(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create issue with milestone: %v", err)
 	}
-	if err := svc.DB.Create(&db.WikiSearchDocument{
+	if err := svc.DB.Omit("Embedding").Create(&db.WikiSearchDocument{
 		RepositoryID: repo.ID,
 		Slug:         "docs/home",
 		Title:        "Home",
 		Body:         db.LargeText("wiki body"),
 		RevisionSHA:  "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-		Embedding:    "[0.1,0.2,0.3]",
 	}).Error; err != nil {
 		t.Fatalf("create wiki search document: %v", err)
 	}

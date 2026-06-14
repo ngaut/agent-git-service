@@ -63,7 +63,7 @@ func MigrateIssueSearch(database *gorm.DB) error {
 		ensureFullTextIndex(database, idx)
 	}
 	if !issueSearchFullTextIndexesReady(database) {
-		slog.Info("db: MigrateIssueSearch: skip obsolete search cleanup until replacement fulltext indexes are ready")
+		slog.Debug("db: MigrateIssueSearch: skip obsolete search cleanup until replacement fulltext indexes are ready")
 		ensureVectorIndexes(database)
 		return nil
 	}
@@ -107,7 +107,7 @@ func dropObsoleteFullTextIndex(database *gorm.DB, idx issueSearchFullTextIndex) 
 		slog.Warn("db: MigrateIssueSearch: drop obsolete fulltext index", "table", idx.table, "index", idx.name, "err", err)
 		return
 	}
-	slog.Info("db: MigrateIssueSearch: dropped obsolete fulltext index", "table", idx.table, "index", idx.name)
+	slog.Debug("db: MigrateIssueSearch: dropped obsolete fulltext index", "table", idx.table, "index", idx.name)
 }
 
 func dropObsoleteSearchColumn(database *gorm.DB, col issueSearchColumn) {
@@ -127,7 +127,7 @@ func dropObsoleteSearchColumn(database *gorm.DB, col issueSearchColumn) {
 		slog.Warn("db: MigrateIssueSearch: drop obsolete search column", "table", col.table, "column", col.column, "err", err)
 		return
 	}
-	slog.Info("db: MigrateIssueSearch: dropped obsolete search column", "table", col.table, "column", col.column)
+	slog.Debug("db: MigrateIssueSearch: dropped obsolete search column", "table", col.table, "column", col.column)
 }
 
 func ensureFullTextIndex(database *gorm.DB, idx issueSearchFullTextIndex) {
@@ -147,7 +147,7 @@ func ensureFullTextIndex(database *gorm.DB, idx issueSearchFullTextIndex) {
 		slog.Warn("db: MigrateIssueSearch: add fulltext index", "table", idx.table, "index", idx.name, "column", idx.column, "err", err)
 		return
 	}
-	slog.Info("db: MigrateIssueSearch: added fulltext index", "table", idx.table, "index", idx.name, "column", idx.column)
+	slog.Debug("db: MigrateIssueSearch: added fulltext index", "table", idx.table, "index", idx.name, "column", idx.column)
 }
 
 func ensureVectorIndexes(database *gorm.DB) {
@@ -164,20 +164,24 @@ func ensureVectorIndexes(database *gorm.DB) {
 		}
 
 		sql := vectorIndexDDL(idx)
-		if err := database.Exec(sql).Error; err != nil {
+		if err := quietCapabilityDB(database).Exec(sql).Error; err != nil {
 			if migrator.HasIndex(idx.table, idx.name) || isAlreadyExistsErr(err) {
+				continue
+			}
+			if isUnsupportedVectorIndexErr(err) {
+				slog.Debug("db: InitVector: skip unavailable vector index", "table", idx.table, "index", idx.name, "err", err)
 				continue
 			}
 			slog.Warn("db: InitVector: add vector index", "table", idx.table, "index", idx.name, "err", err)
 			continue
 		}
-		slog.Info("db: InitVector: added vector index", "table", idx.table, "index", idx.name)
+		slog.Debug("db: InitVector: added vector index", "table", idx.table, "index", idx.name)
 	}
 }
 
 func fullTextIndexDDL(idx issueSearchFullTextIndex) string {
 	return fmt.Sprintf(
-		"ALTER TABLE `%s` ADD FULLTEXT INDEX `%s` (`%s`) WITH PARSER MULTILINGUAL ADD_COLUMNAR_REPLICA_ON_DEMAND",
+		"ALTER TABLE `%s` ADD FULLTEXT INDEX `%s` (`%s`) WITH PARSER MULTILINGUAL",
 		idx.table,
 		idx.name,
 		idx.column,
@@ -209,4 +213,13 @@ func isAlreadyExistsErr(err error) bool {
 		strings.Contains(msg, "already exists") ||
 		strings.Contains(msg, "exists") ||
 		strings.Contains(msg, "duplicate key name")
+}
+
+func isUnsupportedVectorIndexErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unsupported add vector index") ||
+		strings.Contains(msg, "unsupported empty tiflash replica")
 }

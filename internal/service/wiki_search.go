@@ -37,7 +37,7 @@ const (
 	// When lexical search already found concrete token matches, keep
 	// semantic-only additions to high-confidence neighbors so short literal
 	// queries do not get flooded by weak vector nearest-neighbor noise.
-	wikiSemanticOnlyMinScoreWithLexical = 0.5
+	wikiSemanticOnlyMinScoreWithLexical = 0.6
 	wikiSemanticMaxExact                = wikiSearchMaxRankWindow
 	wikiSemanticANNCandidateMin         = 256
 	wikiSemanticANNCandidateMax         = 4096
@@ -442,12 +442,22 @@ func (s *Service) wikiCatalogMatchesLiveHead(ctx context.Context, repoFullName s
 }
 
 func (s *Service) searchWikiLexicalFromCurrentIndex(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, rankLimit int) ([]WikiSearchResult, bool, error) {
-	if db.SupportsTiDBSearch(s.DBForCtx(ctx)) {
+	if db.SupportsTiDBFullText(s.DBForCtx(ctx)) {
 		docs, err := s.wikiSearchCurrentDocumentsFullText(ctx, repoID, query, filters, rankLimit)
 		if err == nil {
 			results, err := s.rankWikiCurrentLexicalDocuments(ctx, repoID, docs, query)
 			if err != nil {
 				return nil, true, err
+			}
+			if len(results) == 0 {
+				likeDocs, likeErr := s.wikiSearchCurrentDocuments(ctx, repoID, query, false, filters)
+				if likeErr != nil {
+					return nil, true, likeErr
+				}
+				results, err = s.rankWikiCurrentLexicalDocuments(ctx, repoID, likeDocs, query)
+				if err != nil {
+					return nil, true, err
+				}
 			}
 			return markWikiSearchResultsCurrentIndex(truncateWikiSearchResultList(results, rankLimit)), true, nil
 		}
@@ -520,7 +530,7 @@ func wikiSearchDocumentBodyMatchesRevision(doc db.WikiSearchDocument) bool {
 }
 
 func (s *Service) searchWikiLexical(ctx context.Context, repoID uint, query string, filters WikiLabelFilters, rankLimit int) ([]WikiSearchResult, error) {
-	if db.SupportsTiDBSearch(s.DBForCtx(ctx)) {
+	if db.SupportsTiDBFullText(s.DBForCtx(ctx)) {
 		docs, err := s.wikiSearchDocumentsFullText(ctx, repoID, query, filters)
 		if err == nil {
 			results, err := s.rankWikiLexicalDocuments(ctx, repoID, docs, query)
@@ -1885,14 +1895,12 @@ func wikiSearchDocumentTableMissing(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no such table: wiki_search_documents") ||
-		strings.Contains(msg, "table `wiki_search_documents` doesn't exist")
+		strings.Contains(msg, "table `wiki_search_documents` doesn't exist") ||
+		(strings.Contains(msg, "wiki_search_documents") && strings.Contains(msg, "doesn't exist"))
 }
 
 func wikiSearchLikeEscapeClause(database *gorm.DB) string {
-	if database != nil && database.Dialector != nil && database.Dialector.Name() == "mysql" {
-		return ` ESCAPE '\\'`
-	}
-	return ` ESCAPE '\'`
+	return sqlLikeEscapeClause(database)
 }
 
 func (s *Service) wikiSearchLabelsBySlug(ctx context.Context, repoID uint, docs []db.WikiSearchDocument) (map[string][]db.Label, error) {

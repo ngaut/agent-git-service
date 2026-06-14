@@ -5,7 +5,6 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
 )
@@ -18,7 +17,6 @@ func TestLargeTextDataTypeByDialect(t *testing.T) {
 	}{
 		{name: "mysql uses mediumtext", db: &gorm.DB{Config: &gorm.Config{Dialector: mysql.Open("user:pass@tcp(host:3306)/db")}}, wantType: "mediumtext"},
 		{name: "postgres uses text", db: &gorm.DB{Config: &gorm.Config{Dialector: postgres.Open("postgres://user:pass@localhost:5432/testdb?sslmode=disable")}}, wantType: "text"},
-		{name: "sqlite uses text", db: &gorm.DB{Config: &gorm.Config{Dialector: sqlite.Open(":memory:")}}, wantType: "text"},
 	}
 
 	for _, tt := range tests {

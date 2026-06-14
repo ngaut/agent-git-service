@@ -1,33 +1,18 @@
 package db
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
-// openTestDB returns a migrated SQLite database for unit tests.
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	gdb := openTiDB(t)
 	if err := gdb.AutoMigrate(&User{}, &Token{}, &OrganizationMember{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() {
-		if sqlDB, err := gdb.DB(); err == nil {
-			sqlDB.Close()
-		}
-		os.Remove(dbPath)
-	})
 	return gdb
 }
 

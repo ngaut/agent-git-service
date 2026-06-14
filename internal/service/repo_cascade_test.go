@@ -15,8 +15,8 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
-func TestDeleteRepoCascade_SQLiteFK(t *testing.T) {
-	svc, cleanup := setupTestServiceWithSQLiteFK(t)
+func TestDeleteRepoCascade_TiDB(t *testing.T) {
+	svc, cleanup := setupTestServiceWithRealDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -42,13 +42,15 @@ func TestDeleteRepoCascade_SQLiteFK(t *testing.T) {
 	if err := svc.DB.Create(&workflowRun).Error; err != nil {
 		t.Fatalf("create workflow run: %v", err)
 	}
-	if err := svc.DB.Create(&db.WorkflowRunJob{RunID: workflowRun.ID, Name: "build"}).Error; err != nil {
+	workflowJob := testWorkflowRunJob(workflowRun.ID, "build")
+	if err := svc.DB.Create(&workflowJob).Error; err != nil {
 		t.Fatalf("create workflow job: %v", err)
 	}
 	if err := svc.DB.Create(&db.Artifact{RunID: workflowRun.ID, Name: "artifact", SizeInBytes: 10}).Error; err != nil {
 		t.Fatalf("create artifact: %v", err)
 	}
-	if err := svc.DB.Create(&db.ActionCache{RepositoryID: repo.ID, Key: "cache", Ref: "refs/heads/main", Version: "v1"}).Error; err != nil {
+	actionCache := testActionCache(repo.ID, "cache", "refs/heads/main", "v1")
+	if err := svc.DB.Create(&actionCache).Error; err != nil {
 		t.Fatalf("create action cache: %v", err)
 	}
 
@@ -60,7 +62,8 @@ func TestDeleteRepoCascade_SQLiteFK(t *testing.T) {
 	if err := svc.DB.Create(&otherRun).Error; err != nil {
 		t.Fatalf("create other workflow run: %v", err)
 	}
-	if err := svc.DB.Create(&db.WorkflowRunJob{RunID: otherRun.ID, Name: "build"}).Error; err != nil {
+	otherWorkflowJob := testWorkflowRunJob(otherRun.ID, "build")
+	if err := svc.DB.Create(&otherWorkflowJob).Error; err != nil {
 		t.Fatalf("create other workflow job: %v", err)
 	}
 
@@ -291,8 +294,8 @@ func TestDeleteRepoCascade_SQLiteFK(t *testing.T) {
 	}
 }
 
-func TestDeleteRepoCascade_SQLiteFKRollback(t *testing.T) {
-	svc, cleanup := setupTestServiceWithSQLiteFK(t)
+func TestDeleteRepoCascade_TiDBRollback(t *testing.T) {
+	svc, cleanup := setupTestServiceWithRealDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -308,7 +311,8 @@ func TestDeleteRepoCascade_SQLiteFKRollback(t *testing.T) {
 	if err := svc.DB.Create(&workflowRun).Error; err != nil {
 		t.Fatalf("create workflow run: %v", err)
 	}
-	if err := svc.DB.Create(&db.WorkflowRunJob{RunID: workflowRun.ID, Name: "build"}).Error; err != nil {
+	workflowJob := testWorkflowRunJob(workflowRun.ID, "build")
+	if err := svc.DB.Create(&workflowJob).Error; err != nil {
 		t.Fatalf("create workflow job: %v", err)
 	}
 
@@ -386,7 +390,7 @@ func TestDeleteRepoCascade_SQLiteFKRollback(t *testing.T) {
 }
 
 func TestDeleteRepoRemovesLegacyIssueScopedAttachmentFiles(t *testing.T) {
-	svc, cleanup := setupTestServiceWithSQLiteFK(t)
+	svc, cleanup := setupTestServiceWithRealDB(t)
 	defer cleanup()
 
 	ctx := context.Background()

@@ -156,7 +156,7 @@ func TestMain_SignalDrivenShutdown(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run failed: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("timed out waiting for shutdown")
 	}
 }
@@ -372,7 +372,7 @@ func TestNew_HandlerUsesHostAwareMuxAndPerServerTransformState(t *testing.T) {
 		t.Helper()
 		root := t.TempDir()
 		srv, err := New(config.Config{
-			DBdsn:       "file:" + filepath.Join(root, name+".db"),
+			DBdsn:       createBootstrapDSN(t, "server_"+name),
 			GitRepoDir:  filepath.Join(root, "repos"),
 			BaseURL:     baseURL,
 			ListenMode:  "production",
@@ -413,7 +413,7 @@ func TestNew_HandlerUsesHostAwareMuxAndPerServerTransformState(t *testing.T) {
 func TestNew_RESTHandlerUsesDefaultPrefixInResponseURLs(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
-		DBdsn:       "file:" + filepath.Join(root, "rest-prefix.db"),
+		DBdsn:       createBootstrapDSN(t, "server_rest_prefix"),
 		GitRepoDir:  filepath.Join(root, "repos"),
 		BaseURL:     "http://embed.local",
 		ListenMode:  "production",
@@ -458,7 +458,7 @@ func TestNew_RESTHandlerUsesDefaultPrefixInResponseURLs(t *testing.T) {
 func TestNew_GraphQLHandlerRequiresRouteEquivalentAuth(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
-		DBdsn:       "file:" + filepath.Join(root, "graphql-auth.db"),
+		DBdsn:       createBootstrapDSN(t, "server_graphql_auth"),
 		GitRepoDir:  filepath.Join(root, "repos"),
 		BaseURL:     "http://embed.local",
 		ListenMode:  "production",
@@ -502,7 +502,7 @@ func TestNew_GraphQLHandlerRequiresRouteEquivalentAuth(t *testing.T) {
 func TestNew_GitHTTPHandlerIsGitOnly(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
-		DBdsn:       "file:" + filepath.Join(root, "git-only.db"),
+		DBdsn:       createBootstrapDSN(t, "server_git_only"),
 		GitRepoDir:  filepath.Join(root, "repos"),
 		BaseURL:     "http://embed.local",
 		ListenMode:  "production",
@@ -523,7 +523,7 @@ func TestNew_GitHTTPHandlerIsGitOnly(t *testing.T) {
 func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
-		DBdsn:       "file:" + filepath.Join(root, "embedded-auth.db"),
+		DBdsn:       createBootstrapDSN(t, "server_embedded_auth"),
 		GitRepoDir:  filepath.Join(root, "repos"),
 		BaseURL:     "http://embed.local",
 		ListenMode:  "production",
@@ -661,7 +661,7 @@ func TestNew_EmbeddedIdentitySupportsRESTGraphQLAndGitHTTP(t *testing.T) {
 func TestNew_EmbeddedIdentityPreservesAnonymousOptionalRoutes(t *testing.T) {
 	root := t.TempDir()
 	srv, err := New(config.Config{
-		DBdsn:       "file:" + filepath.Join(root, "embedded-anon.db"),
+		DBdsn:       createBootstrapDSN(t, "server_embedded_anon"),
 		GitRepoDir:  filepath.Join(root, "repos"),
 		BaseURL:     "http://embed.local",
 		ListenMode:  "production",

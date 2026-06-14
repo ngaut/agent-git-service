@@ -213,6 +213,11 @@ func TestPRHandlers_RequestedReviewers(t *testing.T) {
 	h := testharness.New(t)
 	repo := "review-requests"
 	compatSeedPR(t, h, repo, "feature")
+	ctx := context.Background()
+	pr, err := h.Svc.GetPR(ctx, "testuser/"+repo, 1)
+	if err != nil {
+		t.Fatalf("GetPR: %v", err)
+	}
 
 	path := fmt.Sprintf("/api/v3/repos/testuser/%s/pulls/1/requested_reviewers", repo)
 
@@ -258,7 +263,7 @@ func TestPRHandlers_RequestedReviewers(t *testing.T) {
 		if err := h.Svc.DB.Create(&reviewer).Error; err != nil {
 			t.Fatalf("create reviewer: %v", err)
 		}
-		if err := h.Svc.RequestReview(context.Background(), 1, "reviewer-shaped"); err != nil {
+		if err := h.Svc.RequestReview(ctx, pr.ID, "reviewer-shaped"); err != nil {
 			t.Fatalf("RequestReview: %v", err)
 		}
 
@@ -287,6 +292,10 @@ func TestPRHandlers_GetPR_RequestedReviewersUseFullUserShape(t *testing.T) {
 	ctx := context.Background()
 	repo := "pr-full-reviewers"
 	compatSeedPR(t, h, repo, "feature")
+	pr, err := h.Svc.GetPR(ctx, "testuser/"+repo, 1)
+	if err != nil {
+		t.Fatalf("GetPR: %v", err)
+	}
 
 	reviewer := db.User{
 		Login: "reviewer1",
@@ -297,7 +306,7 @@ func TestPRHandlers_GetPR_RequestedReviewersUseFullUserShape(t *testing.T) {
 	if err := h.Svc.DB.Create(&reviewer).Error; err != nil {
 		t.Fatalf("create reviewer: %v", err)
 	}
-	if err := h.Svc.RequestReview(ctx, 1, "reviewer1"); err != nil {
+	if err := h.Svc.RequestReview(ctx, pr.ID, "reviewer1"); err != nil {
 		t.Fatalf("RequestReview: %v", err)
 	}
 

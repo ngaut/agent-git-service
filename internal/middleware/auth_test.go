@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -18,15 +16,12 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
 func base64Encode(s string) string {
 	return base64.StdEncoding.EncodeToString([]byte(s))
 }
-
-var testDBCounter atomic.Int64
 
 // okHandler is a simple handler that writes 200 OK.
 var okHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,11 +55,8 @@ func seedUserWithToken(t *testing.T, svc *service.Service, login string, token s
 
 func setupTestService(t *testing.T) *service.Service {
 	t.Helper()
-	dsn := fmt.Sprintf("file:middleware_test_%d?mode=memory&cache=shared", testDBCounter.Add(1))
-	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open db: %v", err)
-	}
+	gdb, cleanup := testdb.OpenRaw(t, "middleware")
+	t.Cleanup(cleanup)
 	if err := gdb.AutoMigrate(&db.User{}, &db.Token{}, &db.DeviceCode{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
@@ -167,7 +159,7 @@ func TestTokenAuth_NoTokensInDB_AllowAnyToken(t *testing.T) {
 func TestTokenAuth_InvalidToken_WithTokensInDB(t *testing.T) {
 	svc := setupTestService(t)
 	// Insert a real token so validation becomes strict
-	svc.DB.Create(&db.Token{UserID: 1, Value: "valid-token"})
+	seedUserWithToken(t, svc, "valid-user", "valid-token")
 
 	handler := TokenAuth(svc)(okHandler)
 
@@ -190,7 +182,7 @@ func TestTokenAuth_InvalidToken_WithTokensInDB(t *testing.T) {
 
 func TestTokenAuth_ValidToken_WithTokensInDB(t *testing.T) {
 	svc := setupTestService(t)
-	svc.DB.Create(&db.Token{UserID: 1, Value: "valid-token"})
+	seedUserWithToken(t, svc, "valid-user", "valid-token")
 
 	handler := TokenAuth(svc)(okHandler)
 
@@ -221,7 +213,7 @@ func TestOptionalTokenAuth_BasicAuth_ExtractsToken(t *testing.T) {
 	// Basic auth is now supported: password portion is used as token.
 	// With a valid token in DB, Basic auth should succeed.
 	svc := setupTestService(t)
-	svc.DB.Create(&db.Token{UserID: 1, Value: "pass"})
+	seedUserWithToken(t, svc, "basic-user", "pass")
 	handler := OptionalTokenAuth(svc)(okHandler)
 
 	r := httptest.NewRequest("GET", "/", nil)
@@ -237,7 +229,7 @@ func TestOptionalTokenAuth_BasicAuth_ExtractsToken(t *testing.T) {
 func TestOptionalTokenAuth_BasicAuth_InvalidToken(t *testing.T) {
 	// Basic auth with an invalid token should be rejected.
 	svc := setupTestService(t)
-	svc.DB.Create(&db.Token{UserID: 1, Value: "valid-token"})
+	seedUserWithToken(t, svc, "valid-user", "valid-token")
 	handler := OptionalTokenAuth(svc)(okHandler)
 
 	r := httptest.NewRequest("GET", "/", nil)
@@ -298,7 +290,7 @@ func TestOptionalTokenAuth_NoTokensInDB_AllowAnyToken(t *testing.T) {
 
 func TestOptionalTokenAuth_InvalidToken_WithTokensInDB(t *testing.T) {
 	svc := setupTestService(t)
-	svc.DB.Create(&db.Token{UserID: 1, Value: "valid-token"})
+	seedUserWithToken(t, svc, "valid-user", "valid-token")
 
 	handler := OptionalTokenAuth(svc)(okHandler)
 

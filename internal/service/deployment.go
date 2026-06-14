@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CreateDeployment creates a new deployment.
@@ -37,9 +39,19 @@ func (s *Service) ListDeployments(ctx context.Context, repoID uint) ([]db.Deploy
 
 // DeleteDeployment deletes a deployment if it's inactive.
 func (s *Service) DeleteDeployment(ctx context.Context, repoID, depID uint) error {
-	return s.DBForCtx(ctx).
-		Where("repository_id = ? AND id = ?", repoID, depID).
-		Delete(&db.Deployment{}).Error
+	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		var dep db.Deployment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id").
+			Where("repository_id = ? AND id = ?", repoID, depID).
+			First(&dep).Error; err != nil {
+			return wrapErr(err)
+		}
+		if err := tx.Where("deployment_id = ?", depID).Delete(&db.DeploymentStatus{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&db.Deployment{}, dep.ID).Error
+	})
 }
 
 // CreateDeploymentStatus creates a new deployment status.
@@ -50,10 +62,10 @@ func (s *Service) CreateDeploymentStatus(ctx context.Context, ds *db.DeploymentS
 // GetDeploymentStatus returns a deployment status by ID.
 func (s *Service) GetDeploymentStatus(ctx context.Context, repoID, depID, statusID uint) (*db.DeploymentStatus, error) {
 	var ds db.DeploymentStatus
-	// We verify the deployment belongs to the repo via join or application logic in the handler.
-	// For simplicity, we just filter by depID and statusID here.
 	err := s.DBForCtx(ctx).
-		Where("deployment_id = ? AND id = ?", depID, statusID).
+		Model(&db.DeploymentStatus{}).
+		Joins("JOIN deployments ON deployments.id = deployment_statuses.deployment_id").
+		Where("deployments.repository_id = ? AND deployment_statuses.deployment_id = ? AND deployment_statuses.id = ?", repoID, depID, statusID).
 		Preload("Creator").
 		First(&ds).Error
 	if err != nil {
@@ -66,8 +78,10 @@ func (s *Service) GetDeploymentStatus(ctx context.Context, repoID, depID, status
 func (s *Service) ListDeploymentStatuses(ctx context.Context, repoID, depID uint) ([]db.DeploymentStatus, error) {
 	var statuses []db.DeploymentStatus
 	err := s.DBForCtx(ctx).
-		Where("deployment_id = ?", depID).
-		Order("created_at DESC").
+		Model(&db.DeploymentStatus{}).
+		Joins("JOIN deployments ON deployments.id = deployment_statuses.deployment_id").
+		Where("deployments.repository_id = ? AND deployment_statuses.deployment_id = ?", repoID, depID).
+		Order("deployment_statuses.created_at DESC").
 		Preload("Creator").
 		Find(&statuses).Error
 	return statuses, err

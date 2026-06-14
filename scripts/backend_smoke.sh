@@ -9,6 +9,7 @@ require_cmd curl
 require_cmd git
 require_cmd go
 require_cmd jq
+require_cmd mysql
 require_cmd python3
 
 backend="$(git --exec-path)/git-http-backend"
@@ -37,7 +38,8 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:$SERVER_PORT}"
 ADMIN_LOGIN="${ADMIN_LOGIN:-smoke-admin-$RANDOM_SUFFIX}"
 ADMIN_TOKEN="${ADMIN_TOKEN:-smoke-token-$RANDOM_SUFFIX}"
 REPO_NAME="${REPO_NAME:-smoke-repo-$RANDOM_SUFFIX}"
-SQLITE_DB="$(mktemp /tmp/gh-server-smoke.XXXXXX.db)"
+TIDB_DB_NAME="smoke_${RANDOM_SUFFIX//[^A-Za-z0-9_]/_}"
+DB_DSN="$(tidb_dsn_for_database "$TIDB_DB_NAME")"
 GIT_REPO_DIR="$(mktemp -d /tmp/gh-server-smoke-repos.XXXXXX)"
 CLONE_DIR="$(mktemp -d /tmp/gh-server-smoke-clone.XXXXXX)"
 SERVER_BIN="$(mktemp /tmp/gh-server-smoke-bin.XXXXXX)"
@@ -55,9 +57,12 @@ cleanup() {
   fi
   rm -rf "$CLONE_DIR" "$GIT_REPO_DIR"
   rm -f "$SERVER_BIN"
-  rm -f "$SQLITE_DB"
+  tidb_drop_database "$TIDB_DB_NAME"
 }
 trap cleanup EXIT
+
+note "Preparing TiDB smoke database $TIDB_DB_NAME"
+tidb_create_database "$TIDB_DB_NAME"
 
 note "Building gh-server"
 (
@@ -72,7 +77,7 @@ PORT="$SERVER_PORT" \
 BASE_URL="$BASE_URL" \
 ADMIN_LOGIN="$ADMIN_LOGIN" \
 ADMIN_TOKEN="$ADMIN_TOKEN" \
-DB_DSN="sqlite:$SQLITE_DB" \
+DB_DSN="$DB_DSN" \
 GIT_REPO_DIR="$GIT_REPO_DIR" \
 "$SERVER_BIN" >"$LOG_FILE" 2>&1 &
 SERVER_PID=$!

@@ -7,8 +7,8 @@ This document describes the GitHub Actions workflows carried by the public
 
 The repository uses a layered CI gate:
 
-- `ci.yml` runs formatting, vet, regression, unit, integration, compatibility,
-  E2E, and backend smoke jobs.
+- `ci.yml` runs formatting, vet, regression, unit, integration, TiDB migration
+  smoke, compatibility, E2E, and backend smoke jobs.
 - `cli-pr-check.yml` keeps the vendored GitHub CLI test inventory visible on
   pull requests.
 - `doc-lint.yml` verifies documentation links, workflow inventory, and module
@@ -47,33 +47,53 @@ Jobs:
    - checks Go formatting outside the nested `cli/` module
    - runs `go vet ./...`
 2. `regression-gate`
+   - installs `tiup` plus the MySQL client for the local TiDB playground
+   - starts the local TiDB playground for database-backed regression coverage
    - runs `bash scripts/regression_gate.sh`
    - compiles the backend tree with `go test ./... -run '^$'`
    - compiles the vendored `cli/` tree and `cli/_go-gh-local`
    - runs the stable package pack defined in `scripts/regression_gate.list`
+   - stops the local TiDB playground after the job
 3. `unit-tests`
-   - runs `make test-unit`
-   - executes the backend Go unit-test inventory with `go test -v ./...`
+   - installs `tiup` plus the MySQL client for the local TiDB playground
+   - runs `make test-unit` in a package matrix using `GO_TEST_PACKAGES`
+   - starts the local TiDB playground and drops stale per-test schemas before
+     running Go tests
+   - executes the backend Go unit-test inventory with `go test -v`
+   - stops the local TiDB playground after the job
 4. `integration-tests`
+   - installs `tiup` plus the MySQL client for the local TiDB playground
+   - starts the local TiDB playground for real-router integration coverage
    - runs `bash scripts/integration_tests.sh`
    - executes stable real-router and Git HTTP integration coverage
-5. `compatibility-tests`
+   - stops the local TiDB playground after the job
+5. `tidb-migration-smoke`
+   - installs `tiup` plus the MySQL client for the local TiDB playground
+   - runs `make test-migrate-tidb`
+   - creates a fresh temporary TiDB database
+   - boots `gh-server` against that TiDB DSN and waits for `/readyz`
+   - catches TiDB-incompatible migration or bootstrap DDL before the heavier
+     compatibility and E2E suites
+6. `compatibility-tests`
    - provisions the test-only TiDB playground with `make test-setup`
    - starts `gh-server` against TiDB
    - runs the vendored GitHub CLI acceptance inventory with `make test`
    - cleans up with `make test-clean-all`
-6. `e2e-tests`
+7. `e2e-tests`
    - provisions the test-only TiDB playground with `make test-setup`
    - starts the deterministic mock OIDC issuer used by the OIDC-backed login E2E flows
    - starts `gh-server` against TiDB
    - runs the shell E2E inventory with `make test-e2e`
    - cleans up with `make test-clean-all`
-7. `backend-smoke`
+8. `backend-smoke`
+   - installs `tiup` plus the MySQL client for the local TiDB playground
+   - starts the local TiDB playground before the smoke flow
    - runs `bash scripts/backend_smoke.sh`
-   - builds and starts `gh-server` against SQLite
+   - builds and starts `gh-server` against a fresh TiDB playground database
    - probes readiness and basic API endpoints
    - validates repository creation and Git Smart HTTP clone behavior
-8. `ci-success`
+   - stops the local TiDB playground after the job
+9. `ci-success`
    - fails if any required CI job fails
 
 This gives the repository one explicit merge gate with a clear layer split:
@@ -81,6 +101,8 @@ This gives the repository one explicit merge gate with a clear layer split:
 - `Regression Gate` protects fast, deterministic regressions.
 - `Unit Tests` protect backend package behavior.
 - `Integration Tests` protect stable real-router and Git HTTP paths.
+- `TiDB Migration Smoke` protects service bootstrap and migrations against a real
+  TiDB dialect.
 - `Compatibility Tests` protect the vendored GitHub CLI compatibility inventory.
 - `E2E Tests` and `Backend Smoke` prove runtime behavior across real process
   boundaries.

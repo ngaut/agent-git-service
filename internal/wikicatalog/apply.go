@@ -144,8 +144,7 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobBySlug 
 			}
 		}
 		// Test-only hook: simulate a CAS-lost transaction without
-		// needing real concurrency on a dialect (SQLite) that can't
-		// schedule one. Never set in production code.
+		// depending on scheduler timing. Never set in production code.
 		if c.testForceCASLoss != nil && c.testForceCASLoss() {
 			casLost = true
 			return errSentinelCASLost
@@ -439,10 +438,9 @@ func assertNoPrefixCollision(tx *gorm.DB, repoID uint, slug string, ignorePageID
 	// query loop. Bounded by wikiMaxSlugDepth (≤ 6 ancestors).
 	ancestors := parentChain(slug)
 	if len(ancestors) > 0 {
-		// Tuples: (parent_dir, child_name). Some dialects support
-		// `WHERE (a, b) IN ((..),(..))`; SQLite and TiDB do. For
-		// portability with GORM we build an OR chain — at depth ≤ 6
-		// this is still one round trip.
+		// Tuples: (parent_dir, child_name). TiDB supports
+		// `WHERE (a, b) IN ((..),(..))`; for portability with GORM we
+		// build an OR chain — at depth ≤ 6 this is still one round trip.
 		q := tx.Model(&db.WikiDirIndex{}).
 			Where("repository_id = ? AND child_kind = ?", repoID, childKindBlob)
 		var clauseSQL string

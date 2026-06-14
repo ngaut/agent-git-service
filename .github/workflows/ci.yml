@@ -84,13 +84,43 @@ jobs:
             cli/go.sum
             cli/_go-gh-local/go.sum
 
+      - name: Install TiDB test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          echo "${HOME}/.tiup/bin" >> "${GITHUB_PATH}"
+
+      - name: Start TiDB test database
+        run: make test-db-start
+
       - name: Run regression gate
         run: bash scripts/regression_gate.sh
 
+      - name: Clean regression gate database
+        if: always()
+        run: make test-db-stop
+
   unit-tests:
-    name: Unit Tests
+    name: Unit Tests (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: service
+            packages: ./internal/service ./internal/service/search
+          - name: rest
+            packages: ./internal/rest ./internal/rest/respond ./internal/rest/transform
+          - name: server-graphql
+            packages: ./server ./internal/graphql
+          - name: db-router-git
+            packages: ./internal/db ./internal/githttp ./internal/gitstore ./internal/router ./internal/testharness ./internal/testharness/testdb ./internal/wikicatalog ./internal/wikiv2
+          - name: misc
+            packages: ./auth ./cmd/gh-server ./config ./e2e/cmd/mock-embedding-server ./e2e/cmd/mock-oidc-server ./internal/apperrors ./internal/connectedlogin ./internal/crypto ./internal/embedding ./internal/httputil ./internal/logging ./internal/mentions ./internal/metrics ./internal/middleware ./internal/oauth ./internal/oidc ./internal/randutil ./internal/ratelimit
     steps:
       - uses: actions/checkout@v5
 
@@ -99,8 +129,24 @@ jobs:
           go-version: '1.25.7'
           cache-dependency-path: go.sum
 
+      - name: Install TiDB test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          echo "${HOME}/.tiup/bin" >> "${GITHUB_PATH}"
+
       - name: Run unit tests
+        env:
+          GO_TEST_PACKAGES: ${{ matrix.packages }}
+          GO_TEST_PKG_PARALLELISM: '1'
         run: make test-unit
+
+      - name: Clean unit test database
+        if: always()
+        run: make test-db-stop
 
   integration-tests:
     name: Integration Tests
@@ -116,8 +162,52 @@ jobs:
             go.sum
             cli/go.sum
 
+      - name: Install TiDB test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          echo "${HOME}/.tiup/bin" >> "${GITHUB_PATH}"
+
+      - name: Start TiDB test database
+        run: make test-db-start
+
       - name: Run integration tests
         run: make test-integration
+
+      - name: Clean integration test database
+        if: always()
+        run: make test-db-stop
+
+  tidb-migration-smoke:
+    name: TiDB Migration Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install TiDB test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          echo "${HOME}/.tiup/bin" >> "${GITHUB_PATH}"
+
+      - name: Run TiDB migration smoke
+        run: make test-migrate-tidb
+
+      - name: Clean TiDB migration smoke environment
+        if: always()
+        run: make test-db-stop
 
   compatibility-tests:
     name: Compatibility Tests
@@ -258,8 +348,24 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Install TiDB test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          echo "${HOME}/.tiup/bin" >> "${GITHUB_PATH}"
+
+      - name: Start TiDB test database
+        run: make test-db-start
+
       - name: Run backend smoke
         run: bash scripts/backend_smoke.sh
+
+      - name: Clean backend smoke database
+        if: always()
+        run: make test-db-stop
 
   ci-success:
     name: CI Success
@@ -268,6 +374,7 @@ jobs:
       - regression-gate
       - unit-tests
       - integration-tests
+      - tidb-migration-smoke
       - compatibility-tests
       - e2e-tests
       - backend-smoke
@@ -282,6 +389,7 @@ jobs:
                 "${{ needs.regression-gate.result }}" != "success" ||
                 "${{ needs.unit-tests.result }}" != "success" ||
                 "${{ needs.integration-tests.result }}" != "success" ||
+                "${{ needs.tidb-migration-smoke.result }}" != "success" ||
                 "${{ needs.compatibility-tests.result }}" != "success" ||
                 "${{ needs.e2e-tests.result }}" != "success" ||
                 "${{ needs.backend-smoke.result }}" != "success" ]]; then

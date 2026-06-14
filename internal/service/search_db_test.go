@@ -1226,8 +1226,7 @@ func TestSearchIssues_VectorSearchMergePath(t *testing.T) {
 		t.Fatalf("create issue 3 err: %v", err)
 	}
 
-	// Pre-set embeddings in DB (as TEXT column)
-	// Note: In real TiDB, this would be a VECTOR column, but SQLite stores as TEXT
+	// Pre-set embeddings in DB.
 	vec1 := "[0.1,0.2,0.3]"
 	vec2 := "[0.1,0.2,0.3]" // Same vector as iss1 to simulate similarity
 	svc.DB.Model(&db.Issue{}).Where("id = ?", iss1.ID).Update("embedding", vec1)

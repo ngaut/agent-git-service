@@ -11,7 +11,6 @@ import (
 )
 
 func TestResolveEmbeddedIdentity_RejectsExistingHumanLoginCollision(t *testing.T) {
-	t.Parallel()
 
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
@@ -69,7 +68,6 @@ func TestResolveEmbeddedIdentity_RejectsExistingHumanLoginCollision(t *testing.T
 }
 
 func TestResolveEmbeddedIdentity_RejectsOrganizationLoginCollision(t *testing.T) {
-	t.Parallel()
 
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
@@ -104,7 +102,6 @@ func TestResolveEmbeddedIdentity_RejectsOrganizationLoginCollision(t *testing.T)
 }
 
 func TestResolveEmbeddedIdentity_RejectsAgentLoginCollision(t *testing.T) {
-	t.Parallel()
 
 	svc, cleanup := setupTestService(t)
 	defer cleanup()

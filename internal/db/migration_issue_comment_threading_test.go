@@ -2,20 +2,23 @@ package db
 
 import (
 	"testing"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
-func TestMigrateIssueCommentThreadingColumns_SQLite(t *testing.T) {
-	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open sqlite: %v", err)
-	}
+func TestMigrateIssueCommentThreadingColumns_TiDB(t *testing.T) {
+	gdb := openTiDB(t)
 
-	// Create the base table without threading columns
-	if err := gdb.Migrator().CreateTable(&IssueComment{}); err != nil {
-		t.Fatalf("failed to create table: %v", err)
+	if err := gdb.Exec(`
+		CREATE TABLE issue_comments (
+			id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+			repository_id BIGINT UNSIGNED,
+			issue_number BIGINT,
+			body TEXT,
+			author_id BIGINT UNSIGNED,
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+	`).Error; err != nil {
+		t.Fatalf("create legacy issue_comments: %v", err)
 	}
 
 	// Run the migration

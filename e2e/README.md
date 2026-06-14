@@ -54,9 +54,9 @@ make test-e2e E2E_BASE_URL="https://github.localhost:8080"
 | `oauth-device-flow.sh` | OAuth device-flow bootstrap and polling behavior | Existing server |
 | `oidc-provider-flow.sh` | Generic OIDC callback, lookup, repeated-login, and token-validity flow using the mock discovery server | Running server with `OIDC_PROVIDER`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_ALLOW_INSECURE_HTTP=1`; mock OIDC server |
 | `org-collaboration-governance.sh` | Org invitations, outside collaborators, and permission aliases | Existing server plus extra user tokens |
-| `push-postprocessing-consistency.sh` | Post-push HEAD, workflow sync, and cleanup behavior | Self-contained SQLite |
-| `repo-rollback-compensation.sh` | Repository create/fork rollback behavior | Self-contained SQLite |
-| `repo-transfer-lifecycle.sh` | Repository transfer, redirects, and Git usability | Self-contained SQLite |
+| `push-postprocessing-consistency.sh` | Post-push HEAD, workflow sync, and cleanup behavior | Self-contained TiDB |
+| `repo-rollback-compensation.sh` | Repository create/fork rollback behavior | Self-contained TiDB |
+| `repo-transfer-lifecycle.sh` | Repository transfer, redirects, and Git usability | Self-contained TiDB |
 | `team-membership-admin-authz.sh` | Team membership admin authorization boundaries | Existing server plus extra user tokens |
 | `team-repo-sharing-auth.sh` | Team repository sharing authorization | Existing server plus extra user tokens |
 | `team-repo-sharing-crud.sh` | Team repository sharing CRUD | Existing server |
