@@ -198,7 +198,7 @@ func TestNewRejectsPartialConnectedLoginConfig(t *testing.T) {
 func TestOIDCProviderDefaultsToAuth0ForAuth0Issuer(t *testing.T) {
 	t.Setenv("DB_DSN", "user:pass@tcp(localhost)/testdb")
 	t.Setenv("OIDC_PROVIDER", "")
-	t.Setenv("OIDC_ISSUER", "https://tenant.us.auth0.com/")
+	t.Setenv("OIDC_ISSUER", "https://account.us.auth0.com/")
 	t.Setenv("OIDC_CLIENT_ID", "oidc-client")
 
 	cfg, err := New()

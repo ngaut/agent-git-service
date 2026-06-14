@@ -65,7 +65,7 @@ type Service struct {
 	embedSem     chan struct{}
 
 	// vectorInitMu and vectorInitDBs track per-DB vector column initialization
-	// to ensure tenant DBs get embedding columns before writes.
+	// to ensure scoped DB handles get embedding columns before writes.
 	vectorInitMu  sync.Mutex
 	vectorInitDBs map[*gorm.DB]bool
 
@@ -127,7 +127,7 @@ type Service struct {
 	testWikiCompactionJobContinue func(jobID string)
 }
 
-type tenantRepoKey struct {
+type scopedRepoKey struct {
 	db     *sql.DB
 	repoID uint
 	repo   string
@@ -155,13 +155,13 @@ func (s *Service) wikiMigrationSyncMuInit() {
 	s.wikiMigrationSyncMu = make(map[string]*sync.Mutex)
 }
 
-func (s *Service) getWikiMigrationSyncMu(key tenantRepoKey) *sync.Mutex {
+func (s *Service) getWikiMigrationSyncMu(key scopedRepoKey) *sync.Mutex {
 	s.wikiMigrationSyncMuOnce.Do(s.wikiMigrationSyncMuInit)
 
 	s.wikiMigrationSyncMapMu.Lock()
 	defer s.wikiMigrationSyncMapMu.Unlock()
 
-	muKey := s.tenantRepoMutexKey(key)
+	muKey := s.scopedRepoMutexKey(key)
 	mu, ok := s.wikiMigrationSyncMu[muKey]
 	if !ok {
 		mu = &sync.Mutex{}
@@ -178,13 +178,13 @@ func (s *Service) wikiBgCompactionMuInit() {
 	s.wikiBgCompactionMu = make(map[string]string)
 }
 
-func (s *Service) claimWikiBackgroundMigration(key tenantRepoKey) bool {
+func (s *Service) claimWikiBackgroundMigration(key scopedRepoKey) bool {
 	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
 
 	s.wikiBgMigrationMapMu.Lock()
 	defer s.wikiBgMigrationMapMu.Unlock()
 
-	muKey := s.tenantRepoMutexKey(key)
+	muKey := s.scopedRepoMutexKey(key)
 	if _, ok := s.wikiBgMigrationMu[muKey]; ok {
 		return false
 	}
@@ -192,21 +192,21 @@ func (s *Service) claimWikiBackgroundMigration(key tenantRepoKey) bool {
 	return true
 }
 
-func (s *Service) releaseWikiBackgroundMigration(key tenantRepoKey) {
+func (s *Service) releaseWikiBackgroundMigration(key scopedRepoKey) {
 	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
 
 	s.wikiBgMigrationMapMu.Lock()
 	defer s.wikiBgMigrationMapMu.Unlock()
-	delete(s.wikiBgMigrationMu, s.tenantRepoMutexKey(key))
+	delete(s.wikiBgMigrationMu, s.scopedRepoMutexKey(key))
 }
 
-func (s *Service) claimWikiBackgroundCompaction(key tenantRepoKey, jobID string) bool {
+func (s *Service) claimWikiBackgroundCompaction(key scopedRepoKey, jobID string) bool {
 	s.wikiBgCompactionMuOnce.Do(s.wikiBgCompactionMuInit)
 
 	s.wikiBgCompactionMapMu.Lock()
 	defer s.wikiBgCompactionMapMu.Unlock()
 
-	muKey := s.tenantRepoMutexKey(key)
+	muKey := s.scopedRepoMutexKey(key)
 	if _, ok := s.wikiBgCompactionMu[muKey]; ok {
 		return false
 	}
@@ -214,35 +214,35 @@ func (s *Service) claimWikiBackgroundCompaction(key tenantRepoKey, jobID string)
 	return true
 }
 
-func (s *Service) releaseWikiBackgroundCompaction(key tenantRepoKey, jobID string) {
+func (s *Service) releaseWikiBackgroundCompaction(key scopedRepoKey, jobID string) {
 	s.wikiBgCompactionMuOnce.Do(s.wikiBgCompactionMuInit)
 
 	s.wikiBgCompactionMapMu.Lock()
 	defer s.wikiBgCompactionMapMu.Unlock()
 
-	muKey := s.tenantRepoMutexKey(key)
+	muKey := s.scopedRepoMutexKey(key)
 	if activeJobID, ok := s.wikiBgCompactionMu[muKey]; ok && activeJobID == jobID {
 		delete(s.wikiBgCompactionMu, muKey)
 	}
 }
 
-func (s *Service) isWikiBackgroundMigrationRunning(key tenantRepoKey) bool {
+func (s *Service) isWikiBackgroundMigrationRunning(key scopedRepoKey) bool {
 	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
 
 	s.wikiBgMigrationMapMu.RLock()
 	defer s.wikiBgMigrationMapMu.RUnlock()
-	_, ok := s.wikiBgMigrationMu[s.tenantRepoMutexKey(key)]
+	_, ok := s.wikiBgMigrationMu[s.scopedRepoMutexKey(key)]
 	return ok
 }
 
-func (s *Service) wikiRepoKey(ctx context.Context, repo db.Repository) tenantRepoKey {
-	key := tenantRepoKey{
+func (s *Service) wikiRepoKey(ctx context.Context, repo db.Repository) scopedRepoKey {
+	key := scopedRepoKey{
 		repoID: repo.ID,
 		repo:   repo.FullName,
 	}
 	targetDB := s.DB
-	if tenantDB, ok := DBFromContext(ctx); ok && tenantDB != nil {
-		targetDB = tenantDB
+	if scopedDB, ok := DBFromContext(ctx); ok && scopedDB != nil {
+		targetDB = scopedDB
 	}
 	if targetDB != nil {
 		if sqlDB, err := s.sqlDBHandle(targetDB); err == nil {
@@ -252,7 +252,7 @@ func (s *Service) wikiRepoKey(ctx context.Context, repo db.Repository) tenantRep
 	return key
 }
 
-func (s *Service) tenantRepoMutexKey(key tenantRepoKey) string {
+func (s *Service) scopedRepoMutexKey(key scopedRepoKey) string {
 	return fmt.Sprintf("%p:%d:%s", key.db, key.repoID, key.repo)
 }
 
@@ -260,8 +260,8 @@ func (s *Service) sqlDBHandle(dbh interface{ DB() (*sql.DB, error) }) (*sql.DB, 
 	return dbh.DB()
 }
 
-// DBForCtx returns the per-request DB when one was injected via
-// ContextWithDB (multi-agent mode), or falls back to s.DB (single-DB mode).
+// DBForCtx returns the scoped DB when one was injected via ContextWithDB, or
+// falls back to s.DB.
 func (s *Service) DBForCtx(ctx context.Context) *gorm.DB {
 	if ctx == nil {
 		return s.DB.WithContext(context.Background())

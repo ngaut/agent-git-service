@@ -17,7 +17,7 @@ For the current dependency seams and acceptable concrete couplings, see `docs/mo
 The major paths to protect first are:
 
 - discovery and auth bootstrap flows (`/api/v3/`, `/api/v3/meta`, `/api/v3/rate_limit`, token login, `gh auth login --with-token`, and `gh auth setup-git` / Git credential setup)
-- control-plane token routing and tenant DB correctness
+- token auth, embedded auth, and context-scoped DB correctness
 - organization collaboration-governance flows (explicit org creation, org invitations, team-repo grants, outside collaborator lifecycle, effective permission precedence)
 - repository create, clone, fork, transfer, and delete
 - issue create, edit, comment, label, assignee, and search flows
@@ -55,7 +55,6 @@ Its responsibilities are:
 - compile the backend tree with `go test ./... -run '^$'`
 - compile the vendored `cli/` tree and `cli/_go-gh-local` without turning the known-flaky full CLI suite into a blocking behavior gate
 - run the stable package tests listed in `scripts/regression_gate.list`
-- run `scripts/check-tenant-db.sh`
 - run `scripts/wiki_regression_gate.sh`, which protects the stale wiki tree/search/backlink projection class without promoting the full service package into the fast gate
 
 Promotion rule: when a bug fix or repaired area needs recurring protection, add a stable test to the package tree and then promote that package or script into `scripts/regression_gate.list`.
@@ -114,7 +113,6 @@ These gates cover the higher-fidelity compatibility and shell E2E paths that are
 - CI mirrors the local acceptance path with the test-only TiDB playground: `make test-setup`, a Docker access verification step (`docker --version` plus `docker run --rm hello-world`), `ENABLE_WORKFLOW_EXEC=1 make run-bg`, `make test`, then `make test-clean-all`
 - `make test-e2e` runs the full shell E2E inventory under `e2e/`
 - the full E2E inventory includes `e2e/repo-transfer-lifecycle.sh`, so repo transfer remains merge-blocking without a separate standalone smoke job
-- the full E2E inventory includes `e2e/multi-agent-isolation.sh`, which self-boots a control-plane fixture so the default path still exercises tenant token routing and cross-tenant isolation
 - the full E2E inventory also includes `e2e/agent-auth-flow.sh`, which now asserts the agent-binding confirm contract for canonical agent tokens plus the human-token `403`, invalid-invite `422`, and consumed-invite `409` failure paths
 - CI mirrors the local full E2E path too with the test-only TiDB playground: `make test-setup`, `ENABLE_WORKFLOW_EXEC=1 make run-bg`, `make test-e2e`, then `make test-clean-all`
 - `make run-bg` waits up to `STARTUP_WAIT_SECONDS` seconds for `/readyz`; the default intentionally leaves enough room for first-start TiDB schema migration in the compatibility and E2E test lanes
@@ -185,7 +183,6 @@ Today the repository already has useful tests in:
 - `internal/rest` (dedicated handler tests: `handlers_branch_test.go`, `handlers_dependabot_test.go`, `handlers_deployment_test.go`, `handlers_gist_test.go`, `handlers_webhook_test.go`, `handlers_webhook_delivery_test.go`, `pagination_test.go`)
 - `internal/router` (router-level integration tests in `router_test.go`)
 - `config`
-- `internal/controlplane`
 - `internal/oidc`
 - `internal/embedding` (including `embedder_test.go`)
 - `internal/apperrors`
@@ -195,7 +192,6 @@ The main gaps are:
 
 - limited coverage for real Git merge, rebase, compare, and diff behavior
 - real Docker-sandbox workflow execution still depends more on CI and smoke gates than on direct package tests
-- control-plane DB routing still needs to stay in the routine regression path
 - too much reliance on end-to-end acceptance tests for HTTP-path confidence
 - targeted collaboration-governance coverage now exists, but it needs to stay part of the routine regression path rather than living only in one-off branch work
 
@@ -205,7 +201,7 @@ Workflow execution sandbox coverage was added in 2026 with:
 - coverage tracking across workflow-related code paths
 - security hardening tests for artifact path traversal and timeout handling
 
-The repo also has focused shell end-to-end coverage under `e2e/`, including org collaboration governance and code search isolation. Keep those flows in the normal regression toolbox when a change spans multiple endpoints and is awkward to express through one package test. The code search isolation flow also creates repository contents through the GitHub-compatible Contents API, so it should keep asserting the GitHub create status contract while protecting cross-repository search boundaries.
+The repo also has focused shell end-to-end coverage under `e2e/`, including org collaboration governance and code search. Keep those flows in the normal regression toolbox when a change spans multiple endpoints and is awkward to express through one package test. The code search flow also creates repository contents through the GitHub-compatible Contents API, so it should keep asserting the GitHub create status contract while protecting repository-scoped search boundaries.
 
 The main CI gate now makes the full backend `go test ./...` inventory merge-blocking via `make test-unit`.
 The vendored `cli/` inventory is still not merge-blocking, because that surface remains slower and is more environment-heavy than the backend unit-test lane.
@@ -293,12 +289,12 @@ Add direct service tests for:
 - connected login code exchange, userinfo validation, local identity linking,
   and human versus agent user-kind mapping
 
-#### Control Plane
+#### Auth and Context-Scoped DB
 
 Add direct package tests for:
 
-- `controlplane.DBRouter.ResolveToken` across unknown token, inactive agent, first-open tenant DB, and tenant-user bootstrap paths
-- `service.DBForCtx(ctx)` request and background propagation rules
+- token resolution across missing, invalid, and valid token paths
+- `service.DBForCtx(ctx)` request, transaction, and background propagation rules
 
 #### Collaboration Governance and Authorization
 
@@ -387,7 +383,7 @@ Phase 2 is not complete until each surface has at least one core-path integratio
 13. team-repo permission alias compatibility, including canonical `read`/`write` decisions for `triage` and `maintain`
 14. OIDC helper endpoints under `/api/v3/oidc/*`
 15. connected login helper endpoints under `/auth/connected/*`
-16. control-plane-mode token routing through middleware into tenant-scoped service DB access
+16. embedded identity routing through middleware into service DB access
 
 #### GraphQL
 

@@ -103,7 +103,7 @@ WriteFile(fullName, branch, path, content, message, author)
 - **Temporary clones for merge safety.** Merge and rebase operations clone to a temp directory, operate there, and push results back. This keeps the bare repo in a consistent state even if the operation fails midway.
 - **Hybrid go-git and CLI git usage.** go-git is used for initialization, repo opening, config, and some ref operations. CLI git (via `os/exec`) handles merge, rebase, diff, log, content, archive, and search. The split exists because go-git lacks some plumbing operations.
 - **Revision validation.** `IsValidRev` rejects empty strings, leading dashes, and whitespace to prevent command injection in git CLI calls.
-- **Bare-repo layout.** Git store manages standard bare Git repositories under a storage key rooted at `GIT_REPO_DIR`. In today's single-DB local mode that storage key is `owner/repo`; in multi-agent mode it must also include tenant identity (for example `tenant/owner/repo`) so that two tenants can reuse the same logical `owner/repo` name safely.
+- **Bare-repo layout.** Git store manages standard bare Git repositories rooted at `GIT_REPO_DIR/{owner}/{repo}.git`.
 
 For the full dependency-boundary rules see [module-contracts.md § gitstore](../module-contracts.md#gitstore).
 
@@ -122,7 +122,6 @@ For the full dependency-boundary rules see [module-contracts.md § gitstore](../
 - CLI git invocations use `exec.CommandContext` with the repo path as the working directory.
 - go-git operations open the repo with `s.open(fullName)`.
 - Error returns are plain `fmt.Errorf` wraps; gitstore does not use the service sentinel errors.
-- `owner/repo` is a logical repository identity, not a sufficient multi-tenant storage key by itself.
 
 ## Related Tests
 

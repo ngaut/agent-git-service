@@ -27,29 +27,6 @@ func openTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func overrideControlPlaneHooks(t *testing.T, openCP func(string) (*gorm.DB, error), openTenant func(string) (*gorm.DB, error), migrate func(*gorm.DB) error) {
-	t.Helper()
-	origOpenCP := openControlPlaneDB
-	origOpenTenant := openControlPlaneTenantDB
-	origMigrate := controlPlaneAutoMigrate
-
-	if openCP != nil {
-		openControlPlaneDB = openCP
-	}
-	if openTenant != nil {
-		openControlPlaneTenantDB = openTenant
-	}
-	if migrate != nil {
-		controlPlaneAutoMigrate = migrate
-	}
-
-	t.Cleanup(func() {
-		openControlPlaneDB = origOpenCP
-		openControlPlaneTenantDB = origOpenTenant
-		controlPlaneAutoMigrate = origMigrate
-	})
-}
-
 // setupBootstrapEnv sets up standard bootstrap environment variables for tests.
 // overrides allows specific env vars to be set to custom values.
 func setupBootstrapEnv(t *testing.T, overrides map[string]string) {
@@ -268,97 +245,6 @@ func TestBootstrap_ListenerBindFailure(t *testing.T) {
 
 	if result.Deps.SrvCancel != nil {
 		result.Deps.SrvCancel()
-	}
-}
-
-func TestBootstrap_WithControlPlane_Success(t *testing.T) {
-	t.Skip("requires MySQL instance for control plane DB")
-}
-
-func TestBootstrap_ControlPlane_Enabled(t *testing.T) {
-	overrideControlPlaneHooks(t,
-		func(dsn string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-		},
-		func(dsn string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-		},
-		nil,
-	)
-
-	setupBootstrapEnv(t, map[string]string{
-		"CONTROL_PLANE_DSN": fmt.Sprintf("file:test_cp_ctrl_%d?mode=memory&cache=shared", testDBCounter.Add(1)),
-	})
-
-	result := bootstrap()
-	if result.Err != nil {
-		t.Fatalf("bootstrap failed: %v", result.Err)
-	}
-	if result.Deps.DBRouter == nil {
-		t.Fatal("expected DBRouter to be initialized when control plane is enabled")
-	}
-	if result.Deps.Handlers == nil || result.Deps.Handlers.Router == nil {
-		t.Fatal("expected handlers to include control plane router")
-	}
-	if result.Deps.SrvCancel != nil {
-		result.Deps.SrvCancel()
-	}
-}
-
-func TestBootstrap_ControlPlane_DBFailure(t *testing.T) {
-	overrideControlPlaneHooks(t,
-		func(_ string) (*gorm.DB, error) {
-			return nil, errors.New("control plane unreachable")
-		},
-		nil,
-		nil,
-	)
-
-	setupBootstrapEnv(t, map[string]string{
-		"CONTROL_PLANE_DSN": "tcp(127.0.0.1:3306)/invalid",
-	})
-
-	result := bootstrap()
-	if result.Err == nil {
-		t.Fatal("expected bootstrap to fail when control plane DB cannot be opened")
-	}
-	if result.Partial == nil {
-		t.Fatal("expected partial deps on control plane DB failure")
-	}
-	if result.Partial.DB == nil {
-		t.Error("expected main DB to be initialized before control plane failure")
-	}
-	if result.Partial.Store == nil {
-		t.Error("expected gitstore to be initialized before control plane failure")
-	}
-}
-
-func TestBootstrap_ControlPlane_MigrateFailure(t *testing.T) {
-	overrideControlPlaneHooks(t,
-		func(dsn string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-		},
-		func(dsn string) (*gorm.DB, error) {
-			return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-		},
-		func(_ *gorm.DB) error {
-			return errors.New("auto-migrate failed")
-		},
-	)
-
-	setupBootstrapEnv(t, map[string]string{
-		"CONTROL_PLANE_DSN": fmt.Sprintf("file:test_cp_mig_ctrl_%d?mode=memory&cache=shared", testDBCounter.Add(1)),
-	})
-
-	result := bootstrap()
-	if result.Err == nil {
-		t.Fatal("expected bootstrap to fail when control plane migration fails")
-	}
-	if result.Partial == nil {
-		t.Fatal("expected partial deps on control plane migration failure")
-	}
-	if result.Partial.DB == nil {
-		t.Error("expected main DB to be initialized before control plane migration failure")
 	}
 }
 

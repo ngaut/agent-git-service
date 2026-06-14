@@ -17,13 +17,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	agsauth "github.com/ngaut/agent-git-service/auth"
 	"github.com/ngaut/agent-git-service/config"
-	"github.com/ngaut/agent-git-service/internal/controlplane"
-	"github.com/ngaut/agent-git-service/internal/crypto"
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
 	"github.com/ngaut/agent-git-service/internal/githttp"
@@ -300,89 +296,9 @@ func TestReadyz_SingleDB_Healthy(t *testing.T) {
 		t.Errorf("expected status=ready, got %v", body["status"])
 	}
 	checks := body["checks"].(map[string]any)
-	if _, ok := checks["control_plane_db"]; ok {
-		t.Error("control_plane_db check should not be present in single-DB mode")
+	if len(checks) != 1 {
+		t.Fatalf("expected only main_db check, got %v", checks)
 	}
-}
-
-func TestReadyz_WithControlPlane_BothHealthy(t *testing.T) {
-	mainDB := openTestDB(t)
-	cpDB := openTestDB(t)
-	if err := cpDB.AutoMigrate(&controlplane.CPUser{}, &controlplane.CPToken{}); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	openTenant := func(dsn string) (*gorm.DB, error) { return openTestDB(t), nil }
-	router := controlplane.NewDBRouter(cpDB, openTenant, true, controlplane.RouterConfig{MaxAgents: 10})
-	defer router.Close()
-
-	handler := readyzHandler(readyzConfig{
-		MainDB:   mainDB,
-		DBRouter: router,
-	})
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body["status"] != "ready" {
-		t.Errorf("expected status=ready, got %v", body["status"])
-	}
-	checks := body["checks"].(map[string]any)
-	cpCheck := checks["control_plane_db"].(map[string]any)
-	if cpCheck["status"] != "ok" {
-		t.Errorf("expected control_plane_db status=ok, got %v", cpCheck["status"])
-	}
-}
-
-func TestReadyz_ControlPlaneDown_Returns503(t *testing.T) {
-	mainDB := openTestDB(t)
-
-	// Create a control-plane DB and then close it to simulate failure.
-	cpDB := openTestDB(t)
-	if err := cpDB.AutoMigrate(&controlplane.CPUser{}, &controlplane.CPToken{}); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	openTenant := func(dsn string) (*gorm.DB, error) { return openTestDB(t), nil }
-	router := controlplane.NewDBRouter(cpDB, openTenant, true, controlplane.RouterConfig{MaxAgents: 10})
-	defer router.Close()
-
-	// Close the underlying control-plane SQL connection to simulate DB down.
-	sqlDB, err := cpDB.DB()
-	if err != nil {
-		t.Fatalf("get sql.DB: %v", err)
-	}
-	sqlDB.Close()
-
-	handler := readyzHandler(readyzConfig{
-		MainDB:   mainDB,
-		DBRouter: router,
-	})
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d", rec.Code)
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body["status"] != "not_ready" {
-		t.Errorf("expected status=not_ready, got %v", body["status"])
-	}
-	checks := body["checks"].(map[string]any)
-	cpCheck := checks["control_plane_db"].(map[string]any)
-	if cpCheck["status"] != "unavailable" {
-		t.Errorf("expected control_plane_db status=unavailable, got %v", cpCheck["status"])
-	}
-	// Main DB should still be ok
 	mainCheck := checks["main_db"].(map[string]any)
 	if mainCheck["status"] != "ok" {
 		t.Errorf("expected main_db status=ok, got %v", mainCheck["status"])
@@ -437,7 +353,7 @@ func TestRouterComposition_ReadyzAfterRegisterRoutes(t *testing.T) {
 	oauthHandler := &oauth.Handler{Svc: svc}
 
 	r := chi.NewRouter()
-	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(r, restDeps, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 	r.Get("/readyz", readyzHandler(readyzConfig{
 		MainDB: mainDB,
 	}))
@@ -1141,110 +1057,5 @@ func TestBootstrapResult_SetPartial(t *testing.T) {
 	}
 	if result.Partial.DB != deps.DB {
 		t.Error("expected Partial.DB to match deps.DB")
-	}
-}
-
-func TestControlPlaneGormConfig(t *testing.T) {
-	cfg := controlPlaneGormConfig()
-
-	if cfg == nil {
-		t.Fatal("expected non-nil config")
-	}
-
-	// Verify logger is configured
-	if cfg.Logger == nil {
-		t.Fatal("expected Logger to be configured")
-	}
-
-	loggerWithConfig, ok := cfg.Logger.(interface{ Config() gormlogger.Config })
-	if !ok {
-		t.Fatal("logger should expose Config() for configuration inspection")
-	}
-
-	loggerCfg := loggerWithConfig.Config()
-	if loggerCfg.LogLevel != gormlogger.Warn {
-		t.Errorf("expected LogLevel=Warn (%d), got %d", gormlogger.Warn, loggerCfg.LogLevel)
-	}
-	if loggerCfg.Colorful {
-		t.Error("expected Colorful=false")
-	}
-	if !loggerCfg.ParameterizedQueries {
-		t.Error("expected ParameterizedQueries=true")
-	}
-	if !loggerCfg.IgnoreRecordNotFoundError {
-		t.Error("expected IgnoreRecordNotFoundError=true")
-	}
-}
-
-func TestOpenControlPlane_Failure_InvalidDSN(t *testing.T) {
-	// Test that openControlPlane fails with an invalid DSN format.
-	// Note: Testing success path requires a real MySQL server.
-	_, err := openControlPlane("invalid://dsn-format-that-will-fail")
-	if err == nil {
-		t.Fatal("expected error with invalid DSN, got nil")
-	}
-}
-
-func TestOpenControlPlaneTenantDB_EncryptedDSN(t *testing.T) {
-	wantDSN := "root:@tcp(127.0.0.1:4000)/tenant_a?parseTime=true&timeout=10s"
-	encryptedDSN, err := crypto.EncryptSecret(wantDSN)
-	if err != nil {
-		t.Fatalf("EncryptSecret() error = %v", err)
-	}
-
-	original := openControlPlaneDB
-	t.Cleanup(func() {
-		openControlPlaneDB = original
-	})
-
-	var gotDSN string
-	openControlPlaneDB = func(dsn string) (*gorm.DB, error) {
-		gotDSN = dsn
-		return openTestDB(t), nil
-	}
-
-	if _, err := openControlPlaneTenantDB(encryptedDSN); err != nil {
-		t.Fatalf("openControlPlaneTenantDB() error = %v", err)
-	}
-	if gotDSN != wantDSN {
-		t.Fatalf("openControlPlaneTenantDB() opened %q, want %q", gotDSN, wantDSN)
-	}
-}
-
-func TestOpenControlPlaneTenantDB_PlaintextDSNBackwardCompatible(t *testing.T) {
-	wantDSN := "root:@tcp(127.0.0.1:4000)/tenant_b?parseTime=true&timeout=10s"
-
-	original := openControlPlaneDB
-	t.Cleanup(func() {
-		openControlPlaneDB = original
-	})
-
-	var gotDSN string
-	openControlPlaneDB = func(dsn string) (*gorm.DB, error) {
-		gotDSN = dsn
-		return openTestDB(t), nil
-	}
-
-	if _, err := openControlPlaneTenantDB(wantDSN); err != nil {
-		t.Fatalf("openControlPlaneTenantDB() plaintext fallback error = %v", err)
-	}
-	if gotDSN != wantDSN {
-		t.Fatalf("openControlPlaneTenantDB() opened %q, want %q", gotDSN, wantDSN)
-	}
-}
-
-func TestOpenControlPlaneTenantDB_InvalidGarbageStillFails(t *testing.T) {
-	original := openControlPlaneDB
-	t.Cleanup(func() {
-		openControlPlaneDB = original
-	})
-
-	openControlPlaneDB = func(dsn string) (*gorm.DB, error) {
-		t.Fatalf("openControlPlaneDB should not be called for invalid input, got %q", dsn)
-		return nil, nil
-	}
-
-	if _, err := openControlPlaneTenantDB("not-a-valid-encrypted-value!!!"); err == nil {
-		t.Fatal("expected invalid garbage input to fail")
 	}
 }

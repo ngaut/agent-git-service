@@ -70,7 +70,7 @@ func New(tb testing.TB) *Harness {
 	gitHandler := githttp.New(svc.Git, svc)
 	oauthHandler := oauth.New(svc)
 
-	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, nil, "http://console.localhost")
+	mux := router.RegisterRoutes(chi.NewRouter(), handlers, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 
 	h := &Harness{
 		Svc:     svc,

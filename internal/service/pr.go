@@ -145,8 +145,8 @@ func (s *Service) CreatePR(ctx context.Context, in CreatePRInput) (db.PullReques
 			// Fire-and-forget in production; use the server context so work can outlive the request.
 			bgCtx := s.ServerCtx()
 			bgCtx = applog.CloneContext(bgCtx, ctx)
-			if tenantDB, ok := DBFromContext(ctx); ok {
-				bgCtx = ContextWithDB(bgCtx, tenantDB)
+			if scopedDB, ok := DBFromContext(ctx); ok {
+				bgCtx = ContextWithDB(bgCtx, scopedDB)
 			}
 			applog.AddAttrs(bgCtx,
 				slog.String("repo", rep.FullName),

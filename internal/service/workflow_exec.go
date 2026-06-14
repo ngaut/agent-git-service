@@ -584,8 +584,8 @@ func (s *Service) workflowDetachedContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	detached := applog.CloneContext(context.Background(), ctx)
-	if tenantDB, ok := DBFromContext(ctx); ok {
-		detached = ContextWithDB(detached, tenantDB)
+	if scopedDB, ok := DBFromContext(ctx); ok {
+		detached = ContextWithDB(detached, scopedDB)
 	}
 	return detached
 }

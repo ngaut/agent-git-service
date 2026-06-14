@@ -241,11 +241,11 @@ func (h *Handler) ReceivePack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// After push: fix dangling HEAD and scan for workflows in the background.
-	// Propagate the tenant DB (if any) so background writes target the correct database.
+	// Propagate any scoped DB so background writes target the correct handle.
 	bgCtx := h.Svc.ServerCtx()
 	bgCtx = applog.CloneContext(bgCtx, r.Context())
-	if tenantDB, ok := service.DBFromContext(r.Context()); ok {
-		bgCtx = service.ContextWithDB(bgCtx, tenantDB)
+	if scopedDB, ok := service.DBFromContext(r.Context()); ok {
+		bgCtx = service.ContextWithDB(bgCtx, scopedDB)
 	}
 	if u, ok := service.UserFromContext(r.Context()); ok {
 		bgCtx = service.ContextWithUser(bgCtx, u)

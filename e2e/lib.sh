@@ -128,28 +128,3 @@ wait_for_http_ready() {
   echo "$fail_msg" >&2
   return 1
 }
-
-# Assert that accessor token gets 404 on owner's repo
-# Usage: assert_cross_tenant_404 "<accessor_token>" "<owner_repo_full>" "<accessor_name>"
-assert_cross_tenant_404() {
-  local accessor_token="$1"
-  local owner_repo_full="$2"
-  local accessor_name="$3"
-  local code
-  code="$(http_code -H "Authorization: token $accessor_token" "$BASE_URL/api/v3/repos/$owner_repo_full")"
-  assert_eq "$code" "404"
-  ok "$accessor_name gets 404 on $owner_repo_full"
-}
-
-# Assert mutual 404 between two tenants
-# Usage: assert_mutual_cross_tenant_404 "<token_a>" "<repo_a_full>" "<token_b>" "<repo_b_full>" "<name_a>" "<name_b>"
-assert_mutual_cross_tenant_404() {
-  local token_a="$1"
-  local repo_a_full="$2"
-  local token_b="$3"
-  local repo_b_full="$4"
-  local name_a="$5"
-  local name_b="$6"
-  assert_cross_tenant_404 "$token_a" "$repo_b_full" "$name_a"
-  assert_cross_tenant_404 "$token_b" "$repo_a_full" "$name_b"
-}

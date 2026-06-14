@@ -1984,8 +1984,8 @@ func (s *Service) queueWikiSearchUpsert(ctx context.Context, repoFullName string
 	go func() {
 		defer s.Wg.Done()
 		bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
-		if tenantDB, ok := DBFromContext(ctx); ok {
-			bgCtx = ContextWithDB(bgCtx, tenantDB)
+		if scopedDB, ok := DBFromContext(ctx); ok {
+			bgCtx = ContextWithDB(bgCtx, scopedDB)
 		}
 		repo, err := s.LookupRepoIdentity(bgCtx, repoFullName)
 		if err != nil {
@@ -2007,8 +2007,8 @@ func (s *Service) queueWikiSearchDelete(ctx context.Context, repoFullName, slug 
 	go func() {
 		defer s.Wg.Done()
 		bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
-		if tenantDB, ok := DBFromContext(ctx); ok {
-			bgCtx = ContextWithDB(bgCtx, tenantDB)
+		if scopedDB, ok := DBFromContext(ctx); ok {
+			bgCtx = ContextWithDB(bgCtx, scopedDB)
 		}
 		repo, err := s.LookupRepoIdentity(bgCtx, repoFullName)
 		if err != nil {

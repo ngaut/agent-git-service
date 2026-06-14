@@ -21,7 +21,6 @@ REQUIRED_FILES = [
     Path("docs/architecture.md"),
     Path("docs/governance/dependency-licensing.md"),
     Path("docs/module-contracts.md"),
-    Path("docs/architecture/tenant-db-correctness.md"),
     Path("docs/test-strategy.md"),
     Path("docs/monitoring/README.md"),
     Path("scripts/check-module-contracts.sh"),
