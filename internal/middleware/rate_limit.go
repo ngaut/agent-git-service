@@ -56,7 +56,6 @@ func apiRateLimitHeaders(limiter *ratelimit.Limiter) func(http.Handler) http.Han
 				_, _ = fmt.Fprint(w, `{"error":"API rate limit exceeded","message":"API rate limit exceeded","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api"}`)
 				return
 			}
-			ctx = ratelimit.WithSnapshot(ctx, snapshot)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

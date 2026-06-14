@@ -1,12 +1,8 @@
 package graphql_test
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os/exec"
 	"strings"
 	"testing"
@@ -283,38 +279,6 @@ func TestGraphQL_CreatePRMutation_PermissionFailure_Unauthorized(t *testing.T) {
 	if after != before {
 		t.Fatalf("expected no PR created, count before %d after %d", before, after)
 	}
-}
-
-// doRawGqlWithToken is a helper to execute GraphQL with a custom token.
-func doRawGqlWithToken(t *testing.T, mux http.Handler, query string, args map[string]any) map[string]any {
-	t.Helper()
-
-	token := "token test-token"
-	if args["token"] != nil {
-		token = "token " + args["token"].(string)
-		delete(args, "token")
-	}
-
-	reqBody := map[string]any{"query": query}
-	if args["input"] != nil {
-		reqBody["variables"] = map[string]any{"input": args["input"]}
-	}
-	b, err := json.Marshal(reqBody)
-	if err != nil {
-		t.Fatalf("gql marshal: %v", err)
-	}
-
-	req := httptest.NewRequest("POST", "/graphql", bytes.NewReader(b))
-	req.Header.Set("Authorization", token)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	var res map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
-		t.Fatalf("gql json decode: %v", err)
-	}
-	return res
 }
 
 // =============================================================================

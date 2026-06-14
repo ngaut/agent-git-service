@@ -96,34 +96,6 @@ type bootstrapResult struct {
 	Partial *bootstrapDeps // Contains successfully initialized deps if bootstrap failed midway
 }
 
-func buildPartialDeps(deps *bootstrapDeps) *bootstrapDeps {
-	if deps == nil {
-		return nil
-	}
-
-	return &bootstrapDeps{
-		Cfg:          deps.Cfg,
-		Options:      deps.Options,
-		DB:           deps.DB,
-		Embedder:     deps.Embedder,
-		Store:        deps.Store,
-		SrvCtx:       deps.SrvCtx,
-		SrvCancel:    deps.SrvCancel,
-		SvcDeps:      deps.SvcDeps,
-		GqlSrv:       deps.GqlSrv,
-		GitHandler:   deps.GitHandler,
-		OauthHandler: deps.OauthHandler,
-		Handlers:     deps.Handlers,
-		Mux:          deps.Mux,
-		Servers:      deps.Servers,
-		Labels:       deps.Labels,
-	}
-}
-
-func (r *bootstrapResult) setPartial() {
-	r.Partial = buildPartialDeps(r.Deps)
-}
-
 type coreDeps struct {
 	cfg       config.Config
 	cfgLoaded bool

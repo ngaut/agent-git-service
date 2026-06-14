@@ -270,10 +270,6 @@ func ranksToIDs(ranks []detailedSearchRank) []uint {
 	return ids
 }
 
-func issueResultsFromRanks(issues []db.Issue, ranks []detailedSearchRank, sq SearchQualifiers, opts SearchOptions) []IssueSearchResult {
-	return issueResultsFromRanksWithComments(issues, ranks, sq, opts, nil)
-}
-
 func issueResultsFromRanksWithComments(
 	issues []db.Issue,
 	ranks []detailedSearchRank,
@@ -310,10 +306,6 @@ func issueResultsFromRanksWithComments(
 		})
 	}
 	return results
-}
-
-func prResultsFromRanks(prs []db.PullRequest, ranks []detailedSearchRank, sq SearchQualifiers, opts SearchOptions) []PRSearchResult {
-	return prResultsFromRanksWithComments(prs, ranks, sq, opts, nil)
 }
 
 func prResultsFromRanksWithComments(

@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/service"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
@@ -28,12 +26,6 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
 })
-
-func withOwnerParam(r *http.Request, owner string) *http.Request {
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("owner", owner)
-	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
-}
 
 func seedUserWithToken(t *testing.T, svc *service.Service, login string, token string) db.User {
 	t.Helper()

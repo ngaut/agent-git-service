@@ -210,13 +210,6 @@ func dialectorForDSN(dsn string) (gorm.Dialector, string) {
 	return mysql.Open(raw), "mysql"
 }
 
-// DialectorForDSN returns the GORM dialector and dialect name for the given DSN.
-// AGS supports TiDB and MySQL-compatible databases through the MySQL driver.
-// Used by callers outside this package that need dialect-aware DB opens.
-func DialectorForDSN(raw string) (gorm.Dialector, string) {
-	return dialectorForDSN(raw)
-}
-
 // Migrate runs AutoMigrate for all application models on the given DB.
 // It is called by Init and can be reused by tests or embedders.
 func Migrate(database *gorm.DB) error {

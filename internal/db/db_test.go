@@ -1,35 +1,10 @@
 package db
 
 import (
-	"context"
 	"testing"
-	"time"
-
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
-
-type traceCounterLogger struct {
-	gormlogger.Interface
-	traceErrors int
-}
-
-func newTraceCounterLogger() *traceCounterLogger {
-	return &traceCounterLogger{Interface: gormlogger.Discard}
-}
-
-func (l *traceCounterLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
-	l.Interface = l.Interface.LogMode(level)
-	return l
-}
-
-func (l *traceCounterLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
-	if err != nil {
-		l.traceErrors++
-	}
-	l.Interface.Trace(ctx, begin, fc, err)
-}
 
 func TestInitVector_Idempotent(t *testing.T) {
 	gdb := openTiDB(t)
