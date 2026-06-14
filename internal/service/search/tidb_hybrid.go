@@ -38,7 +38,7 @@ func supportsTiDBFullText(database *gorm.DB) bool {
 }
 
 func supportsTiDBANN(database *gorm.DB) bool {
-	return modeldb.SupportsTiDBSearch(database)
+	return modeldb.IsTiDB(database)
 }
 
 func supportsVectorDistance(database *gorm.DB) bool {

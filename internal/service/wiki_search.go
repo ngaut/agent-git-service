@@ -1379,7 +1379,7 @@ func (s *Service) searchWikiSemanticCandidatesWithVector(ctx context.Context, re
 		}
 		return truncateWikiSearchResultList(results, rankWindow), true, nil
 	}
-	if db.SupportsTiDBSearch(s.DBForCtx(ctx)) {
+	if db.IsTiDB(s.DBForCtx(ctx)) {
 		return s.searchWikiSemanticANN(ctx, repoID, query, vec, rankWindow, 0, filters, false, false)
 	}
 	return s.searchWikiSemanticDB(ctx, repoID, query, vec, rankWindow, 0, filters, false, false)

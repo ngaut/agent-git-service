@@ -365,7 +365,7 @@ func InitVector(database *gorm.DB, dims int) {
 	if dims <= 0 {
 		return
 	}
-	if database != nil && database.Dialector.Name() == "mysql" && !SupportsTiDBSearch(database) {
+	if database != nil && database.Dialector.Name() == "mysql" && !IsTiDB(database) {
 		return
 	}
 	// Cap at 16384 — TiDB supports up to ~16K dimensions.

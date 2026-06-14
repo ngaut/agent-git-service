@@ -26,7 +26,7 @@ func newDryRunMySQLDB(t *testing.T) *gorm.DB {
 	return gdb
 }
 
-func TestSupportsTiDBSearch_DialectAloneIsNotEnough(t *testing.T) {
+func TestTiDBDetection_GORMDialectAloneIsNotEnough(t *testing.T) {
 	gdb := newDryRunMySQLDB(t)
 
 	if supportsTiDBFullText(gdb) {
