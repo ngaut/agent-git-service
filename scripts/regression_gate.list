@@ -20,3 +20,4 @@
 
 [shell]
 scripts/check-tenant-db.sh
+scripts/wiki_regression_gate.sh

@@ -497,7 +497,7 @@ func TestListWikiPages_UsesVisibleHeadSnapshotForBlobSHA_Issue1366(t *testing.T)
 	}
 }
 
-func TestListWikiTreeAtRef_FallsBackToGitWhenCatalogLagsLiveHead(t *testing.T) {
+func TestListWikiTreeAtRef_UsesCatalogRowsWhenGitProjectionLagsLiveHead(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 
@@ -527,14 +527,47 @@ func TestListWikiTreeAtRef_FallsBackToGitWhenCatalogLagsLiveHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWikiTreeAtRef: %v", err)
 	}
-	if len(tree) != 2 {
-		t.Fatalf("len(tree) = %d, want 2 (%+v)", len(tree), tree)
+	if len(tree) != 1 {
+		t.Fatalf("len(tree) = %d, want 1 catalog-backed page (%+v)", len(tree), tree)
+	}
+	if tree[0].Path != "home" || tree[0].Kind != "page" {
+		t.Fatalf("tree[0] = %+v, want home page", tree[0])
+	}
+}
+
+func TestListWikiTreeAtRef_FallsBackToGitWithoutCatalogRows(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{Login: "testuser", Name: "testuser", Type: db.TypeUser}).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-tree-legacy",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	full := "testuser/wiki-tree-legacy"
+	if err := svc.Git.Init(ctx, full+".wiki", "master", false); err != nil {
+		t.Fatalf("init legacy wiki repo: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guides/live.md", "add live guide", []byte("# Live\n\nLegacy git tree entry.")); err != nil {
+		t.Fatalf("WriteFile(live guide): %v", err)
+	}
+
+	tree, err := svc.ListWikiTreeAtRef(ctx, full, "", "")
+	if err != nil {
+		t.Fatalf("ListWikiTreeAtRef: %v", err)
+	}
+	if len(tree) != 1 {
+		t.Fatalf("len(tree) = %d, want 1 legacy git directory (%+v)", len(tree), tree)
 	}
 	if tree[0].Path != "guides" || tree[0].Kind != "directory" {
 		t.Fatalf("tree[0] = %+v, want guides directory", tree[0])
-	}
-	if tree[1].Path != "home" || tree[1].Kind != "page" {
-		t.Fatalf("tree[1] = %+v, want home page", tree[1])
 	}
 }
 
@@ -702,6 +735,66 @@ func TestListWikiBacklinksHydratesSnippetFromCatalogBody(t *testing.T) {
 	}
 	if !strings.Contains(backlinks[0].Snippet, "Catalog only snippet") {
 		t.Fatalf("snippet = %q, want catalog body snippet", backlinks[0].Snippet)
+	}
+}
+
+func TestListWikiBacklinksDoesNotReturnGitOnlySourceWhenCatalogHasLiveRows(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	owner := db.User{Login: "wiki-backlink-lag-owner", Name: "wiki-backlink-lag-owner", Type: db.TypeUser}
+	if err := svc.DB.Create(&owner).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: owner.Login,
+		Name:       "wiki-backlinks-lag",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	full := owner.Login + "/wiki-backlinks-lag"
+
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nTarget.\n", "create target", ""); err != nil {
+		t.Fatalf("PutWikiPage(target): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "faq", "# FAQ\n\nSee [[home]].\n", "create faq", ""); err != nil {
+		t.Fatalf("PutWikiPage(faq): %v", err)
+	}
+	svc.Wg.Wait()
+
+	if _, err := svc.Git.ReadFileAtRef(ctx, full+".wiki", "faq.md", "master"); err != nil {
+		t.Fatalf("expected git projection to contain faq before lag simulation: %v", err)
+	}
+
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	originalHook := svc.WikiCatalog.OnChangeSetCommitted
+	svc.WikiCatalog.OnChangeSetCommitted = nil
+	defer func() {
+		svc.WikiCatalog.OnChangeSetCommitted = originalHook
+	}()
+	if _, err := svc.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+		RepositoryID: repo.ID,
+		Source:       wikicatalog.SourceREST,
+		Message:      "delete faq in catalog only",
+		Changes:      []wikicatalog.Change{{Op: wikicatalog.OpDelete, Slug: "faq"}},
+	}); err != nil {
+		t.Fatalf("ApplyChangeSet(delete faq): %v", err)
+	}
+	if _, err := svc.Git.ReadFileAtRef(ctx, full+".wiki", "faq.md", "master"); err != nil {
+		t.Fatalf("expected git projection to still contain faq during lag simulation: %v", err)
+	}
+
+	backlinks, err := svc.ListWikiBacklinks(ctx, full, "home")
+	if err != nil {
+		t.Fatalf("ListWikiBacklinks: %v", err)
+	}
+	if len(backlinks) != 0 {
+		t.Fatalf("backlinks = %+v, want no git-only source page once catalog is live", backlinks)
 	}
 }
 

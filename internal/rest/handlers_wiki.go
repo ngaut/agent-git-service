@@ -39,11 +39,12 @@ func (d *Deps) ListWikiTree(w http.ResponseWriter, r *http.Request) {
 	if d.mustGetRepo(w, r) == nil {
 		return
 	}
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
 	tree, err := d.Svc.ListWikiTreeAtRef(
 		r.Context(),
 		full,
 		strings.TrimSpace(r.URL.Query().Get("path")),
-		strings.TrimSpace(r.URL.Query().Get("ref")),
+		ref,
 	)
 	if err != nil {
 		d.respondWikiReadError(w, r, full, err)
@@ -52,7 +53,7 @@ func (d *Deps) ListWikiTree(w http.ResponseWriter, r *http.Request) {
 	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
 	out := make([]any, 0, len(tree))
 	for _, entry := range tree {
-		out = append(out, transform.WikiTreeEntry(full, entry))
+		out = append(out, transform.WikiTreeEntry(full, entry, ref))
 	}
 	respond.JSON(w, http.StatusOK, out)
 }

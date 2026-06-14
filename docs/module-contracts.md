@@ -715,7 +715,7 @@ Rule:
 - only `service` coordinates tenant-local GORM state and Git state together
 - in multi-tenant mode, request-scoped tenant DB selection must happen before service methods run, through `controlplane.DBRouter` + `service.ContextWithDB(...)`
 - database-backed metadata is allowed even for repository or pull-request domains, but it must not replace Git as the authority for Git-native behavior
-- current wiki rule: the sibling `*.wiki.git` repo is authoritative for wiki page content, path layout, commit history, and lexical search recall, while TiDB-backed wiki tables remain rebuildable derived indexes and transitional compatibility surfaces until the final `#1488` cleanup lands
+- current wiki rule: the sibling `*.wiki.git` repo is authoritative for durable wiki content, path layout, commit history, ref-pinned reads, and long-term V2 direction; while catalog-backed current-page compatibility remains in production, live tree/search/backlink link emitters must use the same current-page-resolvable source as `/wiki/pages/{slug}` and treat Git/V2/search rows as fallback or ref-specific projections
 - `wikicatalog` remains in the tree only as transitional logic that still backs some routed handlers and migration paths; it must not be treated as the long-term durable authority
 - issue `#1488` tracks the remaining cleanup toward a fully git-authoritative wiki stack; see `docs/architecture/wiki-storage-v2.md` for the approved target design
 

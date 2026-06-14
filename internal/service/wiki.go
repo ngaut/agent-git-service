@@ -100,7 +100,7 @@ type WikiPageHistoryEntry struct {
 	BodySize  int
 }
 
-// WikiTreeEntry is the read model for one git-authoritative wiki tree entry.
+// WikiTreeEntry is the read model for one wiki tree entry.
 type WikiTreeEntry struct {
 	Path  string
 	Name  string
@@ -109,15 +109,6 @@ type WikiTreeEntry struct {
 	Title string
 	SHA   string
 	Size  int64
-}
-
-type wikiCatalogTreeRow struct {
-	ChildName   string  `gorm:"column:child_name"`
-	ChildKind   string  `gorm:"column:child_kind"`
-	PageID      *uint64 `gorm:"column:page_id"`
-	Slug        *string `gorm:"column:slug"`
-	HeadBlobSHA *string `gorm:"column:head_blob_sha"`
-	BodySize    *int    `gorm:"column:body_size"`
 }
 
 // WikiBulkMoveEntry reports one source-to-destination wiki slug move.
@@ -931,8 +922,10 @@ func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts L
 }
 
 // ListWikiTreeAtRef returns the direct children for one wiki directory view.
-// Blob entries are normalized back to slug space so clients do not need to
-// reason about on-disk markdown extensions.
+// Live tree reads are synthesized from the same page index/catalog rows that
+// serve /wiki/pages, so the sidebar cannot advertise page slugs that the page
+// resolver will 404. Git tree reads remain available for explicit historical
+// refs and for legacy repositories that have not produced catalog rows yet.
 func (s *Service) ListWikiTreeAtRef(ctx context.Context, repoFullName, dirPath, ref string) ([]WikiTreeEntry, error) {
 	if strings.TrimSpace(dirPath) != "" {
 		dirPath = strings.Trim(strings.TrimSpace(dirPath), "/")
@@ -940,21 +933,27 @@ func (s *Service) ListWikiTreeAtRef(ctx context.Context, repoFullName, dirPath, 
 			return nil, err
 		}
 	}
-	if strings.TrimSpace(ref) == "" && s.WikiCatalog != nil {
+	if strings.TrimSpace(ref) == "" {
 		rep, err := s.getRepoBase(ctx, repoFullName)
 		if err != nil {
 			return nil, err
 		}
-		ready, readyErr := s.ensureWikiCatalogReadyForLiveHead(ctx, repoFullName, rep.ID)
-		if readyErr != nil {
-			slog.WarnContext(ctx, "wiki tree catalog freshness check failed; falling back to git", "repo", repoFullName, "path", dirPath, "error", readyErr)
-		} else if ready {
+		if s.WikiCatalog != nil {
+			if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+				return nil, err
+			}
 			tree, ok, err := s.listWikiTreeFromCatalog(ctx, rep.ID, dirPath)
 			if err != nil {
-				slog.WarnContext(ctx, "wiki tree catalog fast path failed; falling back to git", "repo", repoFullName, "path", dirPath, "error", err)
-			} else if ok {
+				return nil, err
+			}
+			if ok {
 				return tree, nil
 			}
+		}
+		if rows, ok, err := s.loadCurrentWikiV2Rows(ctx, repoFullName, rep.ID); err != nil {
+			return nil, err
+		} else if ok {
+			return wikiTreeFromV2Rows(rows, dirPath), nil
 		}
 	}
 	full := wikiRepoFullName(repoFullName)
@@ -1001,15 +1000,21 @@ func (s *Service) ListWikiTreeAtRef(ctx context.Context, repoFullName, dirPath, 
 	return out, nil
 }
 
+type wikiTreePageRow struct {
+	Slug        string
+	HeadBlobSHA string `gorm:"column:head_blob_sha"`
+	Size        int    `gorm:"column:body_size"`
+}
+
 func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirPath string) ([]WikiTreeEntry, bool, error) {
-	var rows []wikiCatalogTreeRow
-	if err := buildWikiTreeCatalogRowsQuery(s.DBForCtx(ctx), repoID, dirPath).Find(&rows).Error; err != nil {
+	var pages []wikiTreePageRow
+	if err := buildWikiTreePageRowsQuery(s.DBForCtx(ctx), repoID).Find(&pages).Error; err != nil {
 		if isMissingTableErr(err) {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
-	if len(rows) == 0 {
+	if len(pages) == 0 {
 		hasCatalogState, err := s.wikiCatalogHasHead(ctx, repoID)
 		if err != nil {
 			return nil, false, err
@@ -1019,43 +1024,79 @@ func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirP
 		}
 		return nil, false, nil
 	}
+	return wikiTreeFromPageRows(pages, dirPath), true, nil
+}
 
-	out := make([]WikiTreeEntry, 0, len(rows))
+func buildWikiTreePageRowsQuery(database *gorm.DB, repoID uint) *gorm.DB {
+	return database.
+		Model(&db.WikiPage{}).
+		Select("slug", "head_blob_sha", "body_size").
+		Where("repository_id = ? AND deleted_at IS NULL", repoID)
+}
+
+func wikiTreeFromV2Rows(rows []db.WikiPageIndex, dirPath string) []WikiTreeEntry {
+	pages := make([]wikiTreePageRow, 0, len(rows))
 	for _, row := range rows {
-		childPath := row.ChildName
-		if dirPath != "" {
-			childPath = dirPath + "/" + row.ChildName
+		pages = append(pages, wikiTreePageRow{
+			Slug:        row.Slug,
+			HeadBlobSHA: row.HeadBlobSHA,
+			Size:        row.Size,
+		})
+	}
+	return wikiTreeFromPageRows(pages, dirPath)
+}
+
+func wikiTreeFromPageRows(pages []wikiTreePageRow, dirPath string) []WikiTreeEntry {
+	out := make([]WikiTreeEntry, 0)
+	seenDirs := map[string]struct{}{}
+	prefix := ""
+	if dirPath != "" {
+		prefix = dirPath + "/"
+	}
+	for _, page := range pages {
+		slug := strings.Trim(page.Slug, "/")
+		if slug == "" {
+			continue
 		}
-		switch row.ChildKind {
-		case "tree":
-			out = append(out, WikiTreeEntry{
-				Path: childPath,
-				Name: row.ChildName,
-				Kind: "directory",
-			})
-		case "blob":
-			if row.PageID == nil || row.Slug == nil {
+		rest := slug
+		if dirPath != "" {
+			if slug == dirPath || !strings.HasPrefix(slug, prefix) {
 				continue
 			}
-			size := int64(0)
-			if row.BodySize != nil {
-				size = int64(*row.BodySize)
-			}
-			sha := ""
-			if row.HeadBlobSHA != nil {
-				sha = *row.HeadBlobSHA
-			}
-			slug := *row.Slug
-			out = append(out, WikiTreeEntry{
-				Path:  slug,
-				Name:  titleFromSlug(lastWikiSlugSegment(slug)),
-				Kind:  "page",
-				Slug:  slug,
-				Title: titleFromSlug(slug),
-				SHA:   sha,
-				Size:  size,
-			})
+			rest = strings.TrimPrefix(slug, prefix)
 		}
+		if rest == "" {
+			continue
+		}
+		if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+			childName := rest[:idx]
+			if childName == "" {
+				continue
+			}
+			childPath := childName
+			if dirPath != "" {
+				childPath = dirPath + "/" + childName
+			}
+			if _, ok := seenDirs[childPath]; ok {
+				continue
+			}
+			seenDirs[childPath] = struct{}{}
+			out = append(out, WikiTreeEntry{
+				Path: childPath,
+				Name: childName,
+				Kind: "directory",
+			})
+			continue
+		}
+		out = append(out, WikiTreeEntry{
+			Path:  slug,
+			Name:  titleFromSlug(lastWikiSlugSegment(slug)),
+			Kind:  "page",
+			Slug:  slug,
+			Title: titleFromSlug(slug),
+			SHA:   page.HeadBlobSHA,
+			Size:  int64(page.Size),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind == out[j].Kind {
@@ -1063,20 +1104,7 @@ func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirP
 		}
 		return out[i].Kind < out[j].Kind
 	})
-	return out, true, nil
-}
-
-func buildWikiTreeCatalogRowsQuery(database *gorm.DB, repoID uint, dirPath string) *gorm.DB {
-	return database.
-		Table("wiki_dir_index AS d").
-		Select(
-			"d.child_name, d.child_kind, d.page_id, p.slug, p.head_blob_sha, p.body_size",
-		).
-		Joins(
-			"LEFT JOIN wiki_pages AS p ON p.repository_id = d.repository_id AND p.page_id = d.page_id AND p.deleted_at IS NULL",
-		).
-		Where("d.repository_id = ? AND d.parent_dir = ?", repoID, dirPath).
-		Order("d.child_kind DESC, d.child_name ASC")
+	return out
 }
 
 func (s *Service) wikiCatalogHasHead(ctx context.Context, repoID uint) (bool, error) {
@@ -1090,6 +1118,23 @@ func (s *Service) wikiCatalogHasHead(ctx context.Context, repoID uint) (bool, er
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *Service) wikiCatalogHasLiveState(ctx context.Context, repoID uint) (bool, error) {
+	var pageCount int64
+	if err := s.DBForCtx(ctx).
+		Model(&db.WikiPage{}).
+		Where("repository_id = ? AND deleted_at IS NULL", repoID).
+		Count(&pageCount).Error; err != nil {
+		if isMissingTableErr(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if pageCount > 0 {
+		return true, nil
+	}
+	return s.wikiCatalogHasHead(ctx, repoID)
 }
 
 func wikiSlugMatchesPathFilter(slug, prefix string, recursive bool) bool {
@@ -1785,41 +1830,40 @@ func (s *Service) ListWikiBacklinks(ctx context.Context, repoFullName, slug stri
 	if err := validateReadableWikiSlug(slug); err != nil {
 		return nil, ErrNotFound
 	}
-	if s.Git == nil {
-		return nil, errors.New("git store unavailable")
-	}
-	full := wikiRepoFullName(repoFullName)
-	if !s.Git.Exists(ctx, full) {
-		return nil, ErrNotFound
-	}
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return nil, err
+	}
+	if s.WikiCatalog != nil {
+		if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+			slog.WarnContext(ctx, "wiki backlinks catalog refresh failed", "repo", repoFullName, "error", err)
+		}
+		hasCatalogState, stateErr := s.wikiCatalogHasLiveState(ctx, rep.ID)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		if hasCatalogState {
+			backlinks, ok, err := s.loadWikiBacklinksFromCatalog(ctx, rep.ID, slug)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				return backlinks, nil
+			}
+			return nil, ErrNotFound
+		}
 	}
 	if backlinks, ok, err := s.listWikiBacklinksFromV2(ctx, repoFullName, rep.ID, slug); err != nil {
 		return nil, err
 	} else if ok {
 		return backlinks, nil
 	}
-	if s.WikiCatalog != nil {
-		if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
-			slog.WarnContext(ctx, "wiki backlinks catalog refresh failed; falling back to git", "repo", repoFullName, "error", err)
-		} else {
-			ready, readyErr := s.wikiCatalogMatchesLiveHead(ctx, repoFullName, rep.ID)
-			if readyErr != nil {
-				slog.WarnContext(ctx, "wiki backlinks catalog freshness check failed; falling back to git", "repo", repoFullName, "error", readyErr)
-			} else if ready {
-				backlinks, ok, err := s.loadWikiBacklinksFromCatalog(ctx, rep.ID, slug)
-				if errors.Is(err, ErrNotFound) {
-					return nil, err
-				}
-				if err != nil {
-					slog.WarnContext(ctx, "wiki backlinks catalog path failed; falling back to git", "repo", repoFullName, "slug", slug, "error", err)
-				} else if ok {
-					return backlinks, nil
-				}
-			}
-		}
+	if s.Git == nil {
+		return nil, errors.New("git store unavailable")
+	}
+	full := wikiRepoFullName(repoFullName)
+	if !s.Git.Exists(ctx, full) {
+		return nil, ErrNotFound
 	}
 	backlinks, err := s.loadWikiBacklinksForSlug(ctx, repoFullName, slug)
 	if err != nil {
