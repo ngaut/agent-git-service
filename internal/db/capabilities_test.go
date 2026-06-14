@@ -173,7 +173,7 @@ func openFakeMySQLCapabilityDB(t *testing.T, cfg fakeMySQLCapabilityConfig) (*go
 	return gdb, fakeDriver
 }
 
-func TestSupportsTiDBSearch(t *testing.T) {
+func TestIsTiDB(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  fakeMySQLCapabilityConfig
@@ -215,17 +215,17 @@ func TestSupportsTiDBSearch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gdb, _ := openFakeMySQLCapabilityDB(t, tt.cfg)
-			if got := SupportsTiDBSearch(gdb); got != tt.want {
-				t.Fatalf("SupportsTiDBSearch() = %v, want %v", got, tt.want)
+			if got := IsTiDB(gdb); got != tt.want {
+				t.Fatalf("IsTiDB() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestSupportsTiDBSearch_NonMySQLFalse(t *testing.T) {
+func TestIsTiDB_NonMySQLFalse(t *testing.T) {
 	gdb := &gorm.DB{Config: &gorm.Config{Dialector: postgres.Open("postgres://user:pass@localhost:5432/testdb?sslmode=disable")}}
-	if SupportsTiDBSearch(gdb) {
-		t.Fatal("expected postgres to report no TiDB search support")
+	if IsTiDB(gdb) {
+		t.Fatal("expected postgres not to be detected as TiDB")
 	}
 }
 
@@ -237,11 +237,11 @@ func TestDetectCapabilities_MySQL(t *testing.T) {
 	})
 
 	got := detectCapabilities(gdb)
-	if got.Dialect != "mysql" {
-		t.Fatalf("Dialect = %q, want mysql", got.Dialect)
+	if got.GORMDialect != "mysql" {
+		t.Fatalf("GORMDialect = %q, want mysql", got.GORMDialect)
 	}
-	if !got.TiDBSearch {
-		t.Fatal("expected TiDBSearch capability")
+	if !got.TiDBDetected {
+		t.Fatal("expected TiDBDetected capability")
 	}
 	if !got.TiDBFullText {
 		t.Fatal("expected TiDBFullText capability")

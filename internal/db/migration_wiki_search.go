@@ -35,7 +35,7 @@ var wikiSearchVectorIndex = wikiSearchVectorIndexSpec{
 // backends continue to use fallback search paths, and individual DDL failures
 // are logged without blocking startup.
 func MigrateWikiSearch(database *gorm.DB) error {
-	if !SupportsTiDBSearch(database) {
+	if !IsTiDB(database) {
 		ensureWikiSearchEmbeddingTextColumn(database)
 		return nil
 	}
@@ -96,7 +96,7 @@ func ensureWikiFullTextIndex(database *gorm.DB, idx wikiSearchFullTextIndex) {
 }
 
 func ensureWikiSearchVector(database *gorm.DB, dims int) {
-	if dims <= 0 || !SupportsTiDBSearch(database) {
+	if dims <= 0 || !IsTiDB(database) {
 		return
 	}
 	migrator := database.Migrator()
@@ -170,7 +170,7 @@ func wikiSearchEmbeddingColumnIsVector(database *gorm.DB) bool {
 }
 
 func ensureWikiSearchVectorIndex(database *gorm.DB) {
-	if !SupportsTiDBSearch(database) {
+	if !IsTiDB(database) {
 		return
 	}
 	migrator := database.Migrator()

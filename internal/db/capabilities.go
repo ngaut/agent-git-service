@@ -14,14 +14,14 @@ import (
 )
 
 type capabilities struct {
-	Dialect        string
-	TiDBSearch     bool
+	GORMDialect    string
+	TiDBDetected   bool
 	TiDBFullText   bool
 	VectorDistance bool
 }
 
 var (
-	tidbSearchCapabilityCache     sync.Map
+	tidbDetectionCapabilityCache  sync.Map
 	tidbFullTextCapabilityCache   sync.Map
 	vectorDistanceCapabilityCache sync.Map
 	tidbFullTextProbeSeq          atomic.Uint64
@@ -32,8 +32,8 @@ func detectCapabilities(database *gorm.DB) capabilities {
 	if database == nil || database.Dialector == nil {
 		return caps
 	}
-	caps.Dialect = database.Dialector.Name()
-	caps.TiDBSearch = SupportsTiDBSearch(database)
+	caps.GORMDialect = database.Dialector.Name()
+	caps.TiDBDetected = IsTiDB(database)
 	caps.TiDBFullText = SupportsTiDBFullText(database)
 	caps.VectorDistance = SupportsVectorDistance(database)
 	return caps
@@ -42,27 +42,27 @@ func detectCapabilities(database *gorm.DB) capabilities {
 func logCapabilities(database *gorm.DB) {
 	caps := detectCapabilities(database)
 	slog.Info("db: capabilities detected",
-		"dialect", caps.Dialect,
-		"tidbSearch", caps.TiDBSearch,
+		"gormDialect", caps.GORMDialect,
+		"tidbDetected", caps.TiDBDetected,
 		"tidbFullText", caps.TiDBFullText,
 		"vectorDistance", caps.VectorDistance,
 	)
 }
 
-// SupportsTiDBSearch reports whether the database is TiDB rather than plain
-// MySQL. TiDB search paths use TiDB-only SQL such as FTS_MATCH_WORD, VECTOR,
-// and VEC_COSINE_DISTANCE, so mysql dialect alone is not a sufficient signal.
-func SupportsTiDBSearch(database *gorm.DB) bool {
+// IsTiDB reports whether the database is TiDB rather than plain MySQL. TiDB
+// features use TiDB-only SQL such as FTS_MATCH_WORD, VECTOR, and
+// VEC_COSINE_DISTANCE, so mysql dialect alone is not a sufficient signal.
+func IsTiDB(database *gorm.DB) bool {
 	if database == nil || database.Dialector.Name() != "mysql" || database.DryRun {
 		return false
 	}
 	key := capabilityCacheKey(database)
-	if cached, ok := tidbSearchCapabilityCache.Load(key); ok {
+	if cached, ok := tidbDetectionCapabilityCache.Load(key); ok {
 		return cached.(bool)
 	}
 
 	supported := detectTiDB(database)
-	tidbSearchCapabilityCache.Store(key, supported)
+	tidbDetectionCapabilityCache.Store(key, supported)
 	return supported
 }
 
@@ -72,7 +72,7 @@ func SupportsTiDBFullText(database *gorm.DB) bool {
 	if database == nil || database.Dialector.Name() != "mysql" || database.DryRun {
 		return false
 	}
-	if !SupportsTiDBSearch(database) {
+	if !IsTiDB(database) {
 		return false
 	}
 	key := capabilityCacheKey(database)
@@ -95,7 +95,7 @@ func SupportsVectorDistance(database *gorm.DB) bool {
 	key := capabilityCacheKey(database)
 	switch database.Dialector.Name() {
 	case "mysql":
-		if !SupportsTiDBSearch(database) {
+		if !IsTiDB(database) {
 			return false
 		}
 		if cached, ok := vectorDistanceCapabilityCache.Load(key); ok {
