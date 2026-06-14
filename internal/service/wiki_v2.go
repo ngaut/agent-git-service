@@ -339,19 +339,11 @@ func countCurrentWikiV2Rows(tx *gorm.DB, repoID uint) int {
 func buildWikiV2Backlinks(repoID uint, updatedAt time.Time, snapshots []wikiV2PageSnapshot) []db.WikiBacklink {
 	pages := make(map[string]struct{}, len(snapshots))
 	topLevelPages := make(map[string]struct{}, len(snapshots))
-	canonicalPages := make(map[string]string, len(snapshots))
-	canonicalTopLevelPages := make(map[string]string, len(snapshots))
 	for _, snapshot := range snapshots {
 		slug := snapshot.row.Slug
 		pages[slug] = struct{}{}
 		if !strings.Contains(slug, "/") {
 			topLevelPages[slug] = struct{}{}
-		}
-		if canonical := canonicalWikiLookupSlug(slug); canonical != "" {
-			canonicalPages[canonical] = slug
-			if !strings.Contains(slug, "/") {
-				canonicalTopLevelPages[canonical] = slug
-			}
 		}
 	}
 
@@ -359,7 +351,7 @@ func buildWikiV2Backlinks(repoID uint, updatedAt time.Time, snapshots []wikiV2Pa
 	seen := make(map[string]struct{})
 	for _, snapshot := range snapshots {
 		for _, match := range extractWikiLinkMatches(snapshot.body) {
-			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages, canonicalPages, canonicalTopLevelPages)
+			resolvedTarget, ok := resolveWikiBacklinkTarget(match, pages, topLevelPages)
 			if !ok {
 				continue
 			}

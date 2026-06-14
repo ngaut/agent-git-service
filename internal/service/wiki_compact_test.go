@@ -66,7 +66,7 @@ func TestCompactWikiHistory_SupersedesOldHistory_Issue1472(t *testing.T) {
 
 	var revisions []db.WikiPageRevision
 	if err := svc.DB.
-		Where("page_id = (SELECT page_id FROM wiki_pages WHERE repository_id = (SELECT id FROM repositories WHERE full_name = ?) AND slug_ci_v1 = ?) ", full, "home").
+		Where("page_id = (SELECT page_id FROM wiki_pages WHERE repository_id = (SELECT id FROM repositories WHERE full_name = ?) AND slug = ?) ", full, "home").
 		Order("revision_id ASC").
 		Find(&revisions).Error; err != nil {
 		t.Fatalf("load revisions: %v", err)
@@ -201,7 +201,7 @@ func TestCompactWikiHistory_SupersedesDeletedPageHistory_Issue1472(t *testing.T)
 
 	var deletedRevisions []db.WikiPageRevision
 	if err := svc.DB.
-		Where("page_id = (SELECT page_id FROM wiki_pages WHERE repository_id = (SELECT id FROM repositories WHERE full_name = ?) AND slug_ci_v1 = ?) ", full, "docs/old").
+		Where("page_id = (SELECT page_id FROM wiki_pages WHERE repository_id = (SELECT id FROM repositories WHERE full_name = ?) AND slug = ?) ", full, "docs/old").
 		Order("revision_id ASC").
 		Find(&deletedRevisions).Error; err != nil {
 		t.Fatalf("load deleted page revisions: %v", err)

@@ -1225,7 +1225,7 @@ func TestWiki_BacklinksPathResolution_Issue1355(t *testing.T) {
 		{slug: "plain-page", body: "# Plain Page\n\nTop-level page with a hyphenated slug.\n"},
 		{slug: "faq", body: "# FAQ\n\nSee [[home]] and [Home](home.md).\n"},
 		{slug: "guide-index", body: "# Guide Index\n\nUse [[guides/setup]].\n"},
-		{slug: "plain-ref", body: "# Plain Ref\n\nUse [[Plain Page]].\n"},
+		{slug: "plain-ref", body: "# Plain Ref\n\nUse [[plain-page]].\n"},
 		{slug: "shortcut-miss", body: "# Shortcut Miss\n\nUse [[Setup]].\n"},
 		{slug: "assets", body: "# Assets\n\n![Architecture](home.md)\n"},
 	} {

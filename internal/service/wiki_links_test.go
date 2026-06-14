@@ -6,15 +6,15 @@ import (
 )
 
 func TestExtractWikiLinkMatches_IgnoresMarkdownImageEmbeds(t *testing.T) {
-	body := "# Setup\n\n![Diagram](home.md)\n\nSee [Home](home.md) and [[Home]].\n"
+	body := "# Setup\n\n![Diagram](home.md)\n\nSee [Home](home.md) and [[home]].\n"
 
 	matches := extractWikiLinkMatches(body)
 	if len(matches) != 2 {
 		t.Fatalf("expected 2 wiki link matches, got %d", len(matches))
 	}
 	for _, match := range matches {
-		if match.targetSlug != "home" && match.targetSlug != "Home" {
-			t.Fatalf("targetSlug = %q, want home or Home", match.targetSlug)
+		if match.targetSlug != "home" {
+			t.Fatalf("targetSlug = %q, want home", match.targetSlug)
 		}
 		if match.snippet == "![Diagram](home.md)" {
 			t.Fatalf("image embed should not produce a backlink snippet")
@@ -62,12 +62,12 @@ func TestExtractWikiLinkMatches_UsesGitHubShorthandTarget(t *testing.T) {
 	}
 }
 
-func TestWikiBacklinkGrepPatterns_FallsBackWhenVariantExpansionIsTooLarge(t *testing.T) {
+func TestWikiBacklinkGrepPatterns_UsesExactSlug(t *testing.T) {
 	slug := "one-two/three-four/five-six/seven-eight/nine-ten/eleven-twelve"
 
 	patterns := wikiBacklinkGrepPatterns(slug)
-	if patterns != nil {
-		t.Fatalf("expected fallback to full scan when variant expansion is too large, got %d patterns", len(patterns))
+	if len(patterns) != 1 || patterns[0] != slug {
+		t.Fatalf("patterns = %#v, want exact slug only", patterns)
 	}
 }
 

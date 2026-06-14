@@ -35,17 +35,16 @@ func (s *Service) wikiPageBody(ctx context.Context, page db.WikiPage) ([]byte, e
 }
 
 // loadLiveWikiPage fetches a single live (non-deleted) catalog page by
-// canonical slug, preloading LastAuthor for response shaping.
+// slug, preloading LastAuthor for response shaping.
 // Returns ErrNotFound translated for the service boundary.
 func (s *Service) loadLiveWikiPage(ctx context.Context, repoID uint, slug string) (db.WikiPage, error) {
-	ci, err := wikicatalog.CanonicalV1(slug)
-	if err != nil {
+	if err := wikicatalog.ValidateWritable(slug); err != nil {
 		return db.WikiPage{}, ErrNotFound
 	}
 	var page db.WikiPage
-	err = s.DBForCtx(ctx).
+	err := s.DBForCtx(ctx).
 		Preload("LastAuthor").
-		Where("repository_id = ? AND slug_ci_v1 = ? AND deleted_at IS NULL", repoID, ci).
+		Where("repository_id = ? AND slug = ? AND deleted_at IS NULL", repoID, slug).
 		Take(&page).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return db.WikiPage{}, ErrNotFound

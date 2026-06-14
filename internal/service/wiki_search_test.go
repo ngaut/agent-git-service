@@ -829,7 +829,6 @@ func TestWikiSearchLargeCurrentIndexMissDoesNotScanCatalog(t *testing.T) {
 		pages = append(pages, db.WikiPage{
 			RepositoryID:    repoID,
 			Slug:            slug,
-			SlugCIV1:        slug,
 			Title:           fmt.Sprintf("Page %03d", i),
 			HeadBlobSHA:     sha,
 			BodySize:        len(body),
@@ -853,7 +852,6 @@ func TestWikiSearchLargeCurrentIndexMissDoesNotScanCatalog(t *testing.T) {
 	pages = append(pages, db.WikiPage{
 		RepositoryID:    repoID,
 		Slug:            "guides/catalog-only",
-		SlugCIV1:        "guides/catalog-only",
 		Title:           "Catalog Only",
 		HeadBlobSHA:     wikicatalog.HashContent(catalogOnlyBody),
 		BodySize:        len(catalogOnlyBody),
@@ -1887,5 +1885,166 @@ func TestWikiSearchSelfHealsStaleStoredTitlesFromSlug(t *testing.T) {
 	}
 	if stored.Title != "Plain Page" {
 		t.Fatalf("stored title = %q, want Plain Page", stored.Title)
+	}
+}
+
+func TestWikiSearchCurrentIndexLabelFilterPreservesOlderMatch(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{Login: "testuser", Name: "Test User", Type: db.TypeUser}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{OwnerLogin: "testuser", Name: "wiki-current-index-label-filter", AutoInit: true}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-current-index-label-filter"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	label := db.Label{RepositoryID: repo.ID, Name: "ops", Description: "Operations"}
+	if err := svc.DB.Create(&label).Error; err != nil {
+		t.Fatalf("seed label: %v", err)
+	}
+
+	body := []byte("# Runbook\n\nrunbook details")
+	sha := wikicatalog.HashContent(body)
+	baseTime := time.Date(2026, time.January, 8, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 1005; i++ {
+		slug := fmt.Sprintf("runbook-%04d", i)
+		now := baseTime.Add(time.Duration(i) * time.Minute)
+		if err := svc.DB.Create(&db.WikiPage{
+			RepositoryID:    repo.ID,
+			Slug:            slug,
+			Title:           fmt.Sprintf("Runbook %d", i),
+			HeadBlobSHA:     sha,
+			BodySize:        len(body),
+			BodyInline:      body,
+			HeadRevisionID:  uint64(i + 1),
+			HeadChangesetID: uint64(i + 1),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}).Error; err != nil {
+			t.Fatalf("seed wiki page %d: %v", i, err)
+		}
+		if err := svc.DB.Create(&db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         slug,
+			Title:        fmt.Sprintf("Runbook %d", i),
+			Body:         db.LargeText(body),
+			RevisionSHA:  sha,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}).Error; err != nil {
+			t.Fatalf("seed wiki search doc %d: %v", i, err)
+		}
+	}
+	if err := svc.DB.Create(&db.WikiPageLabel{RepositoryID: repo.ID, Slug: "runbook-0000", LabelID: label.ID}).Error; err != nil {
+		t.Fatalf("seed wiki page label: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPagesWithOptions(ctx, full, "runbook", service.WikiSearchOptions{
+		Limit:  20,
+		Labels: []string{"ops"},
+	})
+	if err != nil {
+		t.Fatalf("SearchWikiPagesWithOptions: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "runbook-0000" {
+		t.Fatalf("results[0].Slug = %q, want runbook-0000", resp.Results[0].Slug)
+	}
+}
+
+func TestWikiSearchCurrentIndexMultiTokenPreservesOlderIntersectionMatch(t *testing.T) {
+	svc, cleanup := testharness.NewService(t, testharness.ServiceConfig{})
+	defer cleanup()
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{Login: "testuser", Name: "Test User", Type: db.TypeUser}).Error; err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{OwnerLogin: "testuser", Name: "wiki-current-index-multi-token", AutoInit: true}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	full := "testuser/wiki-current-index-multi-token"
+	repo, err := svc.GetRepo(ctx, full)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	baseTime := time.Date(2026, time.January, 9, 0, 0, 0, 0, time.UTC)
+	commonBody := []byte("# Runbook\n\nrunbook only")
+	commonSHA := wikicatalog.HashContent(commonBody)
+	for i := 0; i < 1005; i++ {
+		slug := fmt.Sprintf("runbook-%04d", i)
+		now := baseTime.Add(time.Duration(i) * time.Minute)
+		if err := svc.DB.Create(&db.WikiPage{
+			RepositoryID:    repo.ID,
+			Slug:            slug,
+			Title:           fmt.Sprintf("Runbook %d", i),
+			HeadBlobSHA:     commonSHA,
+			BodySize:        len(commonBody),
+			BodyInline:      commonBody,
+			HeadRevisionID:  uint64(i + 1),
+			HeadChangesetID: uint64(i + 1),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}).Error; err != nil {
+			t.Fatalf("seed wiki page %d: %v", i, err)
+		}
+		if err := svc.DB.Create(&db.WikiSearchDocument{
+			RepositoryID: repo.ID,
+			Slug:         slug,
+			Title:        fmt.Sprintf("Runbook %d", i),
+			Body:         db.LargeText(commonBody),
+			RevisionSHA:  commonSHA,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}).Error; err != nil {
+			t.Fatalf("seed wiki search doc %d: %v", i, err)
+		}
+	}
+
+	targetBody := []byte("# Runbook\n\nrunbook special-token")
+	targetSHA := wikicatalog.HashContent(targetBody)
+	targetTime := baseTime.Add(-time.Minute)
+	if err := svc.DB.Create(&db.WikiPage{
+		RepositoryID:    repo.ID,
+		Slug:            "runbook-special",
+		Title:           "Runbook Special",
+		HeadBlobSHA:     targetSHA,
+		BodySize:        len(targetBody),
+		BodyInline:      targetBody,
+		HeadRevisionID:  5000,
+		HeadChangesetID: 5000,
+		CreatedAt:       targetTime,
+		UpdatedAt:       targetTime,
+	}).Error; err != nil {
+		t.Fatalf("seed target wiki page: %v", err)
+	}
+	if err := svc.DB.Create(&db.WikiSearchDocument{
+		RepositoryID: repo.ID,
+		Slug:         "runbook-special",
+		Title:        "Runbook Special",
+		Body:         db.LargeText(targetBody),
+		RevisionSHA:  targetSHA,
+		CreatedAt:    targetTime,
+		UpdatedAt:    targetTime,
+	}).Error; err != nil {
+		t.Fatalf("seed target wiki search doc: %v", err)
+	}
+
+	resp, err := svc.SearchWikiPages(ctx, full, "runbook special-token", 20, 0)
+	if err != nil {
+		t.Fatalf("SearchWikiPages: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(resp.Results))
+	}
+	if resp.Results[0].Slug != "runbook-special" {
+		t.Fatalf("results[0].Slug = %q, want runbook-special", resp.Results[0].Slug)
 	}
 }

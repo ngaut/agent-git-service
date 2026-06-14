@@ -82,3 +82,23 @@ func TestInitVector_WikiSearchEmbeddingTextColumnIsLeftOnSQLite(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateWikiSlugColumns_DropsSearchSlugCIColumnAndIndex(t *testing.T) {
+	gdb := openSQLiteDB(t, filepath.Join(t.TempDir(), "wiki-search-slug-cleanup.db"))
+	if err := gdb.Exec("CREATE TABLE wiki_search_documents (id integer primary key, repository_id integer, slug text, slug_ci_v1 text, title text, body text, revision_sha text, created_at datetime, updated_at datetime)").Error; err != nil {
+		t.Fatalf("create wiki_search_documents: %v", err)
+	}
+	if err := gdb.Exec("CREATE INDEX idx_wiki_search_repo_slug_ci ON wiki_search_documents (repository_id, slug_ci_v1)").Error; err != nil {
+		t.Fatalf("create slug_ci index: %v", err)
+	}
+
+	if err := MigrateWikiSlugColumns(gdb); err != nil {
+		t.Fatalf("MigrateWikiSlugColumns: %v", err)
+	}
+	if gdb.Migrator().HasIndex("wiki_search_documents", "idx_wiki_search_repo_slug_ci") {
+		t.Fatal("expected idx_wiki_search_repo_slug_ci to be dropped")
+	}
+	if gdb.Migrator().HasColumn("wiki_search_documents", "slug_ci_v1") {
+		t.Fatal("expected wiki_search_documents.slug_ci_v1 to be dropped")
+	}
+}

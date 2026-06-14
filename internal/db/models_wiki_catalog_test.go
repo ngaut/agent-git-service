@@ -47,7 +47,7 @@ func TestWikiCatalogAutoMigrate(t *testing.T) {
 		table string
 		name  string
 	}{
-		{"wiki_pages", "idx_wiki_pages_repo_slug_ci"},
+		{"wiki_pages", "idx_wiki_pages_repo_slug"},
 		{"wiki_pages", "idx_wiki_pages_repo_updated"},
 		{"wiki_pages", "idx_wiki_pages_repo_prefix"},
 		{"wiki_page_revisions", "idx_wiki_revisions_changeset"},
@@ -58,7 +58,7 @@ func TestWikiCatalogAutoMigrate(t *testing.T) {
 		{"wiki_changesets", "idx_wiki_changesets_superseded"},
 		{"wiki_dir_index", "idx_wiki_dir_repo_parent_kind_name"},
 		{"wiki_page_links", "idx_wiki_links_dst_resolved"},
-		{"wiki_page_links", "idx_wiki_links_dst_string"},
+		{"wiki_page_links", "idx_wiki_links_repo_dst_slug"},
 	}
 	for _, idx := range indexes {
 		if !gdb.Migrator().HasIndex(idx.table, idx.name) {
@@ -112,8 +112,7 @@ func TestWikiCatalogRoundTrip(t *testing.T) {
 	page := WikiPage{
 		PageID:          100,
 		RepositoryID:    repo.ID,
-		Slug:            "Home",
-		SlugCIV1:        "home",
+		Slug:            "home",
 		Title:           "Home",
 		HeadBlobSHA:     "1111111111111111111111111111111111111111",
 		BodySize:        12,
@@ -159,17 +158,17 @@ func TestWikiCatalogRoundTrip(t *testing.T) {
 	if err := gdb.First(&got, "page_id = ?", page.PageID).Error; err != nil {
 		t.Fatalf("read page: %v", err)
 	}
-	if got.SlugCIV1 != "home" || got.HeadBlobSHA != page.HeadBlobSHA || got.BodySize != 12 {
+	if got.Slug != "home" || got.HeadBlobSHA != page.HeadBlobSHA || got.BodySize != 12 {
 		t.Fatalf("page round-trip mismatch: %+v", got)
 	}
 	if string(got.BodyInline) != "hello world\n" {
 		t.Fatalf("body_inline round-trip mismatch: %q", got.BodyInline)
 	}
 
-	// Unique constraint on (repo, slug_ci_v1).
+	// Unique constraint on (repo, slug).
 	dup := page
 	dup.PageID = 101
 	if err := gdb.Create(&dup).Error; err == nil {
-		t.Fatalf("expected unique violation on (repo, slug_ci_v1)")
+		t.Fatalf("expected unique violation on (repo, slug)")
 	}
 }

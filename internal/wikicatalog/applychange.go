@@ -12,20 +12,20 @@ import (
 // opened by applyOnce. Restore (the third applyUpsert sub-path)
 // reuses the same page_id as the tombstone it resurrects, so the
 // revision chain stays continuous across delete + recreate.
-func (c *Catalog) applyChange(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobByCI map[string]string) (ChangeResult, error) {
+func (c *Catalog) applyChange(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
 	switch ch.op {
 	case OpUpsert:
-		return c.applyUpsert(tx, plan, cs, ch, preRead, blobByCI)
+		return c.applyUpsert(tx, plan, cs, ch, preRead, blobBySlug)
 	case OpDelete:
 		return c.applyDelete(tx, plan, cs, ch, preRead)
 	case OpRename:
-		return c.applyRename(tx, plan, cs, ch, preRead, blobByCI)
+		return c.applyRename(tx, plan, cs, ch, preRead, blobBySlug)
 	}
 	return ChangeResult{}, fmt.Errorf("wiki catalog: unknown op %v", ch.op)
 }
 
-func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobByCI map[string]string) (ChangeResult, error) {
-	newSHA := blobByCI[ch.srcSlugCI]
+func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
+	newSHA := blobBySlug[ch.srcSlug]
 	bodySize := len(ch.body)
 	var inline []byte
 	if bodySize <= MaxBodyInlineBytes {
@@ -36,8 +36,8 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		inline = ch.body
 	}
 
-	live, isLive := preRead.live[ch.srcSlugCI]
-	tomb, isTomb := preRead.tombs[ch.srcSlugCI]
+	live, isLive := preRead.live[ch.srcSlug]
+	tomb, isTomb := preRead.tombs[ch.srcSlug]
 
 	var (
 		pageID       uint64
@@ -86,7 +86,6 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		page := db.WikiPage{
 			RepositoryID:    plan.repoID,
 			Slug:            ch.srcSlug,
-			SlugCIV1:        ch.srcSlugCI,
 			Title:           TitleFromSlug(ch.srcSlug),
 			HeadBlobSHA:     newSHA,
 			BodySize:        bodySize,
@@ -104,10 +103,10 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	}
 
 	if needsNewLeaf {
-		if err := ensureDirChain(tx, plan.repoID, ch.srcSlugCI); err != nil {
+		if err := ensureDirChain(tx, plan.repoID, ch.srcSlug); err != nil {
 			return ChangeResult{}, err
 		}
-		if err := insertDirLeaf(tx, plan.repoID, ch.srcSlugCI, pageID); err != nil {
+		if err := insertDirLeaf(tx, plan.repoID, ch.srcSlug, pageID); err != nil {
 			return ChangeResult{}, err
 		}
 	}
@@ -147,7 +146,7 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	// slug should now resolve. Update path leaves these untouched
 	// because the mapping didn't change.
 	if needsNewLeaf {
-		if err := resolveInboundLinks(tx, plan.repoID, ch.srcSlugCI, pageID); err != nil {
+		if err := resolveInboundLinks(tx, plan.repoID, ch.srcSlug, pageID); err != nil {
 			return ChangeResult{}, err
 		}
 	}
@@ -167,7 +166,7 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 }
 
 func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages) (ChangeResult, error) {
-	existing := preRead.live[ch.srcSlugCI] // existence verified in checkConflicts
+	existing := preRead.live[ch.srcSlug] // existence verified in checkConflicts
 	pageID := existing.PageID
 	revisionID := existing.HeadRevisionID + 1
 
@@ -202,10 +201,10 @@ func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		return ChangeResult{}, err
 	}
 
-	if err := removeDirLeaf(tx, plan.repoID, existing.SlugCIV1); err != nil {
+	if err := removeDirLeaf(tx, plan.repoID, existing.Slug); err != nil {
 		return ChangeResult{}, err
 	}
-	if err := pruneEmptyParents(tx, plan.repoID, existing.SlugCIV1); err != nil {
+	if err := pruneEmptyParents(tx, plan.repoID, existing.Slug); err != nil {
 		return ChangeResult{}, err
 	}
 
@@ -234,21 +233,21 @@ func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	}, nil
 }
 
-func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobByCI map[string]string) (ChangeResult, error) {
-	existing := preRead.live[ch.srcSlugCI] // existence verified in checkConflicts
+func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
+	existing := preRead.live[ch.srcSlug] // existence verified in checkConflicts
 	pageID := existing.PageID
 	revisionID := existing.HeadRevisionID + 1
-	oldSlugCI := existing.SlugCIV1
+	oldSlug := existing.Slug
 
 	// Decide whether this rename also updates the body. When the
-	// caller supplies ch.body, blobByCI carries the precomputed SHA
+	// caller supplies ch.body, blobBySlug carries the precomputed SHA
 	// for it; otherwise carry the existing blob forward unchanged.
 	newSHA := existing.HeadBlobSHA
 	newSize := existing.BodySize
 	newInline := existing.BodyInline
 	bodyChanged := len(ch.body) > 0
 	if bodyChanged {
-		newSHA = blobByCI[ch.srcSlugCI]
+		newSHA = blobBySlug[ch.srcSlug]
 		newSize = len(ch.body)
 		if newSize <= MaxBodyInlineBytes {
 			newInline = ch.body
@@ -276,7 +275,6 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 
 	updates := map[string]any{
 		"slug":              ch.dstSlug,
-		"slug_ci_v1":        ch.dstSlugCI,
 		"title":             TitleFromSlug(ch.dstSlug),
 		"head_revision_id":  revisionID,
 		"head_changeset_id": cs.ChangesetID,
@@ -310,27 +308,27 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		}
 	}
 
-	if err := removeDirLeaf(tx, plan.repoID, oldSlugCI); err != nil {
+	if err := removeDirLeaf(tx, plan.repoID, oldSlug); err != nil {
 		return ChangeResult{}, err
 	}
-	if err := ensureDirChain(tx, plan.repoID, ch.dstSlugCI); err != nil {
+	if err := ensureDirChain(tx, plan.repoID, ch.dstSlug); err != nil {
 		return ChangeResult{}, err
 	}
-	if err := insertDirLeaf(tx, plan.repoID, ch.dstSlugCI, pageID); err != nil {
+	if err := insertDirLeaf(tx, plan.repoID, ch.dstSlug, pageID); err != nil {
 		return ChangeResult{}, err
 	}
-	if err := pruneEmptyParents(tx, plan.repoID, oldSlugCI); err != nil {
+	if err := pruneEmptyParents(tx, plan.repoID, oldSlug); err != nil {
 		return ChangeResult{}, err
 	}
 
 	// Inbound links anchored on the old slug text now point at a
 	// page that no longer occupies that slug — clear them.
-	if err := clearInboundLinksForSlug(tx, plan.repoID, oldSlugCI, pageID); err != nil {
+	if err := clearInboundLinksForSlug(tx, plan.repoID, oldSlug, pageID); err != nil {
 		return ChangeResult{}, err
 	}
 	// Inbound links waiting for the new slug to materialize can now
 	// resolve. (Symmetric to the create/restore case in applyUpsert.)
-	if err := resolveInboundLinks(tx, plan.repoID, ch.dstSlugCI, pageID); err != nil {
+	if err := resolveInboundLinks(tx, plan.repoID, ch.dstSlug, pageID); err != nil {
 		return ChangeResult{}, err
 	}
 
@@ -355,7 +353,6 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 func pageUpsertColumns(ch plannedChange, blobSHA string, bodySize int, inline []byte, revisionID uint64, cs *db.WikiChangeset, plan changesetPlan, clearDeletedAt bool) map[string]any {
 	out := map[string]any{
 		"slug":              ch.srcSlug,
-		"slug_ci_v1":        ch.srcSlugCI,
 		"title":             TitleFromSlug(ch.srcSlug),
 		"head_blob_sha":     blobSHA,
 		"body_size":         bodySize,
