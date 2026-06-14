@@ -68,6 +68,9 @@ func assertLogEntry(t *testing.T, entries []logEntry, level slog.Level, message 
 
 func TestInitVector_DuplicateColumnLogsDebug(t *testing.T) {
 	gdb := openTiDB(t)
+	if !SupportsVectorDistance(gdb) {
+		t.Skip("TiDB playground does not support VEC_COSINE_DISTANCE")
+	}
 	createVectorTables(t, gdb)
 
 	if err := gdb.Exec("ALTER TABLE issues ADD COLUMN embedding TEXT").Error; err != nil {

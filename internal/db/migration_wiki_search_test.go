@@ -8,6 +8,7 @@ import (
 
 func TestMigrateWikiSearch_TiDBTables(t *testing.T) {
 	gdb := openTiDB(t)
+	supportsVector := SupportsVectorDistance(gdb)
 	if err := gdb.Exec("CREATE TABLE wiki_search_documents (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT, title TEXT, body TEXT)").Error; err != nil {
 		t.Fatalf("create wiki_search_documents: %v", err)
 	}
@@ -15,8 +16,12 @@ func TestMigrateWikiSearch_TiDBTables(t *testing.T) {
 	if err := MigrateWikiSearch(gdb); err != nil {
 		t.Fatalf("MigrateWikiSearch: %v", err)
 	}
-	if gdb.Migrator().HasColumn("wiki_search_documents", "embedding") {
+	hasEmbedding := gdb.Migrator().HasColumn("wiki_search_documents", "embedding")
+	if supportsVector && hasEmbedding {
 		t.Fatal("expected TiDB MigrateWikiSearch to leave embedding for InitVector")
+	}
+	if !supportsVector && !hasEmbedding {
+		t.Fatal("expected TiDB without vector distance to keep TEXT wiki embeddings for in-memory semantic fallback")
 	}
 }
 

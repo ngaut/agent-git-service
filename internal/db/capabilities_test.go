@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
@@ -222,10 +221,16 @@ func TestIsTiDB(t *testing.T) {
 	}
 }
 
-func TestIsTiDB_NonMySQLFalse(t *testing.T) {
-	gdb := &gorm.DB{Config: &gorm.Config{Dialector: postgres.Open("postgres://user:pass@localhost:5432/testdb?sslmode=disable")}}
+func TestIsTiDB_NilAndDryRunFalse(t *testing.T) {
+	if IsTiDB(nil) {
+		t.Fatal("expected nil database not to be detected as TiDB")
+	}
+	gdb, _ := openFakeMySQLCapabilityDB(t, fakeMySQLCapabilityConfig{
+		tidbVersion: "Release Version: v8.5.0",
+	})
+	gdb.Config.DryRun = true
 	if IsTiDB(gdb) {
-		t.Fatal("expected postgres not to be detected as TiDB")
+		t.Fatal("expected dry-run database not to be detected as TiDB")
 	}
 }
 
@@ -454,5 +459,42 @@ func TestPlainMySQLSkipsTiDBOnlySearchDDL(t *testing.T) {
 			strings.Contains(upper, "VEC_COSINE_DISTANCE") {
 			t.Fatalf("plain MySQL should not execute TiDB-only SQL, saw %q", query)
 		}
+	}
+}
+
+func TestTiDBSkipsUnavailableSearchFeatureAppDDL(t *testing.T) {
+	gdb, fakeDriver := openFakeMySQLCapabilityDB(t, fakeMySQLCapabilityConfig{
+		tidbVersion:       "Release Version: v7.1.0",
+		fullTextErr:       errors.New("function FTS_MATCH_WORD does not exist"),
+		vectorDistanceErr: errors.New("function VEC_COSINE_DISTANCE does not exist"),
+	})
+
+	if err := MigrateIssueSearch(gdb); err != nil {
+		t.Fatalf("MigrateIssueSearch: %v", err)
+	}
+	InitVector(gdb, 3)
+
+	var sawFullTextProbe bool
+	var sawVectorProbe bool
+	for _, query := range fakeDriver.Queries() {
+		upper := strings.ToUpper(query)
+		if strings.Contains(upper, "FTS_MATCH_WORD") {
+			sawFullTextProbe = true
+		}
+		if strings.Contains(upper, "VEC_COSINE_DISTANCE") {
+			sawVectorProbe = true
+		}
+		if strings.Contains(upper, "ALTER TABLE `ISSUES`") ||
+			strings.Contains(upper, "ALTER TABLE `PULL_REQUESTS`") ||
+			strings.Contains(upper, "ADD VECTOR INDEX") ||
+			strings.Contains(upper, "ADD COLUMN `EMBEDDING`") {
+			t.Fatalf("TiDB without feature probes should not execute app feature DDL, saw %q", query)
+		}
+	}
+	if !sawFullTextProbe {
+		t.Fatal("expected TiDB full-text capability probe")
+	}
+	if !sawVectorProbe {
+		t.Fatal("expected TiDB vector-distance capability probe")
 	}
 }

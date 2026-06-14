@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
@@ -138,11 +137,6 @@ func Init(dsn string) (*gorm.DB, error) {
 				SlowThreshold:             200 * time.Millisecond,
 			}},
 		}
-		// PostgreSQL: PrepareStmt prevents the migrator from forcing
-		// pgx.QueryExecModeSimpleProtocol, which can reject LIMIT params.
-		if dialect == "postgres" {
-			cfg.PrepareStmt = true
-		}
 		db, err := gorm.Open(dialector, cfg)
 		if err != nil {
 			err = fmt.Errorf("%s: %w", dialect, err)
@@ -213,17 +207,11 @@ func Init(dsn string) (*gorm.DB, error) {
 
 func dialectorForDSN(dsn string) (gorm.Dialector, string) {
 	raw := strings.TrimSpace(dsn)
-	lower := strings.ToLower(raw)
-	switch {
-	case strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://"):
-		return postgres.Open(raw), "postgres"
-	default:
-		return mysql.Open(raw), "mysql"
-	}
+	return mysql.Open(raw), "mysql"
 }
 
 // DialectorForDSN returns the GORM dialector and dialect name for the given DSN.
-// Dialect name is one of "postgres" or "mysql".
+// AGS supports TiDB and MySQL-compatible databases through the MySQL driver.
 // Used by callers outside this package that need dialect-aware DB opens.
 func DialectorForDSN(raw string) (gorm.Dialector, string) {
 	return dialectorForDSN(raw)
@@ -355,17 +343,13 @@ func Migrate(database *gorm.DB) error {
 
 // InitVector attempts to add VECTOR(dims) columns to the issues and
 // pull_requests tables for semantic search, then best-effort vector indexes
-// for TiDB-backed deployments. It uses raw SQL because GORM does not
-// natively support TiDB's VECTOR type.
+// for TiDB-backed deployments that expose VEC_COSINE_DISTANCE. It uses raw SQL
+// because GORM does not natively support TiDB's VECTOR type.
 //
-// This is a best-effort operation: if the ALTER TABLE fails (e.g. column
-// already exists, or the database does not support VECTOR), the error is
-// logged and the server continues without vector search.
+// This is a best-effort operation: unsupported deployments are skipped by
+// capability probe, and DDL errors are logged without blocking startup.
 func InitVector(database *gorm.DB, dims int) {
-	if dims <= 0 {
-		return
-	}
-	if database != nil && database.Dialector.Name() == "mysql" && !IsTiDB(database) {
+	if dims <= 0 || !SupportsVectorDistance(database) {
 		return
 	}
 	// Cap at 16384 — TiDB supports up to ~16K dimensions.
@@ -377,18 +361,12 @@ func InitVector(database *gorm.DB, dims int) {
 	}
 	migrator := database.Migrator()
 	tables := []string{"issues", "pull_requests"}
-	isPostgres := database.Dialector.Name() == "postgres"
 	for _, table := range tables {
 		if migrator.HasColumn(table, "embedding") {
 			slog.Debug("db: InitVector: embedding column already exists", "table", table)
 			continue
 		}
-		var sql string
-		if isPostgres {
-			sql = fmt.Sprintf(`ALTER TABLE "%s" ADD COLUMN "embedding" vector(%d)`, table, dims)
-		} else {
-			sql = fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `embedding` VECTOR(%d)", table, dims)
-		}
+		sql := fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `embedding` VECTOR(%d)", table, dims)
 		if err := database.Exec(sql).Error; err != nil {
 			msg := strings.ToLower(err.Error())
 			if migrator.HasColumn(table, "embedding") ||

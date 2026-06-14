@@ -50,16 +50,13 @@ func TestInitVector_Idempotent(t *testing.T) {
 	InitVector(gdb, 3)
 }
 
-// TestDialectorForDSN verifies DSN parsing for different database types.
+// TestDialectorForDSN verifies AGS uses the MySQL driver for TiDB/MySQL-compatible DSNs.
 func TestDialectorForDSN(t *testing.T) {
 	tests := []struct {
 		name        string
 		dsn         string
 		wantDialect string
 	}{
-		{"postgres URL", "postgres://user:pass@localhost:5432/testdb?sslmode=disable", "postgres"},
-		{"postgresql URL", "postgresql://user:pass@localhost:5432/testdb?sslmode=disable", "postgres"},
-		{"postgres uppercase", "  POSTGRESQL://user:pass@localhost:5432/testdb?sslmode=disable  ", "postgres"},
 		{"mysql default", "user:pass@tcp(host:3306)/db", "mysql"},
 		{"mysql uppercase", "MYSQL:user:pass@tcp(host:3306)/db", "mysql"},
 		{"mysql whitespace trimmed", "  user:pass@tcp(host:3306)/db  ", "mysql"},

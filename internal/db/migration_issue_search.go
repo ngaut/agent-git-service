@@ -52,10 +52,14 @@ var issueSearchVectorIndexes = []issueSearchVectorIndex{
 //
 // This is intentionally best-effort: on non-TiDB backends, the function
 // returns nil so normal startup can continue with fallback search paths.
-// On TiDB variants without the required full-text/vector capabilities, each
-// individual DDL attempt logs a warning and startup continues.
+// TiDB variants are probed for full-text/vector support before the matching
+// DDL runs, because support differs across TiDB/MySQL-compatible versions.
 func MigrateIssueSearch(database *gorm.DB) error {
 	if !IsTiDB(database) {
+		return nil
+	}
+	if !SupportsTiDBFullText(database) {
+		ensureVectorIndexes(database)
 		return nil
 	}
 
@@ -161,7 +165,7 @@ func ensureFullTextIndex(database *gorm.DB, idx issueSearchFullTextIndex) {
 }
 
 func ensureVectorIndexes(database *gorm.DB) {
-	if !IsTiDB(database) {
+	if !SupportsVectorDistance(database) {
 		return
 	}
 	migrator := database.Migrator()
