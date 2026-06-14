@@ -33,20 +33,18 @@ func WikiShorthandTarget(raw string) string {
 	return raw
 }
 
-// ExtractOutlinks returns the unique canonical (slug_ci_v1) outbound
-// link targets present in body. The returned slice is sorted so the
-// resulting wiki_page_links rows are stable across writes.
+// ExtractOutlinks returns the unique outbound link targets present in
+// body. The returned slice is sorted so the resulting wiki_page_links
+// rows are stable across writes.
 //
 // References that:
 //   - have a non-empty URL scheme (i.e. external links)
 //   - escape the wiki root via `..`
 //   - are images
-//   - fail readable slug validation
-//   - cannot be canonicalized into slug_ci_v1
+//   - fail slug validation
 //
 // are dropped silently — they are not catalog links. Anchor (`#…`)
-// and query (`?…`) fragments are stripped before canonicalization,
-// matching legacy normalizeWikiReference behavior.
+// and query (`?…`) fragments are stripped before validation.
 func ExtractOutlinks(body string) []string {
 	seen := make(map[string]struct{})
 	for _, loc := range markdownLinkRE.FindAllStringSubmatchIndex(body, -1) {
@@ -57,7 +55,7 @@ func ExtractOutlinks(body string) []string {
 		if loc[0] > 0 && body[loc[0]-1] == '!' {
 			continue
 		}
-		if slug := canonicalLinkTarget(body[loc[2]:loc[3]]); slug != "" {
+		if slug := wikiLinkTarget(body[loc[2]:loc[3]]); slug != "" {
 			seen[slug] = struct{}{}
 		}
 	}
@@ -65,7 +63,7 @@ func ExtractOutlinks(body string) []string {
 		if len(loc) < 4 {
 			continue
 		}
-		if slug := canonicalLinkTarget(WikiShorthandTarget(body[loc[2]:loc[3]])); slug != "" {
+		if slug := wikiLinkTarget(WikiShorthandTarget(body[loc[2]:loc[3]])); slug != "" {
 			seen[slug] = struct{}{}
 		}
 	}
@@ -77,13 +75,10 @@ func ExtractOutlinks(body string) []string {
 	return out
 }
 
-// canonicalLinkTarget normalizes a raw markdown link target into its
-// slug_ci_v1 form, or returns "" if the target is not a valid
-// intra-wiki reference. The pre-canonical filtering rules match
-// legacy normalizeWikiReference; the final canonicalization step
-// routes through CanonicalV1 so link rows agree with the page-table
-// canonical key.
-func canonicalLinkTarget(raw string) string {
+// wikiLinkTarget normalizes a raw markdown link target into the single
+// wiki slug form, or returns "" if the target is not a valid intra-wiki
+// reference.
+func wikiLinkTarget(raw string) string {
 	link := strings.TrimSpace(raw)
 	if link == "" {
 		return ""
@@ -111,9 +106,8 @@ func canonicalLinkTarget(raw string) string {
 	if link == "" {
 		return ""
 	}
-	canonical, err := CanonicalV1(link)
-	if err != nil {
+	if err := ValidateWritable(link); err != nil {
 		return ""
 	}
-	return canonical
+	return link
 }

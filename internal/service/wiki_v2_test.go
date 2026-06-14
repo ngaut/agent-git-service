@@ -10,7 +10,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
-func TestReconcileWikiV2_IdempotentAndLegacyBehaviorUntouched(t *testing.T) {
+func TestReconcileWikiV2_IdempotentAndCatalogBehaviorUntouched(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
 

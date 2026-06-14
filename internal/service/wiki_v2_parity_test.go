@@ -6,7 +6,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/wikiv2"
 )
 
-func TestWikiV2SlugPathParityMatchesLegacyHelpers(t *testing.T) {
+func TestWikiV2SlugPathParityMatchesServiceHelpers(t *testing.T) {
 	validSlugs := []string{
 		"home",
 		"guides/setup",
@@ -26,8 +26,8 @@ func TestWikiV2SlugPathParityMatchesLegacyHelpers(t *testing.T) {
 			if !ok {
 				t.Fatalf("PathToSlug(%q) rejected canonical path", path)
 			}
-			if legacy := wikiPathToSlug(path); legacy != gotSlug {
-				t.Fatalf("wikiPathToSlug(%q) = %q, want %q", path, legacy, gotSlug)
+			if serviceSlug := wikiPathToSlug(path); serviceSlug != gotSlug {
+				t.Fatalf("wikiPathToSlug(%q) = %q, want %q", path, serviceSlug, gotSlug)
 			}
 		})
 	}
@@ -36,8 +36,8 @@ func TestWikiV2SlugPathParityMatchesLegacyHelpers(t *testing.T) {
 		if got, ok := wikiv2.PathToSlug(path); ok || got != "" {
 			t.Fatalf("PathToSlug(%q) = (%q, %v), want rejection", path, got, ok)
 		}
-		if legacy := wikiPathToSlug(path); legacy != "" {
-			t.Fatalf("wikiPathToSlug(%q) = %q, want empty", path, legacy)
+		if serviceSlug := wikiPathToSlug(path); serviceSlug != "" {
+			t.Fatalf("wikiPathToSlug(%q) = %q, want empty", path, serviceSlug)
 		}
 	}
 }

@@ -46,10 +46,10 @@ func decrementBlobRef(tx *gorm.DB, blobSHA string) error {
 }
 
 // ensureDirChain inserts a "tree" row for every intermediate directory
-// in slugCI's parent chain. Inserts are idempotent via DoNothing
+// in slug's parent chain. Inserts are idempotent via DoNothing
 // upsert so concurrent creators of sibling pages don't conflict.
-func ensureDirChain(tx *gorm.DB, repoID uint, slugCI string) error {
-	for _, dir := range parentChain(slugCI) {
+func ensureDirChain(tx *gorm.DB, repoID uint, slug string) error {
+	for _, dir := range parentChain(slug) {
 		parent, leaf := splitParentLeaf(dir)
 		row := db.WikiDirIndex{
 			RepositoryID: repoID,
@@ -64,9 +64,9 @@ func ensureDirChain(tx *gorm.DB, repoID uint, slugCI string) error {
 	return nil
 }
 
-// insertDirLeaf records slugCI's leaf entry in its parent directory.
-func insertDirLeaf(tx *gorm.DB, repoID uint, slugCI string, pageID uint64) error {
-	parent, leaf := splitParentLeaf(slugCI)
+// insertDirLeaf records slug's leaf entry in its parent directory.
+func insertDirLeaf(tx *gorm.DB, repoID uint, slug string, pageID uint64) error {
+	parent, leaf := splitParentLeaf(slug)
 	row := db.WikiDirIndex{
 		RepositoryID: repoID,
 		ParentDir:    parent,
@@ -77,16 +77,16 @@ func insertDirLeaf(tx *gorm.DB, repoID uint, slugCI string, pageID uint64) error
 	return tx.Create(&row).Error
 }
 
-// removeDirLeaf removes slugCI's leaf entry from its parent directory.
+// removeDirLeaf removes slug's leaf entry from its parent directory.
 // Idempotent — missing rows are fine.
-func removeDirLeaf(tx *gorm.DB, repoID uint, slugCI string) error {
-	parent, leaf := splitParentLeaf(slugCI)
+func removeDirLeaf(tx *gorm.DB, repoID uint, slug string) error {
+	parent, leaf := splitParentLeaf(slug)
 	return tx.Where("repository_id = ? AND parent_dir = ? AND child_name = ?",
 		repoID, parent, leaf).
 		Delete(&db.WikiDirIndex{}).Error
 }
 
-// pruneEmptyParents walks slugCI's ancestor chain from leaf up to
+// pruneEmptyParents walks slug's ancestor chain from leaf up to
 // root, removing each tree row whose directory has become empty.
 // Stops at the first non-empty ancestor.
 //
@@ -95,8 +95,8 @@ func removeDirLeaf(tx *gorm.DB, repoID uint, slugCI string) error {
 // tree rows until we hit one with children. Replaces the legacy
 // "COUNT then DELETE per ancestor" loop that did 2·depth round
 // trips. Bounded by wikiMaxSlugDepth (≤ 6 ancestors per page).
-func pruneEmptyParents(tx *gorm.DB, repoID uint, slugCI string) error {
-	chain := parentChain(slugCI)
+func pruneEmptyParents(tx *gorm.DB, repoID uint, slug string) error {
+	chain := parentChain(slug)
 	if len(chain) == 0 {
 		return nil
 	}
@@ -137,7 +137,7 @@ func pruneEmptyParents(tx *gorm.DB, repoID uint, slugCI string) error {
 // refreshOutlinks replaces the wiki_page_links rows for srcPageID
 // with the current outbound link set extracted from body. Dangling
 // links (no matching wiki_pages row in this repo) keep dst_page_id
-// NULL and remain queryable by dst_slug_ci for the future resolver.
+// NULL and remain queryable by dst_slug for the future resolver.
 func refreshOutlinks(tx *gorm.DB, repoID uint, srcPageID uint64, body string) error {
 	if err := tx.Where("src_page_id = ?", srcPageID).Delete(&db.WikiPageLink{}).Error; err != nil {
 		return err
@@ -152,21 +152,21 @@ func refreshOutlinks(tx *gorm.DB, repoID uint, srcPageID uint64, body string) er
 	// tombstoned page_id, breaking the catalog invariant that every
 	// non-NULL dst_page_id points at a live page.
 	var matches []db.WikiPage
-	if err := tx.Select("page_id", "slug_ci_v1").
-		Where("repository_id = ? AND slug_ci_v1 IN ? AND deleted_at IS NULL", repoID, outs).
+	if err := tx.Select("page_id", "slug").
+		Where("repository_id = ? AND slug IN ? AND deleted_at IS NULL", repoID, outs).
 		Find(&matches).Error; err != nil {
 		return err
 	}
 	resolved := make(map[string]uint64, len(matches))
 	for _, m := range matches {
-		resolved[m.SlugCIV1] = m.PageID
+		resolved[m.Slug] = m.PageID
 	}
 	rows := make([]db.WikiPageLink, 0, len(outs))
 	for _, dst := range outs {
 		link := db.WikiPageLink{
 			RepositoryID: repoID,
 			SrcPageID:    srcPageID,
-			DstSlugCI:    dst,
+			DstSlug:      dst,
 		}
 		if pid, ok := resolved[dst]; ok {
 			pidCopy := pid
@@ -178,14 +178,14 @@ func refreshOutlinks(tx *gorm.DB, repoID uint, srcPageID uint64, body string) er
 }
 
 // resolveInboundLinks fills in dst_page_id for any wiki_page_links
-// row whose textual target matches slugCI but whose resolution had
+// row whose textual target matches slug but whose resolution had
 // been left NULL because the target page did not exist when the
 // source page was last written. Called from applyUpsert (create or
 // restore) and applyRename (destination side) so that backlink
 // queries on the just-materialized slug return immediately.
-func resolveInboundLinks(tx *gorm.DB, repoID uint, slugCI string, pageID uint64) error {
+func resolveInboundLinks(tx *gorm.DB, repoID uint, slug string, pageID uint64) error {
 	return tx.Model(&db.WikiPageLink{}).
-		Where("repository_id = ? AND dst_slug_ci = ? AND dst_page_id IS NULL", repoID, slugCI).
+		Where("repository_id = ? AND dst_slug = ? AND dst_page_id IS NULL", repoID, slug).
 		UpdateColumn("dst_page_id", pageID).Error
 }
 
@@ -193,7 +193,7 @@ func resolveInboundLinks(tx *gorm.DB, repoID uint, slugCI string, pageID uint64)
 // resolved to pageID. Used by applyDelete: the page no longer
 // occupies any slug, so the cached resolution is now phantom.
 //
-// The textual dst_slug_ci is left untouched so the resolver can
+// The textual dst_slug is left untouched so the resolver can
 // re-link the row if a future create or rename re-occupies the slug.
 func clearInboundLinksForPage(tx *gorm.DB, repoID uint, pageID uint64) error {
 	return tx.Model(&db.WikiPageLink{}).
@@ -202,13 +202,13 @@ func clearInboundLinksForPage(tx *gorm.DB, repoID uint, pageID uint64) error {
 }
 
 // clearInboundLinksForSlug clears dst_page_id for links whose textual
-// dst_slug_ci is oldSlugCI and whose dst_page_id was pageID. Used by
+// dst_slug is oldSlug and whose dst_page_id was pageID. Used by
 // applyRename: the page has moved away from this slug, so the
-// cached resolution is phantom; future incarnations of oldSlugCI
+// cached resolution is phantom; future incarnations of oldSlug
 // (e.g. a recreate) will be picked up by resolveInboundLinks.
-func clearInboundLinksForSlug(tx *gorm.DB, repoID uint, oldSlugCI string, pageID uint64) error {
+func clearInboundLinksForSlug(tx *gorm.DB, repoID uint, oldSlug string, pageID uint64) error {
 	return tx.Model(&db.WikiPageLink{}).
-		Where("repository_id = ? AND dst_slug_ci = ? AND dst_page_id = ?", repoID, oldSlugCI, pageID).
+		Where("repository_id = ? AND dst_slug = ? AND dst_page_id = ?", repoID, oldSlug, pageID).
 		UpdateColumn("dst_page_id", nil).Error
 }
 

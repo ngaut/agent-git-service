@@ -80,7 +80,7 @@ func TestApplyChangeSet_CreateSinglePage(t *testing.T) {
 	if err := gdb.First(&page, "page_id = ?", got.PageID).Error; err != nil {
 		t.Fatalf("read page: %v", err)
 	}
-	if page.Slug != "home" || page.SlugCIV1 != "home" || page.HeadBlobSHA != wantSHA {
+	if page.Slug != "home" || page.HeadBlobSHA != wantSHA {
 		t.Fatalf("page row mismatch: %+v", page)
 	}
 	if page.HeadChangesetID != res.ChangesetID {
@@ -155,7 +155,7 @@ func TestApplyChangeSet_LargeBodyGoesToCAS(t *testing.T) {
 	}
 	// Page row body_inline should be nil for large body.
 	var page db.WikiPage
-	gdb.First(&page, "repository_id = ? AND slug_ci_v1 = ?", repoID, "big")
+	gdb.First(&page, "repository_id = ? AND slug = ?", repoID, "big")
 	if page.BodyInline != nil {
 		t.Fatalf("large body must not be inlined")
 	}
@@ -391,7 +391,7 @@ func TestApplyChangeSet_RenamePage(t *testing.T) {
 	if err := gdb.First(&page, "page_id = ?", pageID).Error; err != nil {
 		t.Fatalf("read page: %v", err)
 	}
-	if page.Slug != "new-name" || page.SlugCIV1 != "new-name" {
+	if page.Slug != "new-name" {
 		t.Fatalf("rename did not update slug: %+v", page)
 	}
 	if page.HeadBlobSHA != originalSHA {
@@ -451,7 +451,7 @@ func TestApplyChangeSet_OutlinksRefreshed(t *testing.T) {
 	res, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
 		Changes: []Change{{Op: OpUpsert, Slug: "a",
-			Body: []byte("see [[B]] and [[C]]")}},
+			Body: []byte("see [[b]] and [[c]]")}},
 	})
 	if err != nil {
 		t.Fatalf("create a: %v", err)
@@ -459,11 +459,11 @@ func TestApplyChangeSet_OutlinksRefreshed(t *testing.T) {
 	pageA := res.Changes[0].PageID
 
 	var links []db.WikiPageLink
-	if err := gdb.Where("src_page_id = ?", pageA).Order("dst_slug_ci").
+	if err := gdb.Where("src_page_id = ?", pageA).Order("dst_slug").
 		Find(&links).Error; err != nil {
 		t.Fatalf("read links: %v", err)
 	}
-	if len(links) != 2 || links[0].DstSlugCI != "b" || links[1].DstSlugCI != "c" {
+	if len(links) != 2 || links[0].DstSlug != "b" || links[1].DstSlug != "c" {
 		t.Fatalf("links wrong: %+v", links)
 	}
 	if links[0].DstPageID != nil || links[1].DstPageID != nil {
@@ -480,7 +480,7 @@ func TestApplyChangeSet_OutlinksRefreshed(t *testing.T) {
 	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
 		Changes: []Change{{Op: OpUpsert, Slug: "a",
-			Body: []byte("see [[B]] only now")}},
+			Body: []byte("see [[b]] only now")}},
 	}); err != nil {
 		t.Fatalf("update a: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestApplyChangeSet_OutlinksRefreshed(t *testing.T) {
 		Find(&links).Error; err != nil {
 		t.Fatalf("read links 2: %v", err)
 	}
-	if len(links) != 1 || links[0].DstSlugCI != "b" {
+	if len(links) != 1 || links[0].DstSlug != "b" {
 		t.Fatalf("links after update wrong: %+v", links)
 	}
 	if links[0].DstPageID == nil {
@@ -567,7 +567,7 @@ func TestApplyChangeSet_PostCommitHook_ErrorSurfaces(t *testing.T) {
 	}
 	// Catalog state landed even though the hook errored.
 	var page db.WikiPage
-	if err := gdb.First(&page, "repository_id = ? AND slug_ci_v1 = ?", repoID, "home").Error; err != nil {
+	if err := gdb.First(&page, "repository_id = ? AND slug = ?", repoID, "home").Error; err != nil {
 		t.Fatalf("page should be committed despite hook failure: %v", err)
 	}
 }
@@ -615,7 +615,7 @@ func TestApplyChangeSet_OverrideCommitSHA(t *testing.T) {
 }
 
 // TestApplyChangeSet_RecreateAfterDelete locks the soft-delete + restore
-// model: the same canonical slug may be created again after a delete,
+// model: the same slug may be created again after a delete,
 // resulting in a single page_id whose revision chain records the full
 // create→…→delete→restore history.
 func TestApplyChangeSet_RecreateAfterDelete(t *testing.T) {
@@ -706,13 +706,13 @@ func TestApplyChangeSet_DeleteNullsInboundLinks(t *testing.T) {
 	}
 	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
-		Changes: []Change{{Op: OpUpsert, Slug: "a", Body: []byte("see [[B]]")}},
+		Changes: []Change{{Op: OpUpsert, Slug: "a", Body: []byte("see [[b]]")}},
 	}); err != nil {
 		t.Fatalf("create a: %v", err)
 	}
 
 	var pre db.WikiPageLink
-	if err := gdb.Where("dst_slug_ci = ?", "b").Take(&pre).Error; err != nil {
+	if err := gdb.Where("dst_slug = ?", "b").Take(&pre).Error; err != nil {
 		t.Fatalf("read link pre-delete: %v", err)
 	}
 	if pre.DstPageID == nil {
@@ -727,7 +727,7 @@ func TestApplyChangeSet_DeleteNullsInboundLinks(t *testing.T) {
 	}
 
 	var post db.WikiPageLink
-	if err := gdb.Where("dst_slug_ci = ?", "b").Take(&post).Error; err != nil {
+	if err := gdb.Where("dst_slug = ?", "b").Take(&post).Error; err != nil {
 		t.Fatalf("read link post-delete: %v", err)
 	}
 	if post.DstPageID != nil {
@@ -745,14 +745,14 @@ func TestApplyChangeSet_CreateResolvesPendingInboundLinks(t *testing.T) {
 
 	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
-		Changes: []Change{{Op: OpUpsert, Slug: "a", Body: []byte("see [[B]]")}},
+		Changes: []Change{{Op: OpUpsert, Slug: "a", Body: []byte("see [[b]]")}},
 	}); err != nil {
 		t.Fatalf("create a: %v", err)
 	}
 
 	// Confirm A's link is unresolved while B does not exist.
 	var unresolved db.WikiPageLink
-	if err := gdb.Where("dst_slug_ci = ?", "b").Take(&unresolved).Error; err != nil {
+	if err := gdb.Where("dst_slug = ?", "b").Take(&unresolved).Error; err != nil {
 		t.Fatalf("read unresolved link: %v", err)
 	}
 	if unresolved.DstPageID != nil {
@@ -768,7 +768,7 @@ func TestApplyChangeSet_CreateResolvesPendingInboundLinks(t *testing.T) {
 	}
 
 	var resolved db.WikiPageLink
-	if err := gdb.Where("dst_slug_ci = ?", "b").Take(&resolved).Error; err != nil {
+	if err := gdb.Where("dst_slug = ?", "b").Take(&resolved).Error; err != nil {
 		t.Fatalf("read resolved link: %v", err)
 	}
 	if resolved.DstPageID == nil || *resolved.DstPageID != bRes.Changes[0].PageID {
@@ -798,13 +798,13 @@ func TestApplyChangeSet_OutlinksDoNotResolveToSoftDeleted(t *testing.T) {
 	}
 	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
-		Changes: []Change{{Op: OpUpsert, Slug: "a", Body: []byte("see [[B]]")}},
+		Changes: []Change{{Op: OpUpsert, Slug: "a", Body: []byte("see [[b]]")}},
 	}); err != nil {
 		t.Fatalf("create a: %v", err)
 	}
 
 	var link db.WikiPageLink
-	if err := gdb.Where("dst_slug_ci = ?", "b").Take(&link).Error; err != nil {
+	if err := gdb.Where("dst_slug = ?", "b").Take(&link).Error; err != nil {
 		t.Fatalf("read link: %v", err)
 	}
 	if link.DstPageID != nil {
@@ -871,7 +871,7 @@ func TestApplyChangeSet_PrefixMoveAsBatch(t *testing.T) {
 	// Both renamed pages live at new slugs.
 	for _, slug := range []string{"bar/a", "bar/b"} {
 		var p db.WikiPage
-		if err := gdb.Where("repository_id = ? AND slug_ci_v1 = ?", repoID, slug).
+		if err := gdb.Where("repository_id = ? AND slug = ?", repoID, slug).
 			Take(&p).Error; err != nil {
 			t.Fatalf("missing renamed page %q: %v", slug, err)
 		}
@@ -1165,7 +1165,7 @@ func TestApplyChangeSet_BodyAtInlineBoundary(t *testing.T) {
 		t.Fatalf("body == MaxBodyInlineBytes must not materialize a CAS file")
 	}
 	var page db.WikiPage
-	if err := gdb.First(&page, "slug_ci_v1 = ?", "edge").Error; err != nil {
+	if err := gdb.First(&page, "slug = ?", "edge").Error; err != nil {
 		t.Fatalf("read page: %v", err)
 	}
 	if len(page.BodyInline) != MaxBodyInlineBytes {
@@ -1192,7 +1192,7 @@ func TestApplyChangeSet_BodyJustOverInlineBoundary(t *testing.T) {
 		t.Fatalf("body > MaxBodyInlineBytes must materialize a CAS file")
 	}
 	var page db.WikiPage
-	if err := gdb.First(&page, "slug_ci_v1 = ?", "over").Error; err != nil {
+	if err := gdb.First(&page, "slug = ?", "over").Error; err != nil {
 		t.Fatalf("read page: %v", err)
 	}
 	if page.BodyInline != nil {
@@ -1213,7 +1213,7 @@ func TestApplyChangeSet_EmptyBodyAllowed(t *testing.T) {
 		t.Fatalf("upsert empty body: %v", err)
 	}
 	var page db.WikiPage
-	if err := gdb.First(&page, "slug_ci_v1 = ?", "blank").Error; err != nil {
+	if err := gdb.First(&page, "slug = ?", "blank").Error; err != nil {
 		t.Fatalf("read page: %v", err)
 	}
 	if page.BodySize != 0 {
@@ -1260,7 +1260,7 @@ func TestApplyChangeSet_MixedOpsInOneChangeset(t *testing.T) {
 	for _, want := range []string{"a", "d", "renamed-c"} {
 		var n int64
 		gdb.Model(&db.WikiPage{}).
-			Where("repository_id = ? AND slug_ci_v1 = ? AND deleted_at IS NULL", repoID, want).
+			Where("repository_id = ? AND slug = ? AND deleted_at IS NULL", repoID, want).
 			Count(&n)
 		if n != 1 {
 			t.Fatalf("missing live page %q", want)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/embedding"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"gorm.io/driver/mysql"
@@ -31,6 +32,23 @@ func newWikiSearchDryRunMySQLDB(t *testing.T) *gorm.DB {
 	}
 	return gdb
 }
+
+type blockingWikiSearchEmbedder struct {
+	started chan string
+	release chan struct{}
+}
+
+func (e *blockingWikiSearchEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	e.started <- text
+	select {
+	case <-e.release:
+		return []float32{0.1, 0.2, 0.3}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (e *blockingWikiSearchEmbedder) Dimensions() int { return 3 }
 
 func TestWikiSearchLikeEscapeClauseByDialect(t *testing.T) {
 	tests := []struct {
@@ -113,15 +131,51 @@ func TestWikiSearchRankWindow(t *testing.T) {
 	}
 }
 
-func TestWikiSearchSemanticRankLimit(t *testing.T) {
-	if got := wikiSearchSemanticRankLimit(1050); got != wikiSearchMaxRankWindow {
-		t.Fatalf("wikiSearchSemanticRankLimit(1050) = %d, want %d", got, wikiSearchMaxRankWindow)
+func TestStartWikiSearchEmbeddingRunsAsyncAndTruncates(t *testing.T) {
+	embedder := &blockingWikiSearchEmbedder{
+		started: make(chan string, 1),
+		release: make(chan struct{}),
 	}
-	if got := wikiSearchSemanticRankLimit(80); got != 80 {
-		t.Fatalf("wikiSearchSemanticRankLimit(80) = %d, want 80", got)
+	svc := &Service{Embedder: embedder}
+	query := "semantic query" + strings.Repeat(" token", embedding.MaxInputTokens+512)
+
+	resultC := svc.startWikiSearchEmbedding(context.Background(), query)
+	if resultC == nil {
+		t.Fatal("startWikiSearchEmbedding returned nil for configured embedder")
 	}
-	if got := wikiSearchSemanticRankLimit(0); got != wikiSearchMinRankWindow {
-		t.Fatalf("wikiSearchSemanticRankLimit(0) = %d, want %d", got, wikiSearchMinRankWindow)
+
+	var embeddedText string
+	select {
+	case embeddedText = <-embedder.started:
+	case <-time.After(time.Second):
+		t.Fatal("embedding did not start asynchronously")
+	}
+	if tokens, err := embedding.CountInputTokens(embeddedText); err != nil {
+		t.Fatalf("count embedded tokens: %v", err)
+	} else if tokens > embedding.MaxInputTokens {
+		t.Fatalf("embedded query has %d tokens, want <= %d", tokens, embedding.MaxInputTokens)
+	}
+
+	select {
+	case <-resultC:
+		t.Fatal("embedding result completed before release")
+	default:
+	}
+	close(embedder.release)
+
+	select {
+	case result := <-resultC:
+		if result.err != nil {
+			t.Fatalf("embedding result err = %v", result.err)
+		}
+		if len(result.vec) != 3 {
+			t.Fatalf("embedding vector length = %d, want 3", len(result.vec))
+		}
+		if result.query != embeddedText {
+			t.Fatalf("result query = %q, want embedded text %q", result.query, embeddedText)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("embedding result did not complete after release")
 	}
 }
 
@@ -201,43 +255,91 @@ func TestCurrentWikiSearchDocumentsQuery_UsesTiDBCompatibleJoinShape(t *testing.
 	}
 }
 
-func TestWikiSearchCurrentFullTextQuery_IsolatesTiDBFTSSubqueries(t *testing.T) {
+func TestBuildWikiSearchCurrentCandidateIDSQL_DelegatesIntersectionAndFiltersToDB(t *testing.T) {
+	gdb := newWikiSearchDryRunMySQLDB(t)
+
+	query := buildWikiSearchCurrentCandidateIDSQL(gdb, 42, []string{"alpha", "beta"}, []wikiSearchRawSQL{
+		{
+			SQL:  "EXISTS (SELECT 1 FROM wiki_page_labels WHERE wiki_page_labels.repository_id = wiki_search_documents.repository_id AND wiki_page_labels.slug = wiki_search_documents.slug AND wiki_page_labels.label_id = ?)",
+			Args: []any{uint(7)},
+		},
+	}, 200)
+	sql := query.SQL
+
+	for _, want := range []string{
+		"SELECT wiki_search_documents.id FROM wiki_search_documents",
+		"JOIN wiki_pages ON wiki_pages.repository_id = wiki_search_documents.repository_id AND wiki_pages.slug = wiki_search_documents.slug",
+		"JOIN (SELECT wiki_search_documents.id FROM wiki_search_documents",
+		"FTS_MATCH_WORD('alpha', wiki_search_documents.title)",
+		"FTS_MATCH_WORD('alpha', wiki_search_documents.body)",
+		"FTS_MATCH_WORD('beta', wiki_search_documents.title)",
+		"FTS_MATCH_WORD('beta', wiki_search_documents.body)",
+		"wiki_search_documents.slug LIKE ? ESCAPE '\\\\'",
+		"JOIN wiki_page_labels ON wiki_page_labels.repository_id = wiki_search_documents.repository_id AND wiki_page_labels.slug = wiki_search_documents.slug",
+		"UNION",
+		"AS token_0 ON token_0.id = wiki_search_documents.id",
+		"AS token_1 ON token_1.id = wiki_search_documents.id",
+		"wiki_search_documents.repository_id = ? AND wiki_pages.deleted_at IS NULL AND wiki_search_documents.revision_sha = wiki_pages.head_blob_sha",
+		"EXISTS (SELECT 1 FROM wiki_page_labels",
+		"ORDER BY wiki_search_documents.updated_at desc, wiki_search_documents.slug asc",
+		"LIMIT ?",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected delegated current candidate SQL to contain %q, got %q", want, sql)
+		}
+	}
+	if strings.Contains(sql, "SELECT *") || strings.Contains(sql, "wiki_search_documents.embedding") || strings.Contains(sql, "wiki_search_documents.body,") {
+		t.Fatalf("expected candidate SQL to avoid hydrating large/vector columns, got %q", sql)
+	}
+	if strings.Contains(sql, " id IN ") || strings.Contains(sql, " id IN(") {
+		t.Fatalf("expected token intersection to use derived joins instead of IN filters, got %q", sql)
+	}
+	labelFilterIdx := strings.LastIndex(sql, "label_id = ?")
+	orderIdx := strings.Index(sql, "ORDER BY")
+	limitIdx := strings.Index(sql, "LIMIT ?")
+	if labelFilterIdx == -1 || orderIdx == -1 || limitIdx == -1 || labelFilterIdx > orderIdx || orderIdx > limitIdx {
+		t.Fatalf("expected label filters before ORDER BY/LIMIT, got %q", sql)
+	}
+	if got, want := len(query.Args), 17; got != want {
+		t.Fatalf("len(args) = %d, want %d (%#v)", got, want, query.Args)
+	}
+	if last := query.Args[len(query.Args)-1]; last != 200 {
+		t.Fatalf("last arg = %#v, want candidate limit 200", last)
+	}
+}
+
+func TestWikiSearchCurrentHydrationQuery_OmitsEmbedding(t *testing.T) {
 	gdb := newWikiSearchDryRunMySQLDB(t)
 	svc := &Service{}
 
 	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
 		svc.DB = tx
-		q := svc.currentWikiSearchDocumentsQuery(context.Background(), 42)
-		likeEscape := wikiSearchLikeEscapeClause(tx)
-		for _, token := range wikiSearchTokens("alpha beta") {
-			like := "%" + escapeWikiSearchLike(token) + "%"
-			q = q.Where(
-				"(wiki_search_documents.id IN (?) OR wiki_search_documents.id IN (?) OR wiki_search_documents.slug LIKE ?"+likeEscape+" OR "+wikiSearchLabelTokenExistsSQL(likeEscape)+")",
-				wikiSearchFullTextSubquery(tx, "title", token),
-				wikiSearchFullTextSubquery(tx, "body", token),
-				like,
-				like,
-				like,
-			)
+		q, noResults, err := svc.currentWikiSearchDocumentsByIDQuery(context.Background(), 42, []uint{7, 8}, WikiLabelFilters{})
+		if err != nil {
+			t.Fatalf("currentWikiSearchDocumentsByIDQuery: %v", err)
+		}
+		if noResults {
+			t.Fatal("currentWikiSearchDocumentsByIDQuery returned noResults")
 		}
 		var docs []db.WikiSearchDocument
-		return q.Order("wiki_search_documents.updated_at desc").Find(&docs)
+		return q.Order("wiki_search_documents.updated_at desc, wiki_search_documents.slug asc").
+			Limit(200).
+			Find(&docs)
 	})
 
-	if strings.Count(sql, "FTS_MATCH_WORD") != 4 {
-		t.Fatalf("expected two FTS subqueries per token, got %q", sql)
-	}
 	for _, want := range []string{
-		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('alpha', wiki_search_documents.title)",
-		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('alpha', wiki_search_documents.body)",
-		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('beta', wiki_search_documents.title)",
-		"SELECT wiki_search_documents.id FROM `wiki_search_documents` WHERE FTS_MATCH_WORD('beta', wiki_search_documents.body)",
-		"wiki_search_documents.slug LIKE '%alpha%' ESCAPE '\\\\'",
-		"wiki_search_documents.slug LIKE '%beta%' ESCAPE '\\\\'",
+		"SELECT wiki_search_documents.id,wiki_search_documents.repository_id,wiki_search_documents.slug,wiki_search_documents.title,wiki_search_documents.body,wiki_search_documents.revision_sha,wiki_search_documents.label_digest,wiki_search_documents.created_at,wiki_search_documents.updated_at",
+		"JOIN wiki_pages ON wiki_pages.repository_id = wiki_search_documents.repository_id AND wiki_pages.slug = wiki_search_documents.slug",
+		"wiki_search_documents.id IN (7,8)",
+		"ORDER BY wiki_search_documents.updated_at desc, wiki_search_documents.slug asc",
+		"LIMIT 200",
 	} {
 		if !strings.Contains(sql, want) {
-			t.Fatalf("expected current full-text SQL to contain %q, got %q", want, sql)
+			t.Fatalf("expected hydration SQL to contain %q, got %q", want, sql)
 		}
+	}
+	if strings.Contains(sql, "`embedding`") || strings.Contains(sql, "SELECT *") {
+		t.Fatalf("expected hydration query to avoid embedding and SELECT *, got %q", sql)
 	}
 }
 

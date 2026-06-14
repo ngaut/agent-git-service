@@ -116,7 +116,7 @@ func TestMigrateWiki_ReplaysSinglePage(t *testing.T) {
 
 	rep, _ := svc.GetRepo(ctx, repoFullName)
 	var page db.WikiPage
-	if err := svc.DB.First(&page, "repository_id = ? AND slug_ci_v1 = ?", rep.ID, "home").Error; err != nil {
+	if err := svc.DB.First(&page, "repository_id = ? AND slug = ?", rep.ID, "home").Error; err != nil {
 		t.Fatalf("catalog page not found: %v", err)
 	}
 	if page.Slug != "home" || page.BodySize == 0 {
@@ -179,7 +179,7 @@ func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
 	// Soft-deleted "home" page is still in catalog with revisions
 	// recording create/update/delete.
 	var homePage db.WikiPage
-	if err := svc.DB.First(&homePage, "repository_id = ? AND slug_ci_v1 = ?", rep.ID, "home").Error; err != nil {
+	if err := svc.DB.First(&homePage, "repository_id = ? AND slug = ?", rep.ID, "home").Error; err != nil {
 		t.Fatalf("read home: %v", err)
 	}
 	if homePage.DeletedAt == nil {
@@ -824,41 +824,58 @@ func TestMigrateWiki_PreservesGitCommitSHAs(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_PreservesLegacyReadableSlug(t *testing.T) {
+func TestMigrateWiki_RejectsIncompatibleSlugPath(t *testing.T) {
 	svc, cleanup := setupWikiMigrationTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
 
-	// Push a mixed-case slug directly via the gitstore, bypassing the
-	// current write validator. Migration must preserve legacy-readable
-	// slugs because pre-cutover reads already resolve them.
 	if err := svc.Git.Init(ctx, repoFullName+".wiki", "master", false); err != nil {
 		t.Fatalf("init wiki: %v", err)
 	}
 	if _, err := svc.Git.WriteFile(ctx, repoFullName+".wiki", "master",
-		"Mixed_Case.md", "legacy push", []byte("# Legacy\n")); err != nil {
+		"Mixed_Case.md", "invalid push", []byte("# Invalid\n")); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 
-	stats, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	_, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	if err == nil {
+		t.Fatal("MigrateWiki succeeded, want incompatible slug error")
+	}
+	if !strings.Contains(err.Error(), "cannot be represented by the catalog") {
+		t.Fatalf("MigrateWiki error = %v, want incompatible slug message", err)
+	}
+}
+
+func TestMigrateWiki_SkipIncompatibleSlugPathDropsPage(t *testing.T) {
+	svc, cleanup := setupWikiMigrationTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+
+	if err := svc.Git.Init(ctx, repoFullName+".wiki", "master", false); err != nil {
+		t.Fatalf("init wiki: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, repoFullName+".wiki", "master",
+		"Mixed_Case.md", "invalid push", []byte("# Invalid\n")); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	stats, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{SkipIncompatibleSlugs: true})
 	if err != nil {
 		t.Fatalf("MigrateWiki: %v", err)
 	}
-	if stats.Pages != 1 || stats.NewCommits != 1 {
-		t.Fatalf("stats %+v", stats)
+	if stats.NewCommits != 1 || stats.Pages != 0 {
+		t.Fatalf("stats %+v, want one skipped commit and zero pages", stats)
 	}
 
 	rep, _ := svc.GetRepo(ctx, repoFullName)
-	var rows []db.WikiPage
-	if err := svc.DB.Where("repository_id = ?", rep.ID).Find(&rows).Error; err != nil {
-		t.Fatalf("list rows: %v", err)
+	var count int64
+	if err := svc.DB.Model(&db.WikiPage{}).Where("repository_id = ?", rep.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count pages: %v", err)
 	}
-	if len(rows) != 1 {
-		t.Fatalf("expected one row in catalog, got %+v", rows)
-	}
-	if rows[0].Slug != "Mixed_Case" || rows[0].SlugCIV1 != "mixed-case" {
-		t.Fatalf("row %+v, want preserved readable slug with canonical lookup key", rows[0])
+	if count != 0 {
+		t.Fatalf("catalog pages = %d, want 0", count)
 	}
 }
 

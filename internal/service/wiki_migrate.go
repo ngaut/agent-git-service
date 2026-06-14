@@ -26,10 +26,8 @@ import (
 
 // WikiMigrationOptions tunes a migration run.
 type WikiMigrationOptions struct {
-	// SkipIncompatibleSlugs, when true, drops pages whose slug still
-	// cannot be represented by the catalog after legacy-readable
-	// parsing. This is a last-resort escape hatch for operator-owned
-	// content cleanup; ordinary legacy readable slugs must migrate.
+	// SkipIncompatibleSlugs, when true, drops pages whose slug cannot
+	// be represented by the catalog's single slug grammar.
 	SkipIncompatibleSlugs bool
 }
 
@@ -586,16 +584,11 @@ func (s *Service) resolveAuthorForMigrationCached(ctx context.Context, commit gi
 	return out
 }
 
-// diffToChanges turns the file-set delta between parent and commit
-// into wikicatalog.Change rows. Paths that don't map to a wiki slug
-// (dotfiles, non-.md files) are skipped without error — the legacy
-// wiki accepted them silently and never produced page rows for them.
-//
-// A path whose slug cannot be represented by the catalog after the
-// legacy readable-slug parse produces an error by default. Historical
-// mixed-case and underscore-containing slugs are still valid input:
-// migration must preserve the pre-cutover read contract, not re-run
-// the current write validator over history.
+// diffToChanges turns the file-set delta between parent and commit into
+// wikicatalog.Change rows. Paths that are not wiki markdown paths (dotfiles,
+// non-.md files) are skipped without error. A markdown path whose slug cannot
+// be represented by the catalog's single slug grammar produces an error by
+// default.
 func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, curPaths []string, curBlobs, parBlobs map[string]string, opts WikiMigrationOptions) ([]wikicatalog.Change, error) {
 	current := make(map[string]struct{}, len(curPaths))
 	for _, p := range curPaths {
@@ -604,11 +597,11 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 	var changes []wikicatalog.Change
 
 	checkCompatible := func(slug, path string) (skip bool, err error) {
-		if _, err := wikicatalog.CanonicalV1(slug); err == nil {
+		if err := wikicatalog.ValidateWritable(slug); err == nil {
 			return false, nil
 		}
 		if opts.SkipIncompatibleSlugs {
-			slog.WarnContext(ctx, "wiki migration: skipping slug incompatible with catalog canonicalization",
+			slog.WarnContext(ctx, "wiki migration: skipping slug incompatible with catalog slug grammar",
 				"sha", commitSHA, "path", path, "slug", slug)
 			return true, nil
 		}
@@ -618,8 +611,8 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 
 	// Upserts: added or modified pages.
 	for _, p := range curPaths {
-		slug := wikiPathToSlug(p)
-		if slug == "" {
+		slug, ok := wikiMigrationPathToSlug(p)
+		if !ok {
 			continue
 		}
 		if skip, err := checkCompatible(slug, p); err != nil {
@@ -646,8 +639,8 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 		if _, ok := current[p]; ok {
 			continue
 		}
-		slug := wikiPathToSlug(p)
-		if slug == "" {
+		slug, ok := wikiMigrationPathToSlug(p)
+		if !ok {
 			continue
 		}
 		if skip, err := checkCompatible(slug, p); err != nil {
@@ -661,8 +654,8 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 		})
 	}
 
-	// Stable ordering — the catalog rejects duplicate canonical slots
-	// within a changeset, and stable order makes failures reproducible.
+	// Stable ordering — the catalog rejects duplicate slug slots within
+	// a changeset, and stable order makes failures reproducible.
 	sort.Slice(changes, func(i, j int) bool {
 		if changes[i].Slug != changes[j].Slug {
 			return changes[i].Slug < changes[j].Slug
@@ -670,6 +663,14 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 		return changes[i].Op < changes[j].Op
 	})
 	return changes, nil
+}
+
+func wikiMigrationPathToSlug(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || strings.HasPrefix(path, ".") || !strings.HasSuffix(path, wikiPageExt) {
+		return "", false
+	}
+	return strings.TrimSuffix(path, wikiPageExt), true
 }
 
 func (s *Service) resolveAuthorForMigration(ctx context.Context, commit gitstore.SearchCommitInfo) *uint {

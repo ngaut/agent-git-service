@@ -97,14 +97,14 @@ func SlugToPath(slug string) (string, error) {
 	return slug + PageExtension, nil
 }
 
-// PathToSlug returns the readable wiki slug for a canonical git path.
+// PathToSlug returns the wiki slug for a canonical git path.
 func PathToSlug(path string) (string, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" || strings.HasPrefix(path, ".") || !strings.HasSuffix(path, PageExtension) {
 		return "", false
 	}
 	slug := strings.TrimSuffix(path, PageExtension)
-	if err := wikicatalog.ValidateReadable(slug); err != nil {
+	if err := wikicatalog.ValidateWritable(slug); err != nil {
 		return "", false
 	}
 	return slug, true

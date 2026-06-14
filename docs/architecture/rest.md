@@ -166,7 +166,7 @@ Handlers follow a consistent pattern:
 
 Wiki path-slug hierarchy rules:
 
-- page slugs are lowercase canonical paths such as `guides/setup`
+- page slugs use the single writable path grammar, for example `guides/setup`
 - wiki page routes treat `{slug}` as one percent-encoded path parameter; clients must request nested slugs such as `guides/setup` as `guides%2Fsetup` when the slug is followed by a subresource, for example `/wiki/pages/guides%2Fsetup/history`
 - `GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}` accepts an optional `ref` query parameter to read the page body and blob SHA at a full commit SHA from that page's history; omitted `ref` still reads HEAD
 - `GET /api/v3/repos/{owner}/{repo}/wiki/tree` accepts `path` and optional `ref`; omitted `ref` returns the current page-resolvable directory view used by the console sidebar, while explicit `ref` returns the Git tree at that ref and carries the same `ref` through page URLs
@@ -182,10 +182,9 @@ Wiki path-slug hierarchy rules:
 - wiki page get/list/search responses include `labels`, shaped with the existing repository label JSON contract
 - wiki write endpoints reject `ref` because historical revision edits are out of scope for the current REST contract
 - only the exact single-segment routes `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
-- read/list/backlink operations also surface legacy on-disk wiki filenames that still contain uppercase letters, underscores, or dots
 - catalog-backed wiki read responses set `X-Wiki-Migration-In-Progress: true` while a stale repository is being replayed into the catalog in the background
 - live tree, search, and backlink responses must not emit page URLs that the current page endpoint would 404; Git, V2, and search-index projections are fallback/ref surfaces for this purpose, not live-link authority while catalog current rows exist
-- wiki search indexing is asynchronous after successful put/move/delete/label writes; the live search path uses current `wiki_search_documents` rows joined to `wiki_pages` (`deleted_at IS NULL` and matching head blob SHA) as the primary recall source, then hydrates only surviving candidates with current page metadata and labels; catalog body scans are reserved for missing/stale small-index fallback or missing search-index tables, so large repositories do not scan every wiki page body on ordinary misses; when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
+- wiki search indexing is asynchronous after successful put/move/delete/label writes; the live TiDB full-text path first plucks bounded candidate IDs from `wiki_search_documents`, then hydrates only the narrowed current rows joined to `wiki_pages` by `slug` (`deleted_at IS NULL` and matching head blob SHA), deliberately omitting vector embeddings from lexical hydration; catalog body scans are reserved for missing/stale small-index fallback or missing search-index tables, so large repositories do not scan every wiki page body on ordinary misses; when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
 
 ### Wiki Page History
 

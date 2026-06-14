@@ -97,11 +97,10 @@ func (c *Catalog) db(ctx context.Context) *gorm.DB {
 	return c.DB.WithContext(ctx)
 }
 
-// changesetPlan is the canonical form of a ChangeSetRequest after
-// validation. Slugs are normalized via CanonicalV1, duplicate slots
-// have been rejected, and per-change canonical source and destination
-// keys are precomputed so SQL queries and conflict checks can index
-// into one structure.
+// changesetPlan is the validated form of a ChangeSetRequest. Slug
+// grammar errors and duplicate source/destination slots have already
+// been rejected so SQL queries and conflict checks can use the slug
+// strings directly.
 type changesetPlan struct {
 	repoID       uint
 	authorID     *uint
@@ -110,10 +109,10 @@ type changesetPlan struct {
 	committedAt  time.Time
 	parentExpect *uint64
 	changes      []plannedChange
-	// touchedCI is the union of every canonical slug the changeset
+	// touchedSlugs is the union of every slug the changeset
 	// references (sources and rename destinations). The pre-read step
 	// loads exactly these pages in one query.
-	touchedCI []string
+	touchedSlugs []string
 	// overrideCommitSHA, when non-empty, is used as the changeset's
 	// synth_commit_sha instead of computing a fresh one. Migration
 	// sets this to the historical git commit SHA so REST clients see
@@ -122,13 +121,11 @@ type changesetPlan struct {
 }
 
 type plannedChange struct {
-	op        Op
-	srcSlug   string // readable form supplied by the caller
-	srcSlugCI string // canonical form
+	op      Op
+	srcSlug string
 
 	// rename only
-	dstSlug   string
-	dstSlugCI string
+	dstSlug string
 
 	// upsert only
 	body []byte
@@ -185,34 +182,25 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 		overrideCommitSHA: overrideSHA,
 	}
 
-	// Validate per-change; deduplicate by canonical slot.
+	// Validate per-change; deduplicate by slug slot.
 	seenSrc := make(map[string]struct{}, len(req.Changes))
 	seenDst := make(map[string]struct{}, len(req.Changes))
 	touched := make(map[string]struct{}, len(req.Changes)*2)
-	validateInputSlug := ValidateWritable
-	if req.Source == SourceMigration {
-		validateInputSlug = ValidateReadable
-	}
 
 	for i, ch := range req.Changes {
-		if err := validateInputSlug(ch.Slug); err != nil {
+		if err := ValidateWritable(ch.Slug); err != nil {
 			return changesetPlan{}, fmt.Errorf("change[%d].Slug: %w", i, err)
 		}
-		srcCI, err := CanonicalV1(ch.Slug)
-		if err != nil {
-			return changesetPlan{}, fmt.Errorf("change[%d].Slug: %w", i, err)
+		if _, dup := seenSrc[ch.Slug]; dup {
+			return changesetPlan{}, fmt.Errorf("%w: %q", ErrDuplicateInChangeset, ch.Slug)
 		}
-		if _, dup := seenSrc[srcCI]; dup {
-			return changesetPlan{}, fmt.Errorf("%w: %q", ErrDuplicateInChangeset, srcCI)
-		}
-		seenSrc[srcCI] = struct{}{}
-		touched[srcCI] = struct{}{}
+		seenSrc[ch.Slug] = struct{}{}
+		touched[ch.Slug] = struct{}{}
 
 		planned := plannedChange{
-			op:        ch.Op,
-			srcSlug:   ch.Slug,
-			srcSlugCI: srcCI,
-			ifMatch:   strings.ToLower(strings.TrimSpace(ch.IfMatch)),
+			op:      ch.Op,
+			srcSlug: ch.Slug,
+			ifMatch: strings.ToLower(strings.TrimSpace(ch.IfMatch)),
 		}
 
 		switch ch.Op {
@@ -227,10 +215,10 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 			}
 			planned.body = ch.Body
 			// Upsert's effective destination is its own slug.
-			if _, dup := seenDst[srcCI]; dup {
-				return changesetPlan{}, fmt.Errorf("%w (destination): %q", ErrDuplicateInChangeset, srcCI)
+			if _, dup := seenDst[ch.Slug]; dup {
+				return changesetPlan{}, fmt.Errorf("%w (destination): %q", ErrDuplicateInChangeset, ch.Slug)
 			}
-			seenDst[srcCI] = struct{}{}
+			seenDst[ch.Slug] = struct{}{}
 
 		case OpDelete:
 			if ch.NewSlug != "" {
@@ -245,23 +233,18 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 			// atomically updates the page body alongside the slug
 			// move (documented on Change.Body). When empty, the
 			// existing body is carried forward.
-			if err := validateInputSlug(ch.NewSlug); err != nil {
+			if err := ValidateWritable(ch.NewSlug); err != nil {
 				return changesetPlan{}, fmt.Errorf("change[%d].NewSlug: %w", i, err)
 			}
-			dstCI, err := CanonicalV1(ch.NewSlug)
-			if err != nil {
-				return changesetPlan{}, fmt.Errorf("change[%d].NewSlug: %w", i, err)
+			if ch.NewSlug == ch.Slug {
+				return changesetPlan{}, fmt.Errorf("change[%d]: rename source and destination are the same slug %q", i, ch.NewSlug)
 			}
-			if dstCI == srcCI {
-				return changesetPlan{}, fmt.Errorf("change[%d]: rename source and destination canonicalize to the same slug %q", i, dstCI)
+			if _, dup := seenDst[ch.NewSlug]; dup {
+				return changesetPlan{}, fmt.Errorf("%w (destination): %q", ErrDuplicateInChangeset, ch.NewSlug)
 			}
-			if _, dup := seenDst[dstCI]; dup {
-				return changesetPlan{}, fmt.Errorf("%w (destination): %q", ErrDuplicateInChangeset, dstCI)
-			}
-			seenDst[dstCI] = struct{}{}
-			touched[dstCI] = struct{}{}
+			seenDst[ch.NewSlug] = struct{}{}
+			touched[ch.NewSlug] = struct{}{}
 			planned.dstSlug = ch.NewSlug
-			planned.dstSlugCI = dstCI
 			// Forward the optional body bytes so applyRename can pick
 			// them up. Empty body means "carry the existing blob".
 			planned.body = ch.Body
@@ -273,17 +256,17 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 		plan.changes = append(plan.changes, planned)
 	}
 
-	plan.touchedCI = make([]string, 0, len(touched))
+	plan.touchedSlugs = make([]string, 0, len(touched))
 	for slug := range touched {
-		plan.touchedCI = append(plan.touchedCI, slug)
+		plan.touchedSlugs = append(plan.touchedSlugs, slug)
 	}
-	sort.Strings(plan.touchedCI)
+	sort.Strings(plan.touchedSlugs)
 	return plan, nil
 }
 
 // computeSynthCommitSHA produces a deterministic 40-char hex SHA-1
 // for a new changeset. The hash covers the parent identity, the
-// committer, the wall clock, the message, and the (canonical, sorted)
+// committer, the wall clock, the message, and the sorted
 // content of every change, so two equivalent changesets produce the
 // same SHA — important for the migration replay path which may retry
 // after partial progress.
@@ -292,7 +275,7 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 // referenced by GetWikiPage?ref=<sha> and surfaced on history rows.
 // It is not a real git commit object hash. The future git façade may
 // override it for clones that need git-format identity.
-func computeSynthCommitSHA(repoID uint, parentID *uint64, committedAt time.Time, message string, plan []plannedChange, blobByCI map[string]string) string {
+func computeSynthCommitSHA(repoID uint, parentID *uint64, committedAt time.Time, message string, plan []plannedChange, blobBySlug map[string]string) string {
 	var b strings.Builder
 	b.Grow(256 + 128*len(plan))
 	b.WriteString("wiki-changeset\x00")
@@ -307,45 +290,45 @@ func computeSynthCommitSHA(repoID uint, parentID *uint64, committedAt time.Time,
 	b.WriteString(message)
 	b.WriteByte(0)
 
-	// Sort changes by canonical source slug for stability.
+	// Sort changes by source slug for stability.
 	sorted := make([]plannedChange, len(plan))
 	copy(sorted, plan)
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].srcSlugCI < sorted[j].srcSlugCI
+		return sorted[i].srcSlug < sorted[j].srcSlug
 	})
 	for _, ch := range sorted {
 		b.WriteString(ch.op.String())
 		b.WriteByte(0)
-		b.WriteString(ch.srcSlugCI)
+		b.WriteString(ch.srcSlug)
 		b.WriteByte(0)
-		b.WriteString(ch.dstSlugCI)
+		b.WriteString(ch.dstSlug)
 		b.WriteByte(0)
-		b.WriteString(blobByCI[ch.srcSlugCI])
+		b.WriteString(blobBySlug[ch.srcSlug])
 		b.WriteByte(0)
 	}
 	sum := sha1.Sum([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
 
-// splitParentLeaf returns (parent_dir, leaf_name) for a canonical
-// slug. Parent dirs use the same slash-joined form as the slug.
-func splitParentLeaf(slugCI string) (parent, leaf string) {
-	idx := strings.LastIndex(slugCI, "/")
+// splitParentLeaf returns (parent_dir, leaf_name) for a slug. Parent
+// dirs use the same slash-joined form as the slug.
+func splitParentLeaf(slug string) (parent, leaf string) {
+	idx := strings.LastIndex(slug, "/")
 	if idx < 0 {
-		return "", slugCI
+		return "", slug
 	}
-	return slugCI[:idx], slugCI[idx+1:]
+	return slug[:idx], slug[idx+1:]
 }
 
 // parentChain returns the list of intermediate directories that must
-// exist for slugCI's leaf to live in. For "a/b/c", chain = ["a", "a/b"];
+// exist for slug's leaf to live in. For "a/b/c", chain = ["a", "a/b"];
 // the leaf row at parent_dir="a/b", child_name="c" is the caller's
 // concern.
-func parentChain(slugCI string) []string {
-	if slugCI == "" {
+func parentChain(slug string) []string {
+	if slug == "" {
 		return nil
 	}
-	parts := strings.Split(slugCI, "/")
+	parts := strings.Split(slug, "/")
 	if len(parts) <= 1 {
 		return nil
 	}

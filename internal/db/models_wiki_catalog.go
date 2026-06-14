@@ -5,9 +5,8 @@ import "time"
 // WikiPage is the catalog row for the current state of one wiki page.
 // See docs/design/wiki-storage-rearchitecture.md §6.1.
 //
-// PageID is the stable identity (preserved across rename); SlugCIV1 is
-// the canonical lookup key produced by wikicatalog.CanonicalV1; Slug
-// preserves the readable form returned to clients. HeadBlobSHA backs
+// PageID is the stable identity (preserved across rename). Slug is the
+// single lookup and display slug returned to clients. HeadBlobSHA backs
 // the REST If-Match / ETag contract — it is the git SHA-1 hash of the
 // page body (hex-encoded), matching what the legacy code returned.
 //
@@ -21,10 +20,9 @@ import "time"
 // is the historical ?ref=<sha> path.
 type WikiPage struct {
 	PageID          uint64     `gorm:"primaryKey;autoIncrement"`
-	RepositoryID    uint       `gorm:"not null;uniqueIndex:idx_wiki_pages_repo_slug_ci,priority:1;index:idx_wiki_pages_repo_updated,priority:1;index:idx_wiki_pages_repo_prefix,priority:1"`
+	RepositoryID    uint       `gorm:"not null;uniqueIndex:idx_wiki_pages_repo_slug,priority:1;index:idx_wiki_pages_repo_updated,priority:1;index:idx_wiki_pages_repo_prefix,priority:1"`
 	Repository      Repository `gorm:"foreignKey:RepositoryID"`
-	Slug            string     `gorm:"type:varbinary(1024);not null"`
-	SlugCIV1        string     `gorm:"column:slug_ci_v1;type:varbinary(384);not null;uniqueIndex:idx_wiki_pages_repo_slug_ci,priority:2;index:idx_wiki_pages_repo_prefix,priority:2"`
+	Slug            string     `gorm:"type:varbinary(255);not null;uniqueIndex:idx_wiki_pages_repo_slug,priority:2;index:idx_wiki_pages_repo_prefix,priority:2"`
 	Title           string     `gorm:"type:varbinary(1024)"`
 	HeadBlobSHA     string     `gorm:"type:char(40);not null"`
 	BodySize        int        `gorm:"not null"`
@@ -118,9 +116,9 @@ func (WikiDirIndex) TableName() string { return "wiki_dir_index" }
 // either a resolved page_id (intra-wiki link) or a still-textual slug
 // (dangling / pending). See §6.5.
 type WikiPageLink struct {
-	RepositoryID uint    `gorm:"not null;index:idx_wiki_links_dst_resolved,priority:1;index:idx_wiki_links_dst_string,priority:1"`
+	RepositoryID uint    `gorm:"not null;index:idx_wiki_links_dst_resolved,priority:1;index:idx_wiki_links_repo_dst_slug,priority:1"`
 	SrcPageID    uint64  `gorm:"primaryKey;autoIncrement:false"`
-	DstSlugCI    string  `gorm:"primaryKey;type:varbinary(384)"`
+	DstSlug      string  `gorm:"primaryKey;type:varbinary(255);column:dst_slug;index:idx_wiki_links_repo_dst_slug,priority:2"`
 	DstPageID    *uint64 `gorm:"index:idx_wiki_links_dst_resolved,priority:2"`
 }
 
