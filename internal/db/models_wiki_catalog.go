@@ -22,7 +22,7 @@ type WikiPage struct {
 	PageID          uint64     `gorm:"primaryKey;autoIncrement"`
 	RepositoryID    uint       `gorm:"not null;uniqueIndex:idx_wiki_pages_repo_slug,priority:1;index:idx_wiki_pages_repo_updated,priority:1;index:idx_wiki_pages_repo_prefix,priority:1"`
 	Repository      Repository `gorm:"foreignKey:RepositoryID"`
-	Slug            string     `gorm:"type:varbinary(255);not null;uniqueIndex:idx_wiki_pages_repo_slug,priority:2;index:idx_wiki_pages_repo_prefix,priority:2"`
+	Slug            string     `gorm:"type:varbinary(1024);not null;uniqueIndex:idx_wiki_pages_repo_slug,priority:2;index:idx_wiki_pages_repo_prefix,priority:2"`
 	Title           string     `gorm:"type:varbinary(1024)"`
 	HeadBlobSHA     string     `gorm:"type:char(40);not null"`
 	BodySize        int        `gorm:"not null"`
@@ -118,7 +118,7 @@ func (WikiDirIndex) TableName() string { return "wiki_dir_index" }
 type WikiPageLink struct {
 	RepositoryID uint    `gorm:"not null;index:idx_wiki_links_dst_resolved,priority:1;index:idx_wiki_links_repo_dst_slug,priority:1"`
 	SrcPageID    uint64  `gorm:"primaryKey;autoIncrement:false"`
-	DstSlug      string  `gorm:"primaryKey;type:varbinary(255);column:dst_slug;index:idx_wiki_links_repo_dst_slug,priority:2"`
+	DstSlug      string  `gorm:"primaryKey;type:varbinary(384);column:dst_slug;index:idx_wiki_links_repo_dst_slug,priority:2"`
 	DstPageID    *uint64 `gorm:"index:idx_wiki_links_dst_resolved,priority:2"`
 }
 
