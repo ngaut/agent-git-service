@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	srvmiddleware "github.com/ngaut/agent-git-service/internal/middleware"
 	"github.com/ngaut/agent-git-service/internal/rest/respond"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/service"
@@ -479,18 +480,40 @@ func (d *Deps) BatchGetWikiPages(w http.ResponseWriter, r *http.Request) {
 // GetWikiCatalog handles GET /api/ext/v1/repos/{owner}/{repo}/wiki/catalog.
 func (d *Deps) GetWikiCatalog(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
+	semanticETag := ""
+	if srvmiddleware.UsesWikiNavigationETag(r) {
+		version, err := d.Svc.WikiNavigationVersion(r.Context(), full, r.URL.Query().Get("path"))
+		if err != nil {
+			respond.ServiceErrorRequest(r, w, err)
+			return
+		}
+		semanticETag = srvmiddleware.BuildSemanticETag(r, "wiki-catalog-tree-v1", version+"\x00"+transform.HTMLBase()+"\x00"+transform.ExtensionAPIBase())
+		if srvmiddleware.WriteSemanticNotModified(w, r, semanticETag) {
+			return
+		}
+	}
 	include := parseIncludeSet(r, []string{"tree", "pages", "labels"})
 	path := strings.Trim(strings.TrimSpace(r.URL.Query().Get("path")), "/")
 	recursive := strings.TrimSpace(r.URL.Query().Get("recursive")) != "false"
-	pages, err := d.Svc.ListWikiPages(r.Context(), full, service.ListWikiPagesOptions{
+	opts := service.ListWikiPagesOptions{
 		Path:          path,
 		Recursive:     recursive,
 		Labels:        parseCSV(r.URL.Query().Get("labels")),
 		ExcludeLabels: parseCSV(r.URL.Query().Get("exclude_labels")),
-	})
-	if err != nil {
-		respond.ServiceErrorRequest(r, w, err)
-		return
+	}
+	hasLabelFilters := len(opts.Labels) > 0 || len(opts.ExcludeLabels) > 0
+	needPages := include["pages"] || include["labels"]
+	var pages []service.WikiPageSummary
+	pagesCanBuildTree := false
+	totalCount := 0
+	if needPages {
+		var err error
+		pages, pagesCanBuildTree, err = d.Svc.ListWikiPagesForCatalog(r.Context(), full, opts)
+		if err != nil {
+			respond.ServiceErrorRequest(r, w, err)
+			return
+		}
+		totalCount = len(pages)
 	}
 	out := map[string]any{}
 	if include["pages"] {
@@ -501,12 +524,25 @@ func (d *Deps) GetWikiCatalog(w http.ResponseWriter, r *http.Request) {
 		out["pages"] = items
 	}
 	if include["tree"] {
-		tree, err := d.Svc.ListWikiTreeAtRef(r.Context(), full, path, "")
-		if err != nil {
-			respond.ServiceErrorRequest(r, w, err)
-			return
+		var tree []service.WikiTreeEntry
+		if needPages && pagesCanBuildTree && recursive && !hasLabelFilters {
+			tree = service.WikiTreeFromPageSummaries(pages, path)
+		} else if !needPages && recursive && !hasLabelFilters {
+			var err error
+			tree, totalCount, err = d.Svc.ListWikiTreeWithPageCount(r.Context(), full, path)
+			if err != nil {
+				respond.ServiceErrorRequest(r, w, err)
+				return
+			}
+		} else {
+			var err error
+			tree, err = d.Svc.ListWikiTreeAtRef(r.Context(), full, path, "")
+			if err != nil {
+				respond.ServiceErrorRequest(r, w, err)
+				return
+			}
 		}
-		items := make([]any, 0, len(tree))
+		items := make([]wikiCatalogTreeEntry, 0, len(tree))
 		for _, entry := range tree {
 			items = append(items, wikiTreeEntryJSON(full, entry))
 		}
@@ -516,7 +552,18 @@ func (d *Deps) GetWikiCatalog(w http.ResponseWriter, r *http.Request) {
 		labelNames := collectWikiCatalogLabels(pages)
 		out["labels"] = labelNames
 	}
-	out["total_count"] = len(pages)
+	if !needPages && (hasLabelFilters || !include["tree"] || !recursive) {
+		_, total, err := d.Svc.ListWikiPagesPaginated(r.Context(), full, opts, 0, 1)
+		if err != nil {
+			respond.ServiceErrorRequest(r, w, err)
+			return
+		}
+		totalCount = total
+	}
+	out["total_count"] = totalCount
+	if semanticETag != "" {
+		srvmiddleware.SetSemanticETag(w, semanticETag)
+	}
 	respond.JSON(w, http.StatusOK, out)
 }
 
@@ -767,21 +814,34 @@ func orgMemberSummaryJSON(member service.OrganizationMembershipView) map[string]
 	return row
 }
 
-func wikiTreeEntryJSON(repoFullName string, entry service.WikiTreeEntry) map[string]any {
-	out := map[string]any{
-		"path":  entry.Path,
-		"name":  entry.Name,
-		"type":  entry.Kind,
-		"kind":  entry.Kind,
-		"sha":   entry.SHA,
-		"size":  entry.Size,
-		"title": entry.Title,
+type wikiCatalogTreeEntry struct {
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Kind    string `json:"kind"`
+	SHA     string `json:"sha"`
+	Size    int64  `json:"size"`
+	Title   string `json:"title"`
+	Slug    string `json:"slug,omitempty"`
+	HTMLURL string `json:"html_url,omitempty"`
+	URL     string `json:"url,omitempty"`
+}
+
+func wikiTreeEntryJSON(repoFullName string, entry service.WikiTreeEntry) wikiCatalogTreeEntry {
+	out := wikiCatalogTreeEntry{
+		Path:  entry.Path,
+		Name:  entry.Name,
+		Type:  entry.Kind,
+		Kind:  entry.Kind,
+		SHA:   entry.SHA,
+		Size:  entry.Size,
+		Title: entry.Title,
 	}
 	if entry.Slug != "" {
-		out["slug"] = entry.Slug
+		out.Slug = entry.Slug
 		encodedSlug := url.PathEscape(entry.Slug)
-		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s", transform.HTMLBase(), repoFullName, encodedSlug)
-		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s", transform.ExtensionAPIBase(), repoFullName, encodedSlug)
+		out.HTMLURL = fmt.Sprintf("%s/%s/wiki/%s", transform.HTMLBase(), repoFullName, encodedSlug)
+		out.URL = fmt.Sprintf("%s/repos/%s/wiki/pages/%s", transform.ExtensionAPIBase(), repoFullName, encodedSlug)
 	}
 	return out
 }

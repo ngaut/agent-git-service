@@ -335,7 +335,9 @@ func commitLookupNotFound(output string) bool {
 		strings.Contains(lower, "unknown revision or path not in the working tree") ||
 		strings.Contains(lower, "unknown revision") ||
 		strings.Contains(lower, "ambiguous argument") ||
-		strings.Contains(lower, "invalid object name")
+		strings.Contains(lower, "invalid object name") ||
+		strings.Contains(lower, "not a valid commit name") ||
+		strings.Contains(lower, "not a valid object name")
 }
 
 // ListCommitsOptions holds optional parameters for ListCommits.

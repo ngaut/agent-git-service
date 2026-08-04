@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
@@ -22,6 +23,31 @@ import (
 
 func setupWikiGitIngestTestService(t testing.TB) (*service.Service, func()) {
 	return testharness.NewService(t, testharness.ServiceConfig{MaxOpenConns: 1})
+}
+
+func newWikiGitIngestPeerService(t testing.TB, base *service.Service) *service.Service {
+	t.Helper()
+
+	root, err := base.Git.RepoRoot(context.Background())
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+	peerGit, err := gitstore.New(root)
+	if err != nil {
+		t.Fatalf("gitstore.New peer: %v", err)
+	}
+	peerCatalog := wikicatalog.New(base.DB, base.WikiBlob)
+	peer := &service.Service{
+		DB:          base.DB,
+		Git:         peerGit,
+		WikiCatalog: peerCatalog,
+		WikiBlob:    base.WikiBlob,
+		BaseURL:     base.BaseURL,
+		Embedder:    base.Embedder,
+	}
+	peerCatalog.DBFor = peer.DBForCtx
+	peerCatalog.OnChangeSetCommitted = peer.WikiCatalogPostCommit
+	return peer
 }
 
 func TestMigrateAllWikis_ContinuesAfterRepoFailure(t *testing.T) {
@@ -130,6 +156,62 @@ func TestIngestWikiGit_ReplaysSinglePage(t *testing.T) {
 	}
 }
 
+func TestIngestWikiGit_ContinuesAfterInitialReplay(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "continued")
+	wikiFullName := repoFullName + ".wiki"
+
+	if err := svc.Git.Init(ctx, wikiFullName, "master", false); err != nil {
+		t.Fatalf("init wiki repo: %v", err)
+	}
+	if _, err := svc.Git.WriteFile(ctx, wikiFullName, "master", "first.md", "first push", []byte("first")); err != nil {
+		t.Fatalf("first direct write: %v", err)
+	}
+	first, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
+	if err != nil {
+		t.Fatalf("first IngestWikiGit: %v", err)
+	}
+	if first.NewCommits != 1 {
+		t.Fatalf("first ingest stats = %+v, want one new commit", first)
+	}
+	repo, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo after first ingest: %v", err)
+	}
+	if err := svc.DB.Model(&db.WikiChangeset{}).
+		Where("repository_id = ?", repo.ID).
+		Update("synth_format_ver", 0).Error; err != nil {
+		t.Fatalf("simulate legacy git changeset format: %v", err)
+	}
+
+	if _, err := svc.Git.WriteFile(ctx, wikiFullName, "master", "second.md", "second push", []byte("second")); err != nil {
+		t.Fatalf("second direct write: %v", err)
+	}
+	second, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
+	if err != nil {
+		t.Fatalf("second IngestWikiGit: %v", err)
+	}
+	if second.NewCommits != 1 {
+		t.Fatalf("second ingest stats = %+v, want one new commit", second)
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "second"); err != nil {
+		t.Fatalf("GetWikiPage(second): %v", err)
+	}
+
+	var latest db.WikiChangeset
+	if err := svc.DB.
+		Where("repository_id = ?", repo.ID).
+		Order("changeset_id DESC").
+		First(&latest).Error; err != nil {
+		t.Fatalf("load latest changeset: %v", err)
+	}
+	if latest.SynthFormatVer != 1 {
+		t.Fatalf("latest git changeset synth format = %d, want 1", latest.SynthFormatVer)
+	}
+}
+
 func TestIngestWikiGit_ReplaysHistoryInOrder(t *testing.T) {
 	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
@@ -233,7 +315,7 @@ func TestIngestWikiGit_IsIdempotent(t *testing.T) {
 	}
 }
 
-func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
+func TestIngestWikiGit_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -270,6 +352,10 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
 		t.Fatalf("initial migrate: %v", err)
 	}
+	rep, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
 
 	repoDir, err := svc.Git.GetRepoPath(ctx, repoFullName+".wiki")
 	if err != nil {
@@ -289,14 +375,12 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 		t.Fatalf("git push --force origin master: %v\n%s", err, out)
 	}
 
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
+		t.Fatalf("IngestWikiGit after rewrite: %v", err)
+	}
 	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
 	if err != nil {
-		t.Fatalf("ListWikiPages after rewrite: %v", err)
-	}
-	svc.Wg.Wait()
-	pages, err = svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
-	if err != nil {
-		t.Fatalf("ListWikiPages after background rebuild: %v", err)
+		t.Fatalf("ListWikiPages after rewrite ingest: %v", err)
 	}
 	if len(pages) != 1 {
 		t.Fatalf("ListWikiPages after rewrite returned %d pages, want 1: %+v", len(pages), pages)
@@ -308,10 +392,6 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 		t.Fatalf("ListWikiPages returned SHA %q, want rewritten home SHA %q", pages[0].SHA, homeV1.SHA)
 	}
 
-	rep, err := svc.GetRepo(ctx, repoFullName)
-	if err != nil {
-		t.Fatalf("GetRepo: %v", err)
-	}
 	var pageRows []db.WikiPage
 	if err := svc.DB.Where("repository_id = ? AND deleted_at IS NULL", rep.ID).Order("slug ASC").Find(&pageRows).Error; err != nil {
 		t.Fatalf("list wiki_pages: %v", err)
@@ -352,7 +432,7 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 	}
 }
 
-func TestGetWikiPageAndHistory_RefreshCatalogAfterNonFastForwardRewrite(t *testing.T) {
+func TestIngestWikiGit_RefreshesPageAndHistoryAfterNonFastForwardRewrite(t *testing.T) {
 	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -395,14 +475,12 @@ func TestGetWikiPageAndHistory_RefreshCatalogAfterNonFastForwardRewrite(t *testi
 		t.Fatalf("git push --force origin master: %v\n%s", err, out)
 	}
 
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
+		t.Fatalf("IngestWikiGit after rewrite: %v", err)
+	}
 	page, err := svc.GetWikiPage(ctx, repoFullName, "home")
 	if err != nil {
-		t.Fatalf("GetWikiPage after rewrite: %v", err)
-	}
-	svc.Wg.Wait()
-	page, err = svc.GetWikiPage(ctx, repoFullName, "home")
-	if err != nil {
-		t.Fatalf("GetWikiPage after background rebuild: %v", err)
+		t.Fatalf("GetWikiPage after rewrite ingest: %v", err)
 	}
 	if page.SHA != homeV1.SHA {
 		t.Fatalf("GetWikiPage returned SHA %q, want rewritten home SHA %q", page.SHA, homeV1.SHA)
@@ -501,17 +579,17 @@ func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
 		}
 	}()
 
-	begin := time.Now()
-	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
-	if err != nil {
-		t.Fatalf("ListWikiPages: %v", err)
-	}
-	if elapsed := time.Since(begin); elapsed > 100*time.Millisecond {
-		t.Fatalf("ListWikiPages took %s, want <= 100ms while git ingest runs in background", elapsed)
-	}
-	if len(pages) != 1 || pages[0].Slug != "home" {
-		t.Fatalf("initial pages = %+v, want current catalog snapshot only", pages)
-	}
+	listDone := make(chan struct {
+		pages []service.WikiPageSummary
+		err   error
+	}, 1)
+	go func() {
+		pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+		listDone <- struct {
+			pages []service.WikiPageSummary
+			err   error
+		}{pages: pages, err: err}
+	}()
 
 	select {
 	case <-started:
@@ -522,12 +600,26 @@ func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
 		t.Fatal("expected background git ingest to be marked running")
 	}
 
+	var pages []service.WikiPageSummary
+	select {
+	case result := <-listDone:
+		if result.err != nil {
+			t.Fatalf("ListWikiPages: %v", result.err)
+		}
+		pages = result.pages
+	case <-time.After(3 * time.Second):
+		t.Fatal("ListWikiPages blocked on background git ingest")
+	}
+	if len(pages) != 1 || pages[0].Slug != "home" {
+		t.Fatalf("initial pages = %+v, want current catalog snapshot only", pages)
+	}
+
 	if atomic.CompareAndSwapInt32(&released, 0, 1) {
 		close(release)
 	}
 	svc.Wg.Wait()
 
-	pages, err = svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
 	if err != nil {
 		t.Fatalf("ListWikiPages after background git ingest: %v", err)
 	}
@@ -606,7 +698,7 @@ func TestEnsureWikiCatalogCurrent_BackgroundSingleflight(t *testing.T) {
 	}
 }
 
-func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
+func TestIngestWikiGit_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -633,14 +725,12 @@ func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 		t.Fatalf("git update-ref -d refs/heads/master: %v\n%s", err, out)
 	}
 
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
+		t.Fatalf("IngestWikiGit after branch deletion: %v", err)
+	}
 	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
 	if err != nil {
-		t.Fatalf("ListWikiPages after branch deletion: %v", err)
-	}
-	svc.Wg.Wait()
-	pages, err = svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
-	if err != nil {
-		t.Fatalf("ListWikiPages after background branch cleanup: %v", err)
+		t.Fatalf("ListWikiPages after branch deletion ingest: %v", err)
 	}
 	if len(pages) != 0 {
 		t.Fatalf("ListWikiPages returned %d pages after branch deletion, want 0: %+v", len(pages), pages)
@@ -683,6 +773,730 @@ func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 	}
 	if len(changesets) != 0 {
 		t.Fatalf("wiki_changesets rows = %+v, want none after branch deletion", changesets)
+	}
+}
+
+func TestIngestWikiGitFailsClosedWhenBranchHeadObjectCannotResolve(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "broken-head")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage home: %v", err)
+	}
+	headSHA, err := svc.Git.HeadSHA(ctx, repoFullName+".wiki", "master")
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+	repoDir, err := svc.Git.GetRepoPath(ctx, repoFullName+".wiki")
+	if err != nil {
+		t.Fatalf("GetRepoPath: %v", err)
+	}
+	removeLooseGitObject(t, repoDir, headSHA)
+
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err == nil {
+		t.Fatal("IngestWikiGit succeeded after branch head object loss, want fail-closed error")
+	}
+
+	rep, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	var livePages int64
+	if err := svc.DB.Model(&db.WikiPage{}).
+		Where("repository_id = ? AND deleted_at IS NULL", rep.ID).
+		Count(&livePages).Error; err != nil {
+		t.Fatalf("count live wiki pages: %v", err)
+	}
+	if livePages != 1 {
+		t.Fatalf("live wiki page count = %d, want 1 after failed ingest", livePages)
+	}
+	var changesets int64
+	if err := svc.DB.Model(&db.WikiChangeset{}).
+		Where("repository_id = ?", rep.ID).
+		Count(&changesets).Error; err != nil {
+		t.Fatalf("count wiki changesets: %v", err)
+	}
+	if changesets == 0 {
+		t.Fatal("wiki changesets were reset after failed ingest")
+	}
+}
+
+func TestReceivePackRepairObligationHonorsFailedForcePushRewrite(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "rewrite")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	firstHead, err := svc.Git.HeadSHA(ctx, repoFullName+".wiki", "master")
+	if err != nil {
+		t.Fatalf("HeadSHA after first write: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "second", "second", "create second", ""); err != nil {
+		t.Fatalf("PutWikiPage second: %v", err)
+	}
+	if err := svc.Git.UpdateRef(ctx, repoFullName+".wiki", "refs/heads/master", firstHead); err != nil {
+		t.Fatalf("simulate receive-pack force-push rewrite: %v", err)
+	}
+	repo := recordFailedReceivePackIngestForTest(t, svc, ctx, repoFullName)
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "third", "third", "create third", ""); err != nil {
+		t.Fatalf("PutWikiPage after failed force-push ingest: %v", err)
+	}
+	svc.Wg.Wait()
+
+	for _, slug := range []string{"first", "third"} {
+		if _, err := svc.GetWikiPage(ctx, repoFullName, slug); err != nil {
+			t.Fatalf("GetWikiPage(%s): %v", slug, err)
+		}
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "second"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(second) error = %v, want ErrNotFound after authoritative rewrite", err)
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestReceivePackRepairObligationHonorsFailedBranchDeletion(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "delete")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "home", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage home: %v", err)
+	}
+	if err := svc.Git.DeleteRef(ctx, repoFullName+".wiki", "refs/heads/master"); err != nil {
+		t.Fatalf("simulate receive-pack branch deletion: %v", err)
+	}
+	repo := recordFailedReceivePackIngestForTest(t, svc, ctx, repoFullName)
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "replacement", "replacement", "create replacement", ""); err != nil {
+		t.Fatalf("PutWikiPage after failed branch deletion ingest: %v", err)
+	}
+	svc.Wg.Wait()
+
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "replacement"); err != nil {
+		t.Fatalf("GetWikiPage(replacement): %v", err)
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "home"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(home) error = %v, want ErrNotFound after authoritative deletion", err)
+	}
+	if _, err := svc.Git.ReadFile(ctx, repoFullName+".wiki", "home.md"); err == nil {
+		t.Fatal("home.md was recreated after authoritative branch deletion")
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestReceivePackInProgressObligationHonorsCrashAfterForcePushRewrite(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "crash-rewrite")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	firstHead, err := svc.Git.HeadSHA(ctx, repoFullName+".wiki", "master")
+	if err != nil {
+		t.Fatalf("HeadSHA after first write: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "second", "second", "create second", ""); err != nil {
+		t.Fatalf("PutWikiPage second: %v", err)
+	}
+
+	repo := recordInProgressReceivePackObligationForTest(t, svc, ctx, repoFullName, func() error {
+		return svc.Git.UpdateRef(ctx, repoFullName+".wiki", "refs/heads/master", firstHead)
+	})
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "third", "third", "create third", ""); err != nil {
+		t.Fatalf("PutWikiPage after interrupted force-push receive-pack: %v", err)
+	}
+	svc.Wg.Wait()
+
+	for _, slug := range []string{"first", "third"} {
+		if _, err := svc.GetWikiPage(ctx, repoFullName, slug); err != nil {
+			t.Fatalf("GetWikiPage(%s): %v", slug, err)
+		}
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "second"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(second) error = %v, want ErrNotFound after authoritative rewrite", err)
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestReceivePackInProgressObligationHonorsCrashAfterBranchDeletion(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "crash-delete")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "home", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage home: %v", err)
+	}
+
+	repo := recordInProgressReceivePackObligationForTest(t, svc, ctx, repoFullName, func() error {
+		return svc.Git.DeleteRef(ctx, repoFullName+".wiki", "refs/heads/master")
+	})
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "replacement", "replacement", "create replacement", ""); err != nil {
+		t.Fatalf("PutWikiPage after interrupted branch-deletion receive-pack: %v", err)
+	}
+	svc.Wg.Wait()
+
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "replacement"); err != nil {
+		t.Fatalf("GetWikiPage(replacement): %v", err)
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "home"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(home) error = %v, want ErrNotFound after authoritative deletion", err)
+	}
+	if _, err := svc.Git.ReadFile(ctx, repoFullName+".wiki", "home.md"); err == nil {
+		t.Fatal("home.md was recreated after authoritative branch deletion")
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestReceivePackUnchangedObligationDoesNotDiscardInterruptedRESTPublish(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "unchanged-obligation")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	repo := recordInProgressReceivePackObligationForTest(t, svc, ctx, repoFullName, func() error {
+		return nil
+	})
+
+	publishErr := errors.New("forced REST publish failure")
+	service.SetTestWikiPreparedPublishFailureForTest(svc, func(fullName, commitSHA string) error {
+		if fullName == repoFullName && commitSHA != "" {
+			return publishErr
+		}
+		return nil
+	})
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "second", "second", "create second", ""); !errors.Is(err, publishErr) {
+		t.Fatalf("PutWikiPage second error = %v, want %v", err, publishErr)
+	}
+	service.SetTestWikiPreparedPublishFailureForTest(svc, nil)
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "third", "third", "create third", ""); err != nil {
+		t.Fatalf("PutWikiPage third: %v", err)
+	}
+	svc.Wg.Wait()
+
+	for _, slug := range []string{"first", "second", "third"} {
+		if _, err := svc.GetWikiPage(ctx, repoFullName, slug); err != nil {
+			t.Fatalf("GetWikiPage(%s): %v", slug, err)
+		}
+		if _, err := svc.Git.ReadFile(ctx, repoFullName+".wiki", slug+".md"); err != nil {
+			t.Fatalf("ReadFile(%s.md): %v", slug, err)
+		}
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestActiveReceivePackOwnerPreventsUnchangedCrossInstanceClear(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "active-owner")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	firstHead, err := svc.Git.HeadSHA(ctx, repoFullName+".wiki", "master")
+	if err != nil {
+		t.Fatalf("HeadSHA after first write: %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "second", "second", "create second", ""); err != nil {
+		t.Fatalf("PutWikiPage second: %v", err)
+	}
+	repo, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+
+	var ownerToken string
+	err = svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			var beginErr error
+			ownerToken, beginErr = svc.BeginWikiReceivePackRepairObligationLocked(ctx, repoFullName)
+			return beginErr
+		})
+	})
+	if err != nil {
+		t.Fatalf("begin receive-pack obligation: %v", err)
+	}
+	if ownerToken == "" {
+		t.Fatal("receive-pack owner token is empty")
+	}
+
+	peer := newWikiGitIngestPeerService(t, svc)
+	if _, err := peer.PutWikiPage(ctx, repoFullName, "third", "third", "create third", ""); err == nil ||
+		!strings.Contains(err.Error(), "active receive-pack") {
+		t.Fatalf("PutWikiPage from peer error = %v, want active receive-pack owner failure", err)
+	}
+	if _, err := peer.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "active receive-pack") {
+		t.Fatalf("IngestWikiGit from peer error = %v, want active receive-pack owner failure", err)
+	}
+
+	var active db.WikiGitRepairObligation
+	if err := svc.DB.First(&active, "repository_id = ?", repo.ID).Error; err != nil {
+		t.Fatalf("load active obligation: %v", err)
+	}
+	if !active.InProgress || active.OwnerToken != ownerToken || active.OwnerExpiresAt == nil {
+		t.Fatalf("active obligation = %+v, want same live owner token", active)
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "third"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(third) error = %v, want ErrNotFound after blocked peer write", err)
+	}
+
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	if err := svc.DB.Model(&db.WikiGitRepairObligation{}).
+		Where("repository_id = ?", repo.ID).
+		Updates(map[string]any{
+			"owner_expires_at": expiredAt,
+			"updated_at":       expiredAt,
+		}).Error; err != nil {
+		t.Fatalf("expire active receive-pack owner before ref mutation: %v", err)
+	}
+	if err := svc.RefreshWikiReceivePackRepairObligationOwner(ctx, repoFullName, ownerToken); err != nil {
+		t.Fatalf("refresh active receive-pack owner: %v", err)
+	}
+	var refreshed db.WikiGitRepairObligation
+	if err := svc.DB.First(&refreshed, "repository_id = ?", repo.ID).Error; err != nil {
+		t.Fatalf("load refreshed obligation: %v", err)
+	}
+	if !refreshed.InProgress || refreshed.OwnerToken != ownerToken ||
+		refreshed.OwnerExpiresAt == nil || !refreshed.OwnerExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("refreshed obligation = %+v, want same live owner token", refreshed)
+	}
+	if _, err := peer.PutWikiPage(ctx, repoFullName, "still-blocked", "still blocked", "create still-blocked", ""); err == nil ||
+		!strings.Contains(err.Error(), "active receive-pack") {
+		t.Fatalf("PutWikiPage from peer after owner refresh error = %v, want active receive-pack owner failure", err)
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "still-blocked"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(still-blocked) error = %v, want ErrNotFound after refreshed owner blocks peer write", err)
+	}
+
+	if err := svc.Git.UpdateRef(ctx, repoFullName+".wiki", "refs/heads/master", firstHead); err != nil {
+		t.Fatalf("simulate receive-pack force-push rewrite: %v", err)
+	}
+	expiredAt = time.Now().UTC().Add(-time.Minute)
+	if err := svc.DB.Model(&db.WikiGitRepairObligation{}).
+		Where("repository_id = ?", repo.ID).
+		Updates(map[string]any{
+			"owner_expires_at": expiredAt,
+			"updated_at":       expiredAt,
+		}).Error; err != nil {
+		t.Fatalf("expire receive-pack owner: %v", err)
+	}
+
+	if _, err := peer.PutWikiPage(ctx, repoFullName, "fourth", "fourth", "create fourth", ""); err != nil {
+		t.Fatalf("PutWikiPage after expired receive-pack owner: %v", err)
+	}
+	peer.Wg.Wait()
+
+	for _, slug := range []string{"first", "fourth"} {
+		if _, err := peer.GetWikiPage(ctx, repoFullName, slug); err != nil {
+			t.Fatalf("GetWikiPage(%s): %v", slug, err)
+		}
+	}
+	if _, err := peer.GetWikiPage(ctx, repoFullName, "second"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(second) error = %v, want ErrNotFound after accepted force-push", err)
+	}
+	if _, err := peer.GetWikiPage(ctx, repoFullName, "third"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(third) error = %v, want ErrNotFound after blocked peer write", err)
+	}
+	assertNoWikiGitRepairObligation(t, peer, repo.ID)
+}
+
+func TestRESTWriteRejectsReceivePackOwnerClaimedAfterSnapshot(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "snapshot-owner")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	repo, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	peer := newWikiGitIngestPeerService(t, svc)
+
+	var claimed atomic.Bool
+	var ownerToken string
+	var hookErr error
+	service.SetTestWikiRESTSnapshotForTest(svc, func(fullName string) {
+		if fullName != repoFullName || !claimed.CompareAndSwap(false, true) {
+			return
+		}
+		hookErr = peer.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+			return peer.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+				if err := peer.ReconcileWikiBeforeReceivePackLocked(ctx, repoFullName); err != nil {
+					return err
+				}
+				var beginErr error
+				ownerToken, beginErr = peer.BeginWikiReceivePackRepairObligationLocked(ctx, repoFullName)
+				return beginErr
+			})
+		})
+	})
+	defer service.SetTestWikiRESTSnapshotForTest(svc, nil)
+
+	_, err = svc.PutWikiPage(ctx, repoFullName, "second", "second", "create second", "")
+	if hookErr != nil {
+		t.Fatalf("receive-pack owner hook: %v", hookErr)
+	}
+	if !claimed.Load() {
+		t.Fatal("REST snapshot hook did not claim a receive-pack owner")
+	}
+	if ownerToken == "" {
+		t.Fatal("receive-pack owner token is empty")
+	}
+	if err == nil {
+		t.Fatal("PutWikiPage second succeeded, want receive-pack owner race rejection")
+	}
+	if _, err := svc.GetWikiPage(ctx, repoFullName, "second"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage(second) error = %v, want ErrNotFound after blocked REST write", err)
+	}
+
+	var active db.WikiGitRepairObligation
+	if err := svc.DB.First(&active, "repository_id = ?", repo.ID).Error; err != nil {
+		t.Fatalf("load active obligation: %v", err)
+	}
+	if !active.InProgress || active.OwnerToken != ownerToken ||
+		active.OwnerExpiresAt == nil || !active.OwnerExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("active obligation = %+v, want token %q preserved", active, ownerToken)
+	}
+
+	err = peer.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return peer.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			return peer.ClearWikiReceivePackRepairObligationLocked(ctx, repoFullName, ownerToken)
+		})
+	})
+	if err != nil {
+		t.Fatalf("clear receive-pack owner: %v", err)
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestReceivePackOwnerClaimDoesNotOverwriteActiveOwner(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "owner-claim")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	repo, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	peer := newWikiGitIngestPeerService(t, svc)
+
+	reconcileBeforeReceivePack := func(name string, svc *service.Service) {
+		t.Helper()
+		err := svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+			return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+				return svc.ReconcileWikiBeforeReceivePackLocked(ctx, repoFullName)
+			})
+		})
+		if err != nil {
+			t.Fatalf("ReconcileWikiBeforeReceivePackLocked(%s): %v", name, err)
+		}
+	}
+	reconcileBeforeReceivePack("first", svc)
+	reconcileBeforeReceivePack("peer", peer)
+
+	var firstToken string
+	err = svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			var beginErr error
+			firstToken, beginErr = svc.BeginWikiReceivePackRepairObligationLocked(ctx, repoFullName)
+			return beginErr
+		})
+	})
+	if err != nil {
+		t.Fatalf("first BeginWikiReceivePackRepairObligationLocked: %v", err)
+	}
+	if firstToken == "" {
+		t.Fatal("first receive-pack owner token is empty")
+	}
+
+	var peerToken string
+	err = peer.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return peer.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			var beginErr error
+			peerToken, beginErr = peer.BeginWikiReceivePackRepairObligationLocked(ctx, repoFullName)
+			return beginErr
+		})
+	})
+	if err == nil || !strings.Contains(err.Error(), "active receive-pack") {
+		t.Fatalf("peer BeginWikiReceivePackRepairObligationLocked error = %v, want active owner failure", err)
+	}
+	if peerToken != "" {
+		t.Fatalf("peer owner token = %q, want empty token after failed claim", peerToken)
+	}
+
+	var active db.WikiGitRepairObligation
+	if err := svc.DB.First(&active, "repository_id = ?", repo.ID).Error; err != nil {
+		t.Fatalf("load active obligation: %v", err)
+	}
+	if !active.InProgress || active.OwnerToken != firstToken || active.OwnerExpiresAt == nil {
+		t.Fatalf("active obligation = %+v, want first owner token", active)
+	}
+
+	err = peer.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return peer.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			return peer.ClearWikiReceivePackRepairObligationLocked(ctx, repoFullName, "loser-token")
+		})
+	})
+	if err == nil || !strings.Contains(err.Error(), "different token") {
+		t.Fatalf("peer ClearWikiReceivePackRepairObligationLocked error = %v, want token mismatch", err)
+	}
+	if err := svc.DB.First(&active, "repository_id = ?", repo.ID).Error; err != nil {
+		t.Fatalf("reload active obligation: %v", err)
+	}
+	if active.OwnerToken != firstToken {
+		t.Fatalf("active owner token after peer clear = %q, want %q", active.OwnerToken, firstToken)
+	}
+
+	err = svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			return svc.ClearWikiReceivePackRepairObligationLocked(ctx, repoFullName, firstToken)
+		})
+	})
+	if err != nil {
+		t.Fatalf("clear first receive-pack owner: %v", err)
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestStaleReceivePackRepairConsumerCannotDeleteNewOwner(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "push-repair", "stale-consumer")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	repo, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	recordInProgressReceivePackObligationForTest(t, svc, ctx, repoFullName, func() error {
+		return nil
+	})
+
+	stalePeer := newWikiGitIngestPeerService(t, svc)
+	loaded := make(chan struct{})
+	releaseStaleConsumer := make(chan struct{})
+	service.SetTestWikiGitRepairObligationLoadedForTest(stalePeer, func(fullName string, obligation db.WikiGitRepairObligation) {
+		if fullName != repoFullName {
+			return
+		}
+		close(loaded)
+		<-releaseStaleConsumer
+	})
+
+	staleErr := make(chan error, 1)
+	go func() {
+		staleErr <- stalePeer.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+			return stalePeer.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+				return stalePeer.ReconcileWikiBeforeReceivePackLocked(ctx, repoFullName)
+			})
+		})
+	}()
+
+	select {
+	case <-loaded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stale peer did not load the expired repair obligation")
+	}
+
+	var activeToken string
+	err = svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			if err := svc.ReconcileWikiBeforeReceivePackLocked(ctx, repoFullName); err != nil {
+				return err
+			}
+			var beginErr error
+			activeToken, beginErr = svc.BeginWikiReceivePackRepairObligationLocked(ctx, repoFullName)
+			return beginErr
+		})
+	})
+	if err != nil {
+		t.Fatalf("claim active receive-pack owner after first consumer: %v", err)
+	}
+	if activeToken == "" {
+		t.Fatal("active receive-pack owner token is empty")
+	}
+
+	close(releaseStaleConsumer)
+	select {
+	case err := <-staleErr:
+		if err == nil || !strings.Contains(err.Error(), "active receive-pack") {
+			t.Fatalf("stale consumer error = %v, want active receive-pack owner failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stale consumer did not finish")
+	}
+
+	var active db.WikiGitRepairObligation
+	if err := svc.DB.First(&active, "repository_id = ?", repo.ID).Error; err != nil {
+		t.Fatalf("load active obligation after stale consumer: %v", err)
+	}
+	if !active.InProgress || active.OwnerToken != activeToken || active.OwnerExpiresAt == nil {
+		t.Fatalf("active obligation = %+v, want token %q preserved", active, activeToken)
+	}
+
+	err = svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			return svc.ClearWikiReceivePackRepairObligationLocked(ctx, repoFullName, activeToken)
+		})
+	})
+	if err != nil {
+		t.Fatalf("clear active receive-pack owner: %v", err)
+	}
+	assertNoWikiGitRepairObligation(t, svc, repo.ID)
+}
+
+func TestReadRefreshPreservesCatalogAheadOfGitAfterInterruptedPublish(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "catalog-ahead-owner", "catalog-ahead")
+
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "first", "first", "create first", ""); err != nil {
+		t.Fatalf("PutWikiPage first: %v", err)
+	}
+	publishErr := errors.New("synthetic publish failure")
+	service.SetTestWikiPreparedPublishFailureForTest(svc, func(fullName, commitSHA string) error {
+		if fullName == repoFullName && commitSHA != "" {
+			return publishErr
+		}
+		return nil
+	})
+	if _, err := svc.PutWikiPage(ctx, repoFullName, "second", "second", "create second", ""); !errors.Is(err, publishErr) {
+		t.Fatalf("PutWikiPage second error = %v, want %v", err, publishErr)
+	}
+	service.SetTestWikiPreparedPublishFailureForTest(svc, nil)
+
+	if _, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true}); err != nil {
+		t.Fatalf("ListWikiPages before background refresh: %v", err)
+	}
+	svc.Wg.Wait()
+	pages, err := svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
+	if err != nil {
+		t.Fatalf("ListWikiPages after background refresh: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("pages after background refresh = %v, want both catalog pages", pages)
+	}
+	if _, err := svc.Git.ReadFile(ctx, repoFullName+".wiki", "second.md"); err == nil {
+		t.Fatal("interrupted second page unexpectedly became visible in Git")
+	}
+}
+
+func recordFailedReceivePackIngestForTest(t testing.TB, svc *service.Service, ctx context.Context, repoFullName string) db.Repository {
+	t.Helper()
+
+	repo, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	ingestErr := errors.New("forced receive-pack ingest failure")
+	service.SetTestWikiReceivePackIngestFailureForTest(svc, func(fullName string) error {
+		if fullName == repoFullName {
+			return ingestErr
+		}
+		return nil
+	})
+	err = svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			_, err := svc.IngestWikiGitAfterReceivePackLocked(ctx, repoFullName, service.WikiGitIngestOptions{})
+			return err
+		})
+	})
+	service.SetTestWikiReceivePackIngestFailureForTest(svc, nil)
+	if !errors.Is(err, ingestErr) {
+		t.Fatalf("failed receive-pack ingest error = %v, want %v", err, ingestErr)
+	}
+
+	var obligations int64
+	if err := svc.DB.Model(&db.WikiGitRepairObligation{}).
+		Where("repository_id = ?", repo.ID).
+		Count(&obligations).Error; err != nil {
+		t.Fatalf("count wiki Git repair obligations: %v", err)
+	}
+	if obligations != 1 {
+		t.Fatalf("wiki Git repair obligations = %d, want 1", obligations)
+	}
+	return repo
+}
+
+func recordInProgressReceivePackObligationForTest(t testing.TB, svc *service.Service, ctx context.Context, repoFullName string, mutateGit func() error) db.Repository {
+	t.Helper()
+
+	repo, err := svc.GetRepo(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("GetRepo: %v", err)
+	}
+	err = svc.WithWikiCatalogWriteLockForReceivePack(ctx, repoFullName, func() error {
+		return svc.Git.WithRepoLock(ctx, repoFullName+".wiki", func() error {
+			if _, err := svc.BeginWikiReceivePackRepairObligationLocked(ctx, repoFullName); err != nil {
+				return err
+			}
+			return mutateGit()
+		})
+	})
+	if err != nil {
+		t.Fatalf("record in-progress receive-pack obligation: %v", err)
+	}
+
+	var obligations int64
+	if err := svc.DB.Model(&db.WikiGitRepairObligation{}).
+		Where("repository_id = ?", repo.ID).
+		Count(&obligations).Error; err != nil {
+		t.Fatalf("count wiki Git repair obligations: %v", err)
+	}
+	if obligations != 1 {
+		t.Fatalf("wiki Git repair obligations = %d, want 1", obligations)
+	}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	if err := svc.DB.Model(&db.WikiGitRepairObligation{}).
+		Where("repository_id = ?", repo.ID).
+		Updates(map[string]any{
+			"owner_expires_at": expiredAt,
+			"updated_at":       expiredAt,
+		}).Error; err != nil {
+		t.Fatalf("expire interrupted receive-pack owner: %v", err)
+	}
+	return repo
+}
+
+func assertNoWikiGitRepairObligation(t testing.TB, svc *service.Service, repoID uint) {
+	t.Helper()
+
+	var obligations int64
+	if err := svc.DB.Model(&db.WikiGitRepairObligation{}).
+		Where("repository_id = ?", repoID).
+		Count(&obligations).Error; err != nil {
+		t.Fatalf("count wiki Git repair obligations: %v", err)
+	}
+	if obligations != 0 {
+		t.Fatalf("wiki Git repair obligations = %d, want 0", obligations)
 	}
 }
 

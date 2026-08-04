@@ -3,7 +3,9 @@ package embedding_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -272,6 +274,81 @@ func TestOpenAIEmbedAPIError(t *testing.T) {
 	_, err := e.Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error for 401 response, got nil")
+	}
+	var apiErr *embedding.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *embedding.APIError", err)
+	}
+	if apiErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusUnauthorized)
+	}
+	if embedding.IsRetryableError(err) {
+		t.Fatalf("401 error should not be retryable: %v", err)
+	}
+}
+
+func TestOpenAIEmbedInsufficientQuotaIsPermanent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":{"message":"quota exhausted","type":"insufficient_quota","code":"insufficient_quota"}}`))
+	}))
+	defer srv.Close()
+
+	e := embedding.NewOpenAI("exhausted-key", embedding.WithBaseURL(srv.URL))
+	_, err := e.Embed(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("expected error for exhausted quota, got nil")
+	}
+	var apiErr *embedding.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *embedding.APIError", err)
+	}
+	if apiErr.Code != "insufficient_quota" || apiErr.Type != "insufficient_quota" {
+		t.Fatalf("structured quota fields = code:%q type:%q", apiErr.Code, apiErr.Type)
+	}
+	if embedding.IsRetryableError(err) {
+		t.Fatalf("insufficient quota should not be retryable: %v", err)
+	}
+}
+
+func TestAPIErrorRetryability(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "temporary rate limit",
+			err:  &embedding.APIError{StatusCode: http.StatusTooManyRequests, Code: "rate_limit_exceeded"},
+			want: true,
+		},
+		{
+			name: "insufficient quota",
+			err:  &embedding.APIError{StatusCode: http.StatusTooManyRequests, Code: "insufficient_quota", Type: "insufficient_quota"},
+			want: false,
+		},
+		{
+			name: "server error",
+			err:  &embedding.APIError{StatusCode: http.StatusServiceUnavailable},
+			want: true,
+		},
+		{
+			name: "invalid key",
+			err:  &embedding.APIError{StatusCode: http.StatusUnauthorized, Code: "invalid_api_key"},
+			want: false,
+		},
+		{
+			name: "connection refused",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := embedding.IsRetryableError(tt.err); got != tt.want {
+				t.Fatalf("IsRetryableError() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

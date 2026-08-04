@@ -91,7 +91,9 @@ func OptionalTokenAuthWithEmbeddedIdentity(svc *service.Service, embedded Embedd
 
 			auth := r.Header.Get("Authorization")
 			if auth == "" {
-				r = r.WithContext(service.ContextWithAnonRequest(r.Context()))
+				ctx := service.ContextWithAnonRequest(r.Context())
+				ctx = service.ContextWithRepoCache(ctx)
+				r = r.WithContext(ctx)
 				applog.AddAttrs(r.Context(), slog.String("auth_mode", "anonymous"))
 				next.ServeHTTP(w, r)
 				return

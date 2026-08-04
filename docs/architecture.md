@@ -237,6 +237,9 @@ Other stored data:
 - Semantic search data is optional and only activated when embeddings are
   configured and the active database supports the required vector-distance
   search capability.
+- Wiki search projection intent is stored in `wiki_search_projection_tasks`.
+  Lexical and embedding tasks are independently leased and coalesced so
+  lexical correctness survives provider failures and process restarts.
 
 ## Authentication Model
 

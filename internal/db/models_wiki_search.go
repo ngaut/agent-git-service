@@ -18,3 +18,21 @@ type WikiSearchDocument struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
+
+// WikiSearchProjectionTask is a durable, coalescing outbox entry for one
+// repository slug. Lexical and embedding work use separate rows so a slow
+// embedding provider never prevents the latest lexical state from landing.
+type WikiSearchProjectionTask struct {
+	ID             uint64     `gorm:"primaryKey;autoIncrement"`
+	RepositoryID   uint       `gorm:"not null;uniqueIndex:idx_wiki_search_projection_task,priority:1"`
+	Repository     Repository `gorm:"foreignKey:RepositoryID"`
+	Slug           string     `gorm:"size:255;not null;uniqueIndex:idx_wiki_search_projection_task,priority:2"`
+	Kind           string     `gorm:"size:16;not null;uniqueIndex:idx_wiki_search_projection_task,priority:3;index:idx_wiki_search_projection_claim,priority:1"`
+	Generation     uint64     `gorm:"not null;default:1"`
+	RevisionSHA    string     `gorm:"size:40"`
+	LabelDigest    string     `gorm:"type:text"`
+	LeaseToken     string     `gorm:"size:36"`
+	LeaseExpiresAt *time.Time `gorm:"index:idx_wiki_search_projection_claim,priority:2"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -29,6 +30,10 @@ type WikiGitIngestOptions struct {
 	// SkipIncompatibleSlugs, when true, drops pages whose slug cannot
 	// be represented by the catalog's single slug grammar.
 	SkipIncompatibleSlugs bool
+
+	// ReceivePackRepairOwnerToken identifies the live receive-pack that owns an
+	// in-progress repair row. Empty tokens are used for explicit repair runs.
+	ReceivePackRepairOwnerToken string
 }
 
 // WikiMigrationOptions is kept for the bulk legacy migration entry point.
@@ -91,20 +96,31 @@ type RepoMigrationStats = WikiGitIngestStats
 
 // IngestWikiGit replays one wiki git repo into the catalog by full name. It is
 // used for steady-state direct *.wiki.git pushes and for targeted repair runs.
+// Because this is an explicit ingest, a missing content branch is authoritative
+// and clears the corresponding catalog state.
 func (s *Service) IngestWikiGit(ctx context.Context, repoFullName string, opts WikiGitIngestOptions) (WikiGitIngestStats, error) {
 	rep, err := s.GetRepo(ctx, repoFullName)
 	if err != nil {
 		return WikiGitIngestStats{}, err
 	}
-	return s.ingestOneWikiGit(ctx, rep, opts)
+	return s.ingestWikiGitAfterReceivePackLocked(ctx, rep.FullName, opts, false, true)
 }
 
 // ensureWikiCatalogCurrent is the read-path freshness hook for the wiki
 // catalog. It compares the wiki repo's visible content branch
 // (`wikiDefaultBranch`, matching GitHub wiki semantics) against the latest
 // ingested commit recorded in the catalog. If the catalog lags, it schedules
-// background git ingest instead of blocking the read path.
+// background git ingest instead of blocking the read path. Refreshes do not
+// destructively reset catalog-originated state: Git can also lag temporarily
+// after an interrupted ref publication. Explicit ingest and receive-pack own
+// authoritative Git rewrites and branch deletion.
 func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName string) error {
+	return wikiCatalogFreshnessCacheDo(ctx, repoFullName, func() error {
+		return s.ensureWikiCatalogCurrentUncached(ctx, repoFullName)
+	})
+}
+
+func (s *Service) ensureWikiCatalogCurrentUncached(ctx context.Context, repoFullName string) error {
 	if s.Git == nil || s.WikiCatalog == nil {
 		return nil
 	}
@@ -131,7 +147,7 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 			return fmt.Errorf("list wiki branches for %q: %w", repoFullName, branchErr)
 		}
 		if len(branches) == 0 {
-			if lastMigratedSHA != "" && last.allowGitBackfillReset() {
+			if lastMigratedSHA != "" && last.allowMissingGitReset() {
 				if err := s.resetWikiCatalogRepo(ctx, rep.ID); err != nil {
 					return fmt.Errorf("reset empty wiki catalog for %q: %w", repoFullName, err)
 				}
@@ -149,7 +165,7 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 			}
 		}
 		if !hasVisibleBranch {
-			if lastMigratedSHA != "" && last.allowGitBackfillReset() {
+			if lastMigratedSHA != "" && last.allowMissingGitReset() {
 				if err := s.resetWikiCatalogRepo(ctx, rep.ID); err != nil {
 					return fmt.Errorf("reset catalog without %s for %q: %w", wikiDefaultBranch, repoFullName, err)
 				}
@@ -167,7 +183,7 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 	if strings.EqualFold(lastMigratedSHA, strings.ToLower(strings.TrimSpace(headSHA))) {
 		return nil
 	}
-	if lastMigratedSHA != "" && !last.allowGitBackfillReset() {
+	if lastMigratedSHA != "" && !last.canIngestGitAdvance() {
 		return nil
 	}
 	s.kickBackgroundWikiGitIngest(ctx, rep)
@@ -190,6 +206,110 @@ func (s *Service) KickBackgroundWikiGitIngest(ctx context.Context, repoFullName 
 		return
 	}
 	s.kickBackgroundWikiGitIngest(ctx, rep)
+}
+
+// IngestWikiGitAfterReceivePack replays wiki git commits synchronously while
+// the caller still owns the wiki repo's git write lock. This keeps direct wiki
+// pushes serialized with REST writes across both Git and catalog state.
+func (s *Service) IngestWikiGitAfterReceivePack(ctx context.Context, repoFullName string, opts WikiGitIngestOptions) (WikiGitIngestStats, error) {
+	stats, err := s.ingestWikiGitAfterReceivePackLocked(ctx, repoFullName, opts, false, true)
+	if err != nil {
+		recordErr := s.withWikiCatalogWriteLockOnly(ctx, repoFullName, func(repo db.Repository) error {
+			return s.recordWikiGitRepairObligationLocked(ctx, repo, false)
+		})
+		if recordErr != nil {
+			return stats, fmt.Errorf(
+				"record wiki Git repair obligation after receive-pack ingest failure for %s: %v: %w",
+				repoFullName,
+				err,
+				recordErr,
+			)
+		}
+		return stats, err
+	}
+	clearErr := s.withWikiCatalogWriteLockOnly(ctx, repoFullName, func(repo db.Repository) error {
+		return s.clearWikiGitRepairObligationForOwner(ctx, repo.ID, opts.ReceivePackRepairOwnerToken)
+	})
+	if clearErr != nil {
+		return stats, fmt.Errorf("clear wiki Git repair obligation after receive-pack ingest for %s: %w", repoFullName, clearErr)
+	}
+	return stats, nil
+}
+
+// IngestWikiGitAfterReceivePackLocked replays wiki git commits synchronously
+// while the caller owns the wiki repo's git write lock and may already hold
+// the catalog serialization mutex.
+func (s *Service) IngestWikiGitAfterReceivePackLocked(ctx context.Context, repoFullName string, opts WikiGitIngestOptions) (WikiGitIngestStats, error) {
+	repo, lookupErr := s.LookupRepoIdentity(ctx, repoFullName)
+	if lookupErr != nil {
+		return WikiGitIngestStats{}, lookupErr
+	}
+	if s.testWikiReceivePackIngestFailure != nil {
+		if err := s.testWikiReceivePackIngestFailure(repoFullName); err != nil {
+			if recordErr := s.recordWikiGitRepairObligationLocked(ctx, repo, false); recordErr != nil {
+				return WikiGitIngestStats{}, fmt.Errorf(
+					"record wiki Git repair obligation after receive-pack ingest failure for %s: %v: %w",
+					repoFullName,
+					err,
+					recordErr,
+				)
+			}
+			return WikiGitIngestStats{}, err
+		}
+	}
+	stats, err := s.ingestWikiGitAfterReceivePackLocked(ctx, repoFullName, opts, true, true)
+	if err != nil {
+		if recordErr := s.recordWikiGitRepairObligationLocked(ctx, repo, false); recordErr != nil {
+			return stats, fmt.Errorf(
+				"record wiki Git repair obligation after receive-pack ingest failure for %s: %v: %w",
+				repoFullName,
+				err,
+				recordErr,
+			)
+		}
+		return stats, err
+	}
+	if err := s.clearWikiGitRepairObligationForOwner(ctx, repo.ID, opts.ReceivePackRepairOwnerToken); err != nil {
+		return stats, fmt.Errorf("clear wiki Git repair obligation after receive-pack ingest for %s: %w", repoFullName, err)
+	}
+	return stats, nil
+}
+
+func (s *Service) ingestWikiGitAfterReceivePackLocked(
+	ctx context.Context,
+	repoFullName string,
+	opts WikiGitIngestOptions,
+	catalogLockHeld bool,
+	gitStateAuthoritative bool,
+) (WikiGitIngestStats, error) {
+	var (
+		stats WikiGitIngestStats
+		err   error
+	)
+	run := func(repo db.Repository) error {
+		stats, err = s.ingestOneWikiGitLockedWithMissingBranchPolicy(
+			ctx,
+			repo,
+			opts,
+			gitStateAuthoritative,
+		)
+		return err
+	}
+	if catalogLockHeld {
+		repo, lookupErr := s.LookupRepoIdentity(ctx, repoFullName)
+		if lookupErr != nil {
+			return WikiGitIngestStats{}, lookupErr
+		}
+		if err := run(repo); err != nil {
+			return WikiGitIngestStats{}, err
+		}
+		return stats, nil
+	}
+	lockErr := s.withWikiCatalogWriteLockOnly(ctx, repoFullName, run)
+	if lockErr != nil {
+		return WikiGitIngestStats{}, lockErr
+	}
+	return stats, nil
 }
 
 // IsWikiBackgroundGitIngestRunning reports whether a repo currently has a
@@ -230,25 +350,49 @@ func (s *Service) kickBackgroundWikiGitIngest(ctx context.Context, repo db.Repos
 }
 
 func (s *Service) ingestOneWikiGit(ctx context.Context, repo db.Repository, opts WikiGitIngestOptions) (WikiGitIngestStats, error) {
+	return s.ingestWikiGitAfterReceivePackLocked(ctx, repo.FullName, opts, false, false)
+}
+
+func (s *Service) ingestOneWikiGitLocked(ctx context.Context, repo db.Repository, opts WikiGitIngestOptions) (WikiGitIngestStats, error) {
+	return s.ingestOneWikiGitLockedWithMissingBranchPolicy(ctx, repo, opts, false)
+}
+
+func (s *Service) ingestOneWikiGitLockedWithMissingBranchPolicy(
+	ctx context.Context,
+	repo db.Repository,
+	opts WikiGitIngestOptions,
+	gitStateAuthoritative bool,
+) (WikiGitIngestStats, error) {
 	stats := WikiGitIngestStats{}
 	full := wikiRepoFullName(repo.FullName)
-	if !s.Git.Exists(ctx, full) || s.Git.IsEmpty(ctx, full) {
+	if !s.Git.Exists(ctx, full) {
 		return stats, nil
 	}
-
-	mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(ctx, repo))
-	mu.Lock()
-	defer mu.Unlock()
+	if err := s.rejectActiveWikiGitRepairObligationOwner(ctx, repo, opts.ReceivePackRepairOwnerToken); err != nil {
+		return stats, err
+	}
+	headSHA, branchMissing, err := s.resolveWikiIngestBranchHead(ctx, full)
+	if err != nil {
+		return stats, fmt.Errorf("resolve wiki content commit for %q: %w", repo.FullName, err)
+	}
+	if branchMissing {
+		if !gitStateAuthoritative {
+			return stats, nil
+		}
+		if err := s.resetWikiCatalogRepo(ctx, repo.ID); err != nil {
+			return stats, fmt.Errorf("reset wiki catalog after branch deletion: %w", err)
+		}
+		if err := s.pruneWikiPageLabelsForMissingPages(ctx, repo.ID); err != nil {
+			return stats, fmt.Errorf("prune wiki page labels after branch deletion: %w", err)
+		}
+		return stats, nil
+	}
 
 	last, err := s.loadLatestWikiChangesetState(ctx, repo.ID)
 	if err != nil {
 		return stats, fmt.Errorf("load latest ingested SHA: %w", err)
 	}
 	lastIngestedSHA := last.CommitSHA
-	headSHA, err := s.Git.ResolveContentCommit(ctx, full, wikiDefaultBranch)
-	if err != nil {
-		return stats, fmt.Errorf("resolve wiki content commit for %q: %w", repo.FullName, err)
-	}
 	headSHA = strings.ToLower(strings.TrimSpace(headSHA))
 	if headSHA == "" {
 		return stats, nil
@@ -277,7 +421,7 @@ func (s *Service) ingestOneWikiGit(ctx context.Context, repo db.Repository, opts
 			return stats, fmt.Errorf("list commits: %w", err)
 		}
 		stats.GitCommits = len(commits)
-	case last.allowGitBackfillReset():
+	case last.canIngestGitAdvance():
 		isAncestor, err := s.Git.IsAncestor(ctx, full, lastIngestedSHA, headSHA)
 		if err != nil {
 			return stats, fmt.Errorf("check wiki git ancestry %s..%s: %w", lastIngestedSHA, headSHA, err)
@@ -288,7 +432,7 @@ func (s *Service) ingestOneWikiGit(ctx context.Context, repo db.Repository, opts
 				return stats, fmt.Errorf("list commits range %s..%s: %w", lastIngestedSHA, headSHA, err)
 			}
 			stats.GitCommits = len(commits)
-		} else {
+		} else if gitStateAuthoritative || last.allowGitBackfillReset() {
 			if err := s.resetWikiCatalogRepo(ctx, repo.ID); err != nil {
 				return stats, fmt.Errorf("reset rewritten wiki catalog: %w", err)
 			}
@@ -298,6 +442,9 @@ func (s *Service) ingestOneWikiGit(ctx context.Context, repo db.Repository, opts
 				return stats, fmt.Errorf("list commits after reset: %w", err)
 			}
 			stats.GitCommits = len(commits)
+		} else {
+			stats.Pages = s.countLiveWikiPages(ctx, repo.ID)
+			return stats, nil
 		}
 	default:
 		stats.Pages = s.countLiveWikiPages(ctx, repo.ID)
@@ -355,6 +502,19 @@ func (s *Service) ingestOneWikiGit(ctx context.Context, repo db.Repository, opts
 	return stats, nil
 }
 
+func (s *Service) resolveWikiIngestBranchHead(ctx context.Context, wikiFullName string) (headSHA string, branchMissing bool, err error) {
+	headSHA, err = s.Git.ResolveContentCommit(ctx, wikiFullName, wikiDefaultBranch)
+	if err == nil {
+		return headSHA, false, nil
+	}
+	if _, headErr := s.Git.HeadSHA(ctx, wikiFullName, wikiDefaultBranch); errors.Is(headErr, plumbing.ErrReferenceNotFound) {
+		return "", true, nil
+	} else if headErr != nil {
+		return "", false, headErr
+	}
+	return "", false, err
+}
+
 type wikiChangesetState struct {
 	CommitSHA      string
 	Source         wikicatalog.Source
@@ -383,10 +543,24 @@ func (s *Service) loadLatestWikiChangesetState(ctx context.Context, repoID uint)
 }
 
 func (s wikiChangesetState) allowGitBackfillReset() bool {
+	return s.Source == wikicatalog.SourceGit || s.Source == wikicatalog.SourcePush
+}
+
+func (s wikiChangesetState) canIngestGitAdvance() bool {
+	if s.allowGitBackfillReset() {
+		return true
+	}
 	if s.Source == wikicatalog.SourceCompact {
 		return false
 	}
 	return s.SynthFormatVer >= synthProjectionMaterialized
+}
+
+func (s wikiChangesetState) allowMissingGitReset() bool {
+	// A catalog-originated commit may be durable before its ref publication
+	// completes. Only Git-originated state makes a missing branch authoritative;
+	// otherwise the catalog must survive so the prepared commit can be resumed.
+	return s.allowGitBackfillReset()
 }
 
 func (s *Service) resetWikiCatalogRepo(ctx context.Context, repoID uint) error {
@@ -398,7 +572,8 @@ func (s *Service) resetWikiCatalogRepo(ctx context.Context, repoID uint) error {
 		var liveRefs []blobRefCount
 		if err := tx.Model(&db.WikiPage{}).
 			Select("head_blob_sha AS blob_sha, COUNT(*) AS refcount").
-			Where("repository_id = ? AND deleted_at IS NULL", repoID).
+			Where("repository_id = ? AND deleted_at IS NULL AND body_size > ?",
+				repoID, wikicatalog.MaxBodyInlineBytes).
 			Group("head_blob_sha").
 			Scan(&liveRefs).Error; err != nil {
 			return fmt.Errorf("load live blob refs: %w", err)
@@ -421,11 +596,15 @@ func (s *Service) resetWikiCatalogRepo(ctx context.Context, repoID uint) error {
 		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiSearchDocument{}).Error; err != nil {
 			return fmt.Errorf("delete wiki search documents: %w", err)
 		}
+		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiSearchProjectionTask{}).Error; err != nil {
+			return fmt.Errorf("delete wiki search projection tasks: %w", err)
+		}
+		if err := tx.Where("source_type = ? AND source_repository_id = ?", issueReferenceSourceWikiPage, repoID).
+			Delete(&db.IssueReference{}).Error; err != nil && !isMissingTableErr(err) {
+			return fmt.Errorf("delete wiki issue references: %w", err)
+		}
 		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiPageLink{}).Error; err != nil {
 			return fmt.Errorf("delete wiki page links: %w", err)
-		}
-		if err := tx.Where("repository_id = ?", repoID).Delete(&db.WikiDirIndex{}).Error; err != nil {
-			return fmt.Errorf("delete wiki dir index: %w", err)
 		}
 		if err := tx.Where("page_id IN (?)", pageIDs).Delete(&db.WikiPageRevision{}).Error; err != nil {
 			return fmt.Errorf("delete wiki page revisions: %w", err)

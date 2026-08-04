@@ -235,6 +235,12 @@ func TestWikiWrites_RecreateMissingGitProjection_Issue1446(t *testing.T) {
 	if !svc.Git.Exists(ctx, full+".wiki") {
 		t.Fatalf("wiki projection was not recreated after MoveWikiPage")
 	}
+	if body, err := svc.Git.ReadFile(ctx, full+".wiki", "guides/intro.md"); err != nil || string(body) != "# Intro\n" {
+		t.Fatalf("rebuilt moved page body = %q, err = %v", body, err)
+	}
+	if body, err := svc.Git.ReadFile(ctx, full+".wiki", "tutorial/deep/link.md"); err != nil || string(body) != "# Deep\n" {
+		t.Fatalf("rebuilt untouched page body = %q, err = %v", body, err)
+	}
 
 	if err := svc.Git.Delete(ctx, full+".wiki"); err != nil {
 		t.Fatalf("delete wiki projection before bulk move: %v", err)

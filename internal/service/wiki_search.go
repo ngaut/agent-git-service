@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"html"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/embedding"
-	applog "github.com/ngaut/agent-git-service/internal/logging"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 
 	"gorm.io/gorm"
@@ -2016,50 +2016,12 @@ func highlightSnippet(snippet, query string) string {
 	return out
 }
 
-func (s *Service) queueWikiSearchUpsert(ctx context.Context, repoFullName string, page WikiPage) {
-	s.Wg.Add(1)
-	go func() {
-		defer s.Wg.Done()
-		bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
-		if scopedDB, ok := DBFromContext(ctx); ok {
-			bgCtx = ContextWithDB(bgCtx, scopedDB)
-		}
-		repo, err := s.LookupRepoIdentity(bgCtx, repoFullName)
-		if err != nil {
-			slog.WarnContext(bgCtx, "wiki search index update skipped", "repo", repoFullName, "slug", page.Slug, "error", err)
-			return
-		}
-		mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(bgCtx, repo))
-		mu.Lock()
-		err = s.upsertWikiSearchDocument(bgCtx, repoFullName, page)
-		mu.Unlock()
-		if err != nil {
-			slog.WarnContext(bgCtx, "wiki search index update failed", "repo", repoFullName, "slug", page.Slug, "error", err)
-		}
-	}()
+func (s *Service) syncWikiSearchUpsert(ctx context.Context, repoFullName string, page WikiPage) error {
+	return s.upsertWikiSearchDocument(ctx, repoFullName, page)
 }
 
-func (s *Service) queueWikiSearchDelete(ctx context.Context, repoFullName, slug string) {
-	s.Wg.Add(1)
-	go func() {
-		defer s.Wg.Done()
-		bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
-		if scopedDB, ok := DBFromContext(ctx); ok {
-			bgCtx = ContextWithDB(bgCtx, scopedDB)
-		}
-		repo, err := s.LookupRepoIdentity(bgCtx, repoFullName)
-		if err != nil {
-			slog.WarnContext(bgCtx, "wiki search index delete skipped", "repo", repoFullName, "slug", slug, "error", err)
-			return
-		}
-		mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(bgCtx, repo))
-		mu.Lock()
-		err = s.deleteWikiSearchDocument(bgCtx, repoFullName, slug)
-		mu.Unlock()
-		if err != nil {
-			slog.WarnContext(bgCtx, "wiki search index delete failed", "repo", repoFullName, "slug", slug, "error", err)
-		}
-	}()
+func (s *Service) syncWikiSearchDelete(ctx context.Context, repoFullName, slug string) error {
+	return s.deleteWikiSearchDocument(ctx, repoFullName, slug)
 }
 
 func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName string, page WikiPage) error {
@@ -2067,12 +2029,25 @@ func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName str
 	if err != nil {
 		return err
 	}
+	if err := s.upsertWikiSearchLexicalDocument(ctx, repo.ID, page); err != nil {
+		return err
+	}
+	if s.Embedder == nil || embedding.IsNop(s.Embedder) {
+		return nil
+	}
+	if err := s.embedWikiSearchDocument(ctx, repo.ID, page); err != nil {
+		slog.WarnContext(ctx, "wiki search embedding failed; lexical document remains available", "repo", repoFullName, "slug", page.Slug, "error", err)
+	}
+	return nil
+}
+
+func (s *Service) upsertWikiSearchLexicalDocument(ctx context.Context, repoID uint, page WikiPage) error {
 	targetDB := s.DBForCtx(ctx)
 	title := titleFromSlug(page.Slug)
 	labelDigest := wikiPageLabelsText(page.Labels)
 	now := time.Now()
 	values := map[string]any{
-		"repository_id": repo.ID,
+		"repository_id": repoID,
 		"slug":          page.Slug,
 		"title":         title,
 		"body":          db.LargeText(page.Body),
@@ -2082,29 +2057,83 @@ func (s *Service) upsertWikiSearchDocument(ctx context.Context, repoFullName str
 		"updated_at":    now,
 	}
 	updateColumns := []string{"title", "body", "revision_sha", "label_digest", "updated_at"}
-	if s.Embedder != nil && !embedding.IsNop(s.Embedder) {
-		text := title + "\n" + labelDigest + "\n" + page.Body
-		hasEmbeddingColumn := targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
-		vec, err := s.embedWithRetry(ctx, text)
-		if err != nil {
-			slog.WarnContext(ctx, "wiki search embedding failed; storing lexical document only", "repo", repoFullName, "slug", page.Slug, "error", err)
-			if hasEmbeddingColumn {
-				values["embedding"] = nil
-				updateColumns = append(updateColumns, "embedding")
-			}
-		} else if len(vec) > 0 {
-			s.ensureVectorInit(targetDB, len(vec))
-			hasEmbeddingColumn = targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
-			if hasEmbeddingColumn {
-				values["embedding"] = embedding.FormatVector(vec)
-				updateColumns = append(updateColumns, "embedding")
-			}
-		}
+	if s.Embedder != nil &&
+		!embedding.IsNop(s.Embedder) &&
+		s.wikiSearchEmbeddingColumnAvailable(targetDB) {
+		values["embedding"] = nil
+		updateColumns = append(updateColumns, "embedding")
 	}
 	return targetDB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "repository_id"}, {Name: "slug"}},
 		DoUpdates: clause.AssignmentColumns(updateColumns),
 	}).Model(&db.WikiSearchDocument{}).Create(values).Error
+}
+
+func (s *Service) wikiSearchEmbeddingColumnAvailable(targetDB *gorm.DB) bool {
+	if targetDB == nil {
+		return false
+	}
+	sqlDB, err := s.sqlDBHandle(targetDB)
+	if err != nil {
+		return targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
+	}
+
+	s.wikiSearchEmbeddingColumnMu.Lock()
+	defer s.wikiSearchEmbeddingColumnMu.Unlock()
+	if available, checked := s.wikiSearchEmbeddingColumns[sqlDB]; checked {
+		return available
+	}
+	if s.wikiSearchEmbeddingColumns == nil {
+		s.wikiSearchEmbeddingColumns = make(map[*sql.DB]bool)
+	}
+	available := targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
+	s.wikiSearchEmbeddingColumns[sqlDB] = available
+	return available
+}
+
+func (s *Service) refreshWikiSearchEmbeddingColumn(targetDB *gorm.DB) {
+	if targetDB == nil {
+		return
+	}
+	sqlDB, err := s.sqlDBHandle(targetDB)
+	if err != nil {
+		return
+	}
+	available := targetDB.Migrator().HasColumn("wiki_search_documents", "embedding")
+
+	s.wikiSearchEmbeddingColumnMu.Lock()
+	defer s.wikiSearchEmbeddingColumnMu.Unlock()
+	if s.wikiSearchEmbeddingColumns == nil {
+		s.wikiSearchEmbeddingColumns = make(map[*sql.DB]bool)
+	}
+	s.wikiSearchEmbeddingColumns[sqlDB] = available
+}
+
+func (s *Service) embedWikiSearchDocument(ctx context.Context, repoID uint, page WikiPage) error {
+	title := titleFromSlug(page.Slug)
+	labelDigest := wikiPageLabelsText(page.Labels)
+	vec, err := s.embedWithRetry(ctx, title+"\n"+labelDigest+"\n"+page.Body)
+	if err != nil {
+		return err
+	}
+	if len(vec) == 0 {
+		return nil
+	}
+
+	targetDB := s.DBForCtx(ctx)
+	s.ensureVectorInit(targetDB, len(vec))
+	if !s.wikiSearchEmbeddingColumnAvailable(targetDB) {
+		return nil
+	}
+	return targetDB.Model(&db.WikiSearchDocument{}).
+		Where(
+			"repository_id = ? AND slug = ? AND revision_sha = ? AND label_digest = ?",
+			repoID,
+			page.Slug,
+			page.SHA,
+			labelDigest,
+		).
+		UpdateColumn("embedding", embedding.FormatVector(vec)).Error
 }
 
 func (s *Service) deleteWikiSearchDocument(ctx context.Context, repoFullName, slug string) error {

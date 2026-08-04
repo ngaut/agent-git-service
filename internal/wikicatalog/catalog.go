@@ -14,9 +14,9 @@ import (
 )
 
 // Catalog is the wiki storage catalog. It owns the SQL access for all
-// wiki_* tables, owns the blob CAS, and exposes ApplyChangeSet as the
-// single write entry point. Callers (REST handlers, git ingest, future
-// push ingestion) all funnel through this struct.
+// wiki_* tables, owns the blob CAS, and exposes direct and prepared changeset
+// write paths. Callers (REST handlers, git ingest, future push ingestion) all
+// funnel through this struct.
 type Catalog struct {
 	DB   *gorm.DB
 	Blob *BlobStore
@@ -305,20 +305,8 @@ func computeSynthCommitSHA(repoID uint, parentID *uint64, committedAt time.Time,
 	return hex.EncodeToString(sum[:])
 }
 
-// splitParentLeaf returns (parent_dir, leaf_name) for a slug. Parent
-// dirs use the same slash-joined form as the slug.
-func splitParentLeaf(slug string) (parent, leaf string) {
-	idx := strings.LastIndex(slug, "/")
-	if idx < 0 {
-		return "", slug
-	}
-	return slug[:idx], slug[idx+1:]
-}
-
-// parentChain returns the list of intermediate directories that must
-// exist for slug's leaf to live in. For "a/b/c", chain = ["a", "a/b"];
-// the leaf row at parent_dir="a/b", child_name="c" is the caller's
-// concern.
+// parentChain returns every exact ancestor slug that could collide with slug.
+// For "a/b/c", chain = ["a", "a/b"].
 func parentChain(slug string) []string {
 	if slug == "" {
 		return nil

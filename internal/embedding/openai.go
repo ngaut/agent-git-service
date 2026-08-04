@@ -105,7 +105,7 @@ func (o *OpenAI) Embed(ctx context.Context, text string) ([]float32, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, httputil.StatusError("embedding: API returned", resp, 4096)
+		return nil, newAPIError(resp.StatusCode, httputil.ErrorBody(resp.Body, 4096))
 	}
 
 	// Cap success-path read to 2MB. A typical embedding response is tens of KB.

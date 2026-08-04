@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"database/sql"
 	"log/slog"
 	"math/rand"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -125,11 +124,14 @@ func (s *Service) embedWithRetry(ctx context.Context, text string) ([]float32, e
 		lastErr = err
 
 		// Only retry transient errors (429, 5xx, network timeouts)
-		if !isTransientError(err) {
+		if !embedding.IsRetryableError(err) {
 			return nil, err
 		}
+		if attempt == maxRetries-1 {
+			break
+		}
 
-		// Exponential backoff with jitter: 1s, 2s, 4s base + random jitter
+		// Exponential backoff with jitter between attempts.
 		backoff := time.Duration(1<<attempt) * time.Second
 		jitter := time.Duration(rand.Int63n(int64(backoff)))
 		backoff += jitter
@@ -148,34 +150,7 @@ func (s *Service) embedWithRetry(ctx context.Context, text string) ([]float32, e
 // isTransientError reports whether an error is transient and should be retried.
 // Transient errors include: HTTP 429 (rate limit), 5xx server errors, network timeouts.
 func isTransientError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-
-	// Check for rate limit (429)
-	if strings.Contains(errStr, "429") || strings.Contains(errStr, "RATE_CONCURRENCY_LIMIT") {
-		return true
-	}
-
-	// Check for 5xx server errors
-	for _, code := range []int{500, 502, 503, 504} {
-		if strings.Contains(errStr, fmt.Sprintf("%d", code)) {
-			return true
-		}
-	}
-
-	// Check for network timeouts
-	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded") {
-		return true
-	}
-
-	// Check for connection errors
-	if strings.Contains(errStr, "connection") || strings.Contains(errStr, "EOF") {
-		return true
-	}
-
-	return false
+	return embedding.IsRetryableError(err)
 }
 
 // ensureVectorInit ensures the embedding column exists on the target DB.
@@ -184,20 +159,27 @@ func (s *Service) ensureVectorInit(targetDB *gorm.DB, dims int) {
 	if targetDB == nil {
 		return
 	}
+	sqlDB, err := s.sqlDBHandle(targetDB)
+	if err != nil {
+		db.InitVector(targetDB, dims)
+		s.refreshWikiSearchEmbeddingColumn(targetDB)
+		return
+	}
 
 	s.vectorInitMu.Lock()
 	defer s.vectorInitMu.Unlock()
 
 	if s.vectorInitDBs == nil {
-		s.vectorInitDBs = make(map[*gorm.DB]bool)
+		s.vectorInitDBs = make(map[*sql.DB]bool)
 	}
-	if s.vectorInitDBs[targetDB] {
+	if s.vectorInitDBs[sqlDB] {
 		return // Already initialized for this DB
 	}
 
 	// InitVector is idempotent - safe to call multiple times
 	db.InitVector(targetDB, dims)
-	s.vectorInitDBs[targetDB] = true
+	s.vectorInitDBs[sqlDB] = true
+	s.refreshWikiSearchEmbeddingColumn(targetDB)
 }
 
 // EmbedIssue computes and stores an embedding for an issue's title + body.

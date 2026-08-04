@@ -21,6 +21,10 @@ func startRuntimeWorkers(deps *bootstrapDeps) {
 		return
 	}
 	startWikiCatalogGCWorker(deps.SvcDeps)
+	if deps.SvcDeps != nil {
+		deps.SvcDeps.StartWikiSearchProjectionWorker()
+		deps.SvcDeps.StartWikiReferenceEffectsRecoveryWorker()
+	}
 }
 
 func startWikiCatalogGCWorker(svc *service.Service) {
@@ -59,11 +63,16 @@ func runWikiCatalogGC(svc *service.Service) {
 		slog.WarnContext(ctx, "wiki catalog gc failed", "error", err)
 		return
 	}
-	if stats.PendingReclaimed == 0 && stats.BlobsReclaimed == 0 {
-		slog.DebugContext(ctx, "wiki catalog gc completed", "pending_reclaimed", 0, "blobs_reclaimed", 0)
+	if stats.InlineRefsReclaimed == 0 && stats.PendingReclaimed == 0 && stats.BlobsReclaimed == 0 {
+		slog.DebugContext(ctx, "wiki catalog gc completed",
+			"inline_refs_reclaimed", 0,
+			"pending_reclaimed", 0,
+			"blobs_reclaimed", 0,
+		)
 		return
 	}
 	slog.InfoContext(ctx, "wiki catalog gc reclaimed blobs",
+		"inline_refs_reclaimed", stats.InlineRefsReclaimed,
 		"pending_reclaimed", stats.PendingReclaimed,
 		"blobs_reclaimed", stats.BlobsReclaimed,
 	)

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1065,6 +1068,76 @@ func TestPutWikiPagePreconditionConflict_Issue1347(t *testing.T) {
 	if conflict.CurrentPage.SHA != next.SHA {
 		t.Fatalf("conflict current sha = %q, want %q", conflict.CurrentPage.SHA, next.SHA)
 	}
+}
+
+func TestPutWikiPagePreconditionConflictDoesNotPrepareGitObjects(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := svc.DB.Create(&db.User{Login: "testuser", Name: "testuser", Type: db.TypeUser}).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: "testuser",
+		Name:       "wiki-conflict-no-prepare",
+		AutoInit:   true,
+	}); err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+
+	full := "testuser/wiki-conflict-no-prepare"
+	page, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nv1", "create home", "")
+	if err != nil {
+		t.Fatalf("PutWikiPage(create): %v", err)
+	}
+	if _, err := svc.PutWikiPage(ctx, full, "home", "# Home\n\nv2", "update home", page.SHA); err != nil {
+		t.Fatalf("PutWikiPage(update): %v", err)
+	}
+
+	repoPath, err := svc.Git.GetRepoPath(ctx, full+".wiki")
+	if err != nil {
+		t.Fatalf("GetRepoPath: %v", err)
+	}
+	beforeCount, err := countLooseGitObjects(filepath.Join(repoPath, "objects"))
+	if err != nil {
+		t.Fatalf("countLooseGitObjects(before): %v", err)
+	}
+
+	_, err = svc.PutWikiPage(ctx, full, "home", "# Home\n\nstale", "stale home", page.SHA)
+	var conflict *service.WikiConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected WikiConflictError, got %v", err)
+	}
+
+	afterCount, err := countLooseGitObjects(filepath.Join(repoPath, "objects"))
+	if err != nil {
+		t.Fatalf("countLooseGitObjects(after): %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("stale write created loose git objects: before=%d after=%d", beforeCount, afterCount)
+	}
+}
+
+func countLooseGitObjects(objectsDir string) (int, error) {
+	count := 0
+	err := filepath.WalkDir(objectsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == "info" || name == "pack" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info, statErr := os.Stat(path); statErr == nil && info.Size() > 0 {
+			count++
+		}
+		return nil
+	})
+	return count, err
 }
 
 func TestMoveWikiPage_RewritesInboundLinksAndSkipsMalformedPages_Issue1361(t *testing.T) {

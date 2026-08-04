@@ -84,6 +84,9 @@ func shouldApplyConditionalETag(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
+	if UsesWikiNavigationETag(r) {
+		return false
+	}
 
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) >= 4 && parts[0] == "api" && parts[1] == "ext" && parts[2] == "v1" {
@@ -109,6 +112,70 @@ func shouldApplyConditionalETag(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+// UsesWikiNavigationETag identifies live Wiki navigation responses whose
+// representation is fully versioned by the Wiki head. Their handlers can
+// answer If-None-Match before loading and serializing a large tree.
+func UsesWikiNavigationETag(r *http.Request) bool {
+	if r == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		return false
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 8 || parts[0] != "api" || parts[1] != "ext" || parts[2] != "v1" || parts[3] != "repos" || parts[6] != "wiki" {
+		return false
+	}
+	switch parts[7] {
+	case "tree":
+		return strings.TrimSpace(r.URL.Query().Get("ref")) == ""
+	case "catalog":
+		if hasCSVQueryValues(r.URL.Query().Get("labels")) || hasCSVQueryValues(r.URL.Query().Get("exclude_labels")) {
+			return false
+		}
+		include := map[string]bool{}
+		for _, raw := range strings.Split(r.URL.Query().Get("include"), ",") {
+			name := strings.ToLower(strings.TrimSpace(raw))
+			if name != "" {
+				include[name] = true
+			}
+		}
+		return include["tree"] && !include["pages"] && !include["labels"]
+	default:
+		return false
+	}
+}
+
+func hasCSVQueryValues(raw string) bool {
+	for _, value := range strings.Split(raw, ",") {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// BuildSemanticETag returns a weak validator for a versioned representation.
+func BuildSemanticETag(r *http.Request, namespace, version string) string {
+	sum := sha256.Sum256([]byte(namespace + "\x00" + version + "\x00" + r.URL.EscapedPath() + "\x00" + r.URL.Query().Encode()))
+	return fmt.Sprintf("W/\"%x\"", sum)
+}
+
+// SetSemanticETag publishes a validator after the representation was built
+// successfully.
+func SetSemanticETag(w http.ResponseWriter, etag string) {
+	w.Header().Set("ETag", etag)
+	appendVary(w.Header(), "Authorization")
+}
+
+// WriteSemanticNotModified completes a matching conditional request with 304.
+func WriteSemanticNotModified(w http.ResponseWriter, r *http.Request, etag string) bool {
+	if !ifNoneMatchMatches(r.Header.Get("If-None-Match"), etag) {
+		return false
+	}
+	SetSemanticETag(w, etag)
+	w.Header().Del("Content-Length")
+	w.WriteHeader(http.StatusNotModified)
+	return true
 }
 
 func matchExtensionETagPath(parts []string) bool {
@@ -194,7 +261,10 @@ func isJSONContentType(contentType string) bool {
 
 func buildETag(body []byte) string {
 	sum := sha256.Sum256(body)
-	return fmt.Sprintf("\"%x\"", sum)
+	// Compression is negotiated outside this middleware, so the same logical
+	// response can have different wire bytes. A weak validator is valid across
+	// those content codings while still serving GET/HEAD revalidation.
+	return fmt.Sprintf("W/\"%x\"", sum)
 }
 
 func ifNoneMatchMatches(headerValue, candidate string) bool {
@@ -222,14 +292,30 @@ func weakETag(tag string) string {
 }
 
 func appendVary(header http.Header, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+
+	values := make([]string, 0, len(header.Values("Vary"))+1)
 	for _, existing := range header.Values("Vary") {
 		for _, part := range strings.Split(existing, ",") {
-			if strings.EqualFold(strings.TrimSpace(part), value) {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if part == "*" || strings.EqualFold(part, value) {
 				return
 			}
+			values = append(values, part)
 		}
 	}
-	header.Add("Vary", value)
+	if value == "*" {
+		header.Set("Vary", value)
+		return
+	}
+	values = append(values, value)
+	header.Set("Vary", strings.Join(values, ", "))
 }
 
 func mergeHeader(dst, src http.Header) {

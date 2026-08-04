@@ -13,18 +13,21 @@ import (
 
 // GCStats reports what one GCRun reclaimed.
 type GCStats struct {
-	PendingReclaimed int // wiki_pending_blobs rows + matching CAS files removed
-	BlobsReclaimed   int // wiki_blob_refs rows with refcount=0 reclaimed
+	InlineRefsReclaimed int // legacy inline-body wiki_blob_refs rows removed
+	PendingReclaimed    int // wiki_pending_blobs rows + matching CAS files removed
+	BlobsReclaimed      int // wiki_blob_refs rows with refcount=0 reclaimed
 }
 
-// GCRun reclaims orphaned blobs and zero-refcount entries. The
-// operation is two-phase and idempotent:
+// GCRun reclaims obsolete ref rows, orphaned blobs, and zero-refcount entries.
+// The operation is three-phase and idempotent:
 //
-//  1. wiki_pending_blobs rows older than pendingTTL whose SHA has no
+//  1. Legacy wiki_blob_refs rows for inline bodies are removed. Inline bodies
+//     never materialize in the filesystem CAS.
+//  2. wiki_pending_blobs rows older than pendingTTL whose SHA has no
 //     wiki_blob_refs row mean an upload landed but the SQL
 //     transaction failed; reclaim the CAS file and delete the
 //     pending row.
-//  2. wiki_blob_refs rows with refcount=0 older than refcountTTL
+//  3. wiki_blob_refs rows with refcount=0 older than refcountTTL
 //     mean every reference is gone; reclaim the CAS file (if any)
 //     and delete the refcount row.
 //
@@ -39,7 +42,19 @@ type GCStats struct {
 func (c *Catalog) GCRun(ctx context.Context, now time.Time, pendingTTL, refcountTTL time.Duration) (GCStats, error) {
 	var stats GCStats
 
-	// Phase 1: orphan pending blobs — rows older than pendingTTL
+	// Phase 1: old versions wrote ref rows for inline bodies even though no
+	// filesystem object exists. A single guarded delete removes that metadata;
+	// it is safe during rolling deploys because old writers may recreate the
+	// rows, and a later GC pass will remove them again.
+	inlineRefs := c.db(ctx).
+		Where("size <= ?", MaxBodyInlineBytes).
+		Delete(&db.WikiBlobRef{})
+	if inlineRefs.Error != nil {
+		return stats, fmt.Errorf("wiki gc: delete inline refs: %w", inlineRefs.Error)
+	}
+	stats.InlineRefsReclaimed = int(inlineRefs.RowsAffected)
+
+	// Phase 2: orphan pending blobs — rows older than pendingTTL
 	// with no matching wiki_blob_refs row. One LEFT JOIN reads
 	// exactly the reclaimable set instead of fetching every pending
 	// row and then point-querying refs per orphan.
@@ -64,7 +79,7 @@ func (c *Catalog) GCRun(ctx context.Context, now time.Time, pendingTTL, refcount
 		}
 	}
 
-	// Phase 2: zero-refcount blobs.
+	// Phase 3: zero-refcount blobs.
 	refcountCutoff := now.Add(-refcountTTL)
 	var zeros []db.WikiBlobRef
 	err = c.db(ctx).

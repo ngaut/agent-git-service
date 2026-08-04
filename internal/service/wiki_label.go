@@ -39,10 +39,15 @@ func (s *Service) AddWikiPageLabels(ctx context.Context, repoFullName, slug stri
 	if err != nil {
 		return nil, err
 	}
-	if err := s.addWikiPageLabels(ctx, rep.ID, slug, labels); err != nil {
+	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := addWikiPageLabels(tx, rep.ID, slug, labels); err != nil {
+			return err
+		}
+		return persistWikiSearchProjectionTasks(tx, rep.ID, []string{slug})
+	}); err != nil {
 		return nil, err
 	}
-	s.queueWikiSearchRefresh(ctx, repoFullName, slug)
+	s.kickWikiSearchProjection(ctx, 1)
 	return s.listWikiPageLabelsBySlug(ctx, rep.ID, slug)
 }
 
@@ -69,11 +74,11 @@ func (s *Service) SetWikiPageLabels(ctx context.Context, repoFullName, slug stri
 				return err
 			}
 		}
-		return nil
+		return persistWikiSearchProjectionTasks(tx, rep.ID, []string{slug})
 	}); err != nil {
 		return nil, err
 	}
-	s.queueWikiSearchRefresh(ctx, repoFullName, slug)
+	s.kickWikiSearchProjection(ctx, 1)
 	return s.listWikiPageLabelsBySlug(ctx, rep.ID, slug)
 }
 
@@ -90,12 +95,17 @@ func (s *Service) RemoveWikiPageLabel(ctx context.Context, repoFullName, slug, l
 	if err != nil {
 		return nil, err
 	}
-	if err := s.DBForCtx(ctx).
-		Where("repository_id = ? AND slug = ? AND label_id = ?", rep.ID, slug, label.ID).
-		Delete(&db.WikiPageLabel{}).Error; err != nil {
+	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.
+			Where("repository_id = ? AND slug = ? AND label_id = ?", rep.ID, slug, label.ID).
+			Delete(&db.WikiPageLabel{}).Error; err != nil {
+			return err
+		}
+		return persistWikiSearchProjectionTasks(tx, rep.ID, []string{slug})
+	}); err != nil {
 		return nil, err
 	}
-	s.queueWikiSearchRefresh(ctx, repoFullName, slug)
+	s.kickWikiSearchProjection(ctx, 1)
 	return s.listWikiPageLabelsBySlug(ctx, rep.ID, slug)
 }
 
@@ -108,10 +118,15 @@ func (s *Service) RemoveAllWikiPageLabels(ctx context.Context, repoFullName, slu
 	if err := s.ensureWikiPageForLabels(ctx, repoFullName, slug); err != nil {
 		return err
 	}
-	if err := s.DBForCtx(ctx).Where("repository_id = ? AND slug = ?", rep.ID, slug).Delete(&db.WikiPageLabel{}).Error; err != nil {
+	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("repository_id = ? AND slug = ?", rep.ID, slug).Delete(&db.WikiPageLabel{}).Error; err != nil {
+			return err
+		}
+		return persistWikiSearchProjectionTasks(tx, rep.ID, []string{slug})
+	}); err != nil {
 		return err
 	}
-	s.queueWikiSearchRefresh(ctx, repoFullName, slug)
+	s.kickWikiSearchProjection(ctx, 1)
 	return nil
 }
 
@@ -161,10 +176,10 @@ func (s *Service) listWikiPageLabelsBySlug(ctx context.Context, repoID uint, slu
 	return labels, nil
 }
 
-func (s *Service) addWikiPageLabels(ctx context.Context, repoID uint, slug string, labels []db.Label) error {
+func addWikiPageLabels(database *gorm.DB, repoID uint, slug string, labels []db.Label) error {
 	for _, label := range labels {
 		link := db.WikiPageLabel{RepositoryID: repoID, Slug: slug, LabelID: label.ID}
-		if err := s.DBForCtx(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&link).Error; err != nil {
+		if err := database.Clauses(clause.OnConflict{DoNothing: true}).Create(&link).Error; err != nil {
 			return err
 		}
 	}
@@ -175,11 +190,12 @@ func (s *Service) deleteWikiPageLabels(ctx context.Context, repoID uint, slug st
 	return s.DBForCtx(ctx).Where("repository_id = ? AND slug = ?", repoID, slug).Delete(&db.WikiPageLabel{}).Error
 }
 
-func (s *Service) moveWikiPageLabels(ctx context.Context, repoID uint, remaps map[string]string) error {
+func (s *Service) moveWikiPageLabels(ctx context.Context, repoID uint, remaps map[string]string) (int, error) {
 	if len(remaps) == 0 {
-		return nil
+		return 0, nil
 	}
-	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+	targetSlugs := make([]string, 0, len(remaps))
+	err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 		for from, to := range remaps {
 			var links []db.WikiPageLabel
 			if err := tx.Where("repository_id = ? AND slug = ?", repoID, from).Find(&links).Error; err != nil {
@@ -188,6 +204,7 @@ func (s *Service) moveWikiPageLabels(ctx context.Context, repoID uint, remaps ma
 			if len(links) == 0 {
 				continue
 			}
+			targetSlugs = append(targetSlugs, to)
 			if err := tx.Where("repository_id = ? AND slug = ?", repoID, from).Delete(&db.WikiPageLabel{}).Error; err != nil {
 				return err
 			}
@@ -198,8 +215,9 @@ func (s *Service) moveWikiPageLabels(ctx context.Context, repoID uint, remaps ma
 				}
 			}
 		}
-		return nil
+		return persistWikiSearchProjectionTasks(tx, repoID, targetSlugs)
 	})
+	return len(uniqueStrings(targetSlugs)), err
 }
 
 func (s *Service) wikiLabelsForSlugs(ctx context.Context, repoID uint, slugs []string) (map[string][]db.Label, error) {
@@ -324,20 +342,6 @@ func (s *Service) wikiSlugsMatchingLabelFilters(ctx context.Context, repoID uint
 
 func hasWikiLabelFilters(filters WikiLabelFilters) bool {
 	return len(uniqueLabelNames(filters.Labels)) > 0 || len(uniqueLabelNames(filters.ExcludeLabels)) > 0
-}
-
-func (s *Service) queueWikiSearchRefresh(ctx context.Context, repoFullName, slug string) {
-	page, err := s.GetWikiPage(ctx, repoFullName, slug)
-	if err != nil {
-		return
-	}
-	s.queueWikiSearchUpsert(ctx, repoFullName, page)
-}
-
-func (s *Service) queueWikiSearchRefreshBySlugs(ctx context.Context, repoFullName string, slugs []string) {
-	for _, slug := range uniqueStrings(slugs) {
-		s.queueWikiSearchRefresh(ctx, repoFullName, slug)
-	}
 }
 
 func (s *Service) wikiPageSlugsForLabelIDs(ctx context.Context, repoID uint, labelIDs []uint) ([]string, error) {

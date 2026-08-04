@@ -78,7 +78,7 @@ const (
 	SourcePush    Source = "push" // reserved for the future git façade
 )
 
-// ChangeSetRequest is the input to ApplyChangeSet.
+// ChangeSetRequest is the input to ApplyChangeSet and PrepareChangeSet.
 type ChangeSetRequest struct {
 	RepositoryID   uint
 	AuthorID       *uint
@@ -87,12 +87,11 @@ type ChangeSetRequest struct {
 	Source         Source
 	Changes        []Change
 
-	// OverrideCommitSHA pins the synth_commit_sha for this changeset
-	// instead of letting the catalog mint one. Git ingest uses this to
-	// keep the original git commit SHA, including empty git commits, so
-	// existing GetWikiPage?ref=<sha> requests and history sampling continue
-	// to resolve after the catalog cutover. Must be 40 lowercase hex
-	// characters.
+	// OverrideCommitSHA pins the synth_commit_sha for this changeset instead
+	// of letting the catalog mint one. Git ingest uses it to preserve an
+	// existing commit; REST writes use it after preparing the materialized
+	// Git object so the catalog stores the real SHA without a backfill
+	// transaction. Must be 40 lowercase hex characters.
 	OverrideCommitSHA string
 
 	// OverrideCommittedAt pins wiki_changesets.committed_at and the
@@ -101,26 +100,102 @@ type ChangeSetRequest struct {
 	OverrideCommittedAt *time.Time
 }
 
+// HeadProjectionState is the materialized-Git status captured atomically with
+// a change-set snapshot. Callers can use it to avoid rereading the current
+// changeset before an external consistency check.
+type HeadProjectionState struct {
+	Exists                             bool
+	ChangesetID                        uint64
+	CommitSHA                          string
+	Source                             Source
+	SynthFormatVersion                 int16
+	PendingProjectionCount             int64
+	ReferenceEffectsThroughChangesetID *uint64
+	// GitRepairObligationExists prevents the service from taking the healthy
+	// REST fast path while a durable receive-pack repair remains unresolved.
+	GitRepairObligationExists bool
+}
+
+// ChangeSetSnapshot contains the repository head and page state read by
+// SnapshotChangeSet. It has not yet passed conflict validation and therefore
+// cannot be submitted to ApplyPreparedChangeSet.
+type ChangeSetSnapshot struct {
+	plan            changesetPlan
+	headChangesetID uint64
+	headProjection  HeadProjectionState
+	preRead         preReadPages
+}
+
+// HeadProjection returns a copy of the projection state captured with the
+// snapshot.
+func (s *ChangeSetSnapshot) HeadProjection() HeadProjectionState {
+	if s == nil {
+		return HeadProjectionState{}
+	}
+	return s.headProjection
+}
+
+// PreparedChangeSet is a validated, read-only snapshot produced by
+// PrepareChangeSet or ValidateChangeSetSnapshot. Its fields are intentionally
+// private so callers cannot alter the page state or repository-head token it
+// captured.
+//
+// ApplyPreparedChangeSet conditionally advances wiki_repo_heads and accepts
+// this snapshot only while the token still matches. Since every catalog
+// mutation advances that head in the same transaction, a match proves the page
+// and directory reads are still current without repeating them after an
+// external Git prepare.
+type PreparedChangeSet struct {
+	*ChangeSetSnapshot
+}
+
+// UpsertDisposition describes which storage path an OpUpsert took.
+type UpsertDisposition uint8
+
+const (
+	UpsertDispositionUnknown UpsertDisposition = iota
+	UpsertDispositionCreate
+	UpsertDispositionUpdate
+	UpsertDispositionRestore
+)
+
 // ChangeResult is the per-Change outcome surfaced to the caller, in
 // ChangeSetResult.Changes. The slice indices match the input slice
 // order so callers can correlate Result[i] with Request.Changes[i].
 type ChangeResult struct {
-	Op         Op
-	Slug       string // post-change slug (NewSlug for rename, Slug otherwise)
-	PrevSlug   string // pre-change slug; only set for OpRename and OpDelete
-	PageID     uint64
-	RevisionID uint64
-	BlobSHA    string // empty for OpDelete
-	BodySize   int
+	Op                Op
+	UpsertDisposition UpsertDisposition // only set for OpUpsert
+	Slug              string            // post-change slug (NewSlug for rename, Slug otherwise)
+	PrevSlug          string            // pre-change slug; only set for OpRename and OpDelete
+	PageID            uint64
+	RevisionID        uint64
+	BlobSHA           string // empty for OpDelete
+	BodySize          int
+	// Body is carried to the synchronous post-commit hook so it does not
+	// re-read a page or blob that ApplyChangeSet just wrote. It aliases the
+	// request body and is valid for the duration of ApplyChangeSet and its
+	// hook; BodyAvailable distinguishes an empty body from an unavailable
+	// body on a rename that reused existing content.
+	Body          []byte
+	BodyAvailable bool
 }
 
 // ChangeSetResult is the return of ApplyChangeSet.
 type ChangeSetResult struct {
-	ChangesetID uint64
-	ParentID    *uint64
-	CommitSHA   string
-	Source      Source
-	Changes     []ChangeResult
+	ChangesetID             uint64
+	ParentID                *uint64
+	CommitSHA               string
+	CommitSHAOverridden     bool
+	Message                 string
+	CommittedAt             time.Time
+	Source                  Source
+	Changes                 []ChangeResult
+	ReferenceEffectsPending bool
+	// ReferenceEffectsCoalesced is true when this changeset advanced an
+	// already-pending durable reference-effects cursor. A successful
+	// incremental job for only this changeset must leave the cursor for a full
+	// rebuild, because earlier failed effects may still be unrepaired.
+	ReferenceEffectsCoalesced bool
 }
 
 // Typed errors returned by ApplyChangeSet. Callers (the REST layer)
@@ -176,13 +251,6 @@ const (
 	revOpRename  = "rename"
 	revOpDelete  = "delete"
 	revOpRestore = "restore"
-)
-
-// Directory-index entry kinds stored in wiki_dir_index.child_kind.
-// Package-internal.
-const (
-	childKindBlob = "blob"
-	childKindTree = "tree"
 )
 
 // Per-changeset quotas. Enforced in planChangeSet so the entire

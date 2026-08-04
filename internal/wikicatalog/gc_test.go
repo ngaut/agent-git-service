@@ -115,6 +115,35 @@ func TestGCRun_ReclaimsZeroRefcountBlobs(t *testing.T) {
 	}
 }
 
+func TestGCRun_ReclaimsLegacyInlineRefs(t *testing.T) {
+	cat, _, gdb := applyTestEnv(t)
+	ctx := context.Background()
+
+	body := []byte("legacy inline body")
+	sha := HashContent(body)
+	seen := time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC)
+	if err := gdb.Create(&db.WikiBlobRef{
+		BlobSHA: sha, Refcount: 7, Size: len(body), FirstSeen: seen, LastSeen: seen,
+	}).Error; err != nil {
+		t.Fatalf("plant inline ref: %v", err)
+	}
+
+	stats, err := cat.GCRun(ctx, seen, 1*time.Hour, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("GCRun: %v", err)
+	}
+	if stats.InlineRefsReclaimed != 1 {
+		t.Fatalf("InlineRefsReclaimed = %d, want 1", stats.InlineRefsReclaimed)
+	}
+	var remaining int64
+	if err := gdb.Model(&db.WikiBlobRef{}).Where("blob_sha = ?", sha).Count(&remaining).Error; err != nil {
+		t.Fatalf("count inline ref: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("legacy inline ref not deleted; count=%d", remaining)
+	}
+}
+
 func TestGCRun_SkipsPendingWithLiveRef(t *testing.T) {
 	cat, repoID, gdb := applyTestEnv(t)
 	ctx := context.Background()

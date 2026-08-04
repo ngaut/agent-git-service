@@ -13,6 +13,7 @@ import (
 	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	gitcfg "github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
@@ -30,6 +31,10 @@ type Store struct {
 	root string
 
 	repoLocks sync.Map // per-repo mutexes for write operations
+
+	commitTreeCacheMu    sync.Mutex
+	commitTreeCache      map[string]commitTreeCacheEntry
+	commitTreeCacheOrder []string
 }
 
 // repoLock returns a mutex for the given repo, creating one if needed.
@@ -113,7 +118,7 @@ func (s *Store) open(ctx context.Context, fullName string) (*git.Repository, err
 	if err != nil {
 		return nil, err
 	}
-	stg := filesystem.NewStorage(osfs.New(dir), nil)
+	stg := filesystem.NewStorage(osfs.New(dir), cache.NewObjectLRUDefault())
 	repo, err := git.Open(stg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gitstore: open %s: %w", fullName, err)

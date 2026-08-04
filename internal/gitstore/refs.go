@@ -213,9 +213,13 @@ func (s *Store) IsAncestor(ctx context.Context, fullName, older, newer string) (
 		return false, err
 	}
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "merge-base", "--is-ancestor", older, newer)
-	if err := cmd.Run(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return false, nil
+		}
+		if commitLookupNotFound(string(out)) {
+			return false, fmt.Errorf("%w: %s", plumbing.ErrObjectNotFound, strings.TrimSpace(string(out)))
 		}
 		return false, fmt.Errorf("git merge-base --is-ancestor: %w", err)
 	}

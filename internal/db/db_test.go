@@ -1,8 +1,11 @@
 package db
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	driversql "github.com/go-sql-driver/mysql"
 	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
 )
 
@@ -47,6 +50,84 @@ func TestDialectorForDSN(t *testing.T) {
 				t.Errorf("dialectorForDSN(%q) returned nil dialector", tt.dsn)
 			}
 		})
+	}
+}
+
+func TestRuntimeMySQLDSNEnablesInterpolation(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "no parameters", dsn: "user:pass@tcp(host:4000)/ags"},
+		{name: "preserves parameters", dsn: "user:pass@tcp(host:4000)/ags?charset=utf8mb4&parseTime=true&timeout=10s"},
+		{name: "safe collation", dsn: "user:pass@tcp(host:4000)/ags?collation=utf8mb4_unicode_ci&loc=UTC"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			optimizedDSN := runtimeMySQLDSN(tt.dsn)
+			got, err := driversql.ParseDSN(optimizedDSN)
+			if err != nil {
+				t.Fatalf("parse optimized DSN: %v", err)
+			}
+			if !got.InterpolateParams {
+				t.Fatal("InterpolateParams = false, want true")
+			}
+			if got.User != "user" || got.Passwd != "pass" || got.Net != "tcp" || got.Addr != "host:4000" || got.DBName != "ags" {
+				t.Fatalf("connection identity changed: %+v", got)
+			}
+			if tt.name == "preserves parameters" {
+				if !got.ParseTime || got.Timeout != 10*time.Second || !strings.Contains(optimizedDSN, "charset=utf8mb4") {
+					t.Fatalf("connection parameters changed: %+v", got)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimeMySQLDSNPreservesExplicitInterpolationOptOut(t *testing.T) {
+	const dsn = "user:pass@tcp(host:4000)/ags?interpolateParams=false&loc=UTC"
+	if got := runtimeMySQLDSN(dsn); got != dsn {
+		t.Fatalf("runtimeMySQLDSN() = %q, want %q", got, dsn)
+	}
+}
+
+func TestRuntimeMySQLDSNPreservesUnsafeCharacterSets(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "unsafe charset", dsn: "user:pass@tcp(host:4000)/ags?charset=gbk"},
+		{name: "unsafe quoted charset", dsn: "user:pass@tcp(host:4000)/ags?charset=%27gbk%27"},
+		{name: "unsafe gb18030 charset", dsn: "user:pass@tcp(host:4000)/ags?charset=gb18030"},
+		{name: "unsafe charset fallback", dsn: "user:pass@tcp(host:4000)/ags?charset=utf8mb4%2Cgbk&parseTime=true"},
+		{name: "unsafe collation", dsn: "user:pass@tcp(host:4000)/ags?collation=gbk_chinese_ci"},
+		{name: "unsafe gb2312 collation", dsn: "user:pass@tcp(host:4000)/ags?collation=gb2312_chinese_ci"},
+		{name: "unsafe gb18030 collation", dsn: "user:pass@tcp(host:4000)/ags?collation=gb18030_unicode_520_ci"},
+		{name: "unsafe client charset system variable", dsn: "user:pass@tcp(host:4000)/ags?character_set_client=%27gbk%27"},
+		{name: "unsafe connection charset system variable", dsn: "user:pass@tcp(host:4000)/ags?character_set_connection=%27gb18030%27"},
+		{name: "unsafe scoped client charset system variable", dsn: "user:pass@tcp(host:4000)/ags?@@session.character_set_client=%27gbk%27"},
+		{name: "unsafe local connection charset system variable", dsn: "user:pass@tcp(host:4000)/ags?@@local.character_set_connection=%27gb18030%27"},
+		{name: "unsafe quoted results charset system variable", dsn: "user:pass@tcp(host:4000)/ags?@@session.`character_set_results`=%27gbk%27"},
+		{name: "unsafe tab scoped client charset system variable", dsn: "user:pass@tcp(host:4000)/ags?session\tcharacter_set_client=%27gbk%27"},
+		{name: "unsafe escaped newline scoped results charset system variable", dsn: "user:pass@tcp(host:4000)/ags?session%0Acharacter_set_results=%27gbk%27"},
+		{name: "unsafe comment-prefixed client charset system variable", dsn: "user:pass@tcp(host:4000)/ags?/*qg*/character_set_client=%27gbk%27"},
+		{name: "connection system variable assignment", dsn: "user:pass@tcp(host:4000)/ags?sql_mode=%27TRADITIONAL%27"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runtimeMySQLDSN(tt.dsn); got != tt.dsn {
+				t.Fatalf("runtimeMySQLDSN() = %q, want %q", got, tt.dsn)
+			}
+		})
+	}
+}
+
+func TestRuntimeMySQLDSNPreservesInvalidInput(t *testing.T) {
+	const dsn = "invalid://dsn"
+	if got := runtimeMySQLDSN("  " + dsn + "  "); got != dsn {
+		t.Fatalf("runtimeMySQLDSN() = %q, want %q", got, dsn)
 	}
 }
 

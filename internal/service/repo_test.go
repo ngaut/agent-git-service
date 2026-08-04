@@ -103,6 +103,65 @@ func TestCreateRepo(t *testing.T) {
 	}
 }
 
+func TestGetRepoIdentityAgentOwnerUsesOneQuery(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	agent := db.User{
+		Login:    "repo-identity-agent",
+		Name:     "Repo Identity Agent",
+		Type:     db.TypeUser,
+		UserKind: db.UserKindAgent,
+	}
+	if err := svc.DB.Create(&agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	authCtx := service.ContextWithUser(context.Background(), agent)
+	repo, err := svc.CreateRepo(authCtx, service.CreateRepoInput{
+		OwnerLogin: agent.Login,
+		Name:       "identity-query-count",
+		Private:    true,
+	})
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	counter := newQueryCounterLogger()
+	svc.DB = svc.DB.Session(&gorm.Session{Logger: counter})
+	requestCtx := service.ContextWithRepoCache(authCtx)
+	got, err := svc.GetRepoIdentity(requestCtx, repo.FullName)
+	if err != nil {
+		t.Fatalf("GetRepoIdentity: %v", err)
+	}
+	if got.ID != repo.ID || got.FullName != repo.FullName || !got.Private {
+		t.Fatalf("GetRepoIdentity = %+v, want ID=%d full_name=%q private=true", got, repo.ID, repo.FullName)
+	}
+	if counter.count != 1 {
+		t.Fatalf("GetRepoIdentity query count = %d, want 1", counter.count)
+	}
+	if permission, ok := svc.CachedRepoPermission(requestCtx, repo.ID); !ok || permission != service.RepoPermissionAdmin {
+		t.Fatalf("cached permission = %q, %v; want admin", permission, ok)
+	}
+
+	if _, err := svc.GetRepoIdentity(requestCtx, repo.FullName); err != nil {
+		t.Fatalf("cached GetRepoIdentity: %v", err)
+	}
+	if counter.count != 1 {
+		t.Fatalf("cached GetRepoIdentity query count = %d, want 1", counter.count)
+	}
+
+	complete, err := svc.GetRepo(requestCtx, repo.FullName)
+	if err != nil {
+		t.Fatalf("GetRepo after identity lookup: %v", err)
+	}
+	if complete.Owner.ID != agent.ID || complete.Owner.Login != agent.Login {
+		t.Fatalf("GetRepo owner = %+v, want agent %+v", complete.Owner, agent)
+	}
+	if counter.count == 1 {
+		t.Fatal("GetRepo reused an identity-only cache entry")
+	}
+}
+
 func TestCreateRepo_PreservesExplicitFalseForDirectCallers(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()

@@ -256,6 +256,13 @@ func isMissingTableErr(err error) bool {
 	return strings.Contains(msg, "no such table") || (strings.Contains(msg, "doesn't exist") && strings.Contains(msg, "table"))
 }
 
+func isMissingIssueReferencesTableErr(err error) bool {
+	if !isMissingTableErr(err) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "issue_references")
+}
+
 func (s *Service) requireRepoPermission(ctx context.Context, repoID uint, required RepoPermission) error {
 	viewer, ok := UserFromContext(ctx)
 	if !ok || viewer.ID == 0 {

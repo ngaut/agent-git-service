@@ -1,6 +1,7 @@
 package wikicatalog
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -12,19 +13,19 @@ import (
 // opened by applyOnce. Restore (the third applyUpsert sub-path)
 // reuses the same page_id as the tombstone it resurrects, so the
 // revision chain stays continuous across delete + recreate.
-func (c *Catalog) applyChange(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
+func (c *Catalog) applyChange(ctx context.Context, tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
 	switch ch.op {
 	case OpUpsert:
-		return c.applyUpsert(tx, plan, cs, ch, preRead, blobBySlug)
+		return c.applyUpsert(ctx, tx, plan, cs, ch, preRead, blobBySlug)
 	case OpDelete:
-		return c.applyDelete(tx, plan, cs, ch, preRead)
+		return c.applyDelete(ctx, tx, plan, cs, ch, preRead)
 	case OpRename:
-		return c.applyRename(tx, plan, cs, ch, preRead, blobBySlug)
+		return c.applyRename(ctx, tx, plan, cs, ch, preRead, blobBySlug)
 	}
 	return ChangeResult{}, fmt.Errorf("wiki catalog: unknown op %v", ch.op)
 }
 
-func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
+func (c *Catalog) applyUpsert(ctx context.Context, tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
 	newSHA := blobBySlug[ch.srcSlug]
 	bodySize := len(ch.body)
 	var inline []byte
@@ -40,12 +41,13 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	tomb, isTomb := preRead.tombs[ch.srcSlug]
 
 	var (
-		pageID       uint64
-		revisionID   uint64
-		op           string
-		needsNewLeaf bool   // dir_index leaf + parent chain must be inserted
-		decrementOld bool   // skip when the tomb's blob was already decremented by applyDelete
-		oldBlobSHA   string // for the decrement, if any
+		pageID            uint64
+		revisionID        uint64
+		op                string
+		upsertDisposition UpsertDisposition
+		newlyVisible      bool   // create/restore makes a slug-to-page mapping visible
+		decrementOld      bool   // skip when the tomb's blob was already decremented by applyDelete
+		oldBlobSHA        string // for the decrement, if any
 	)
 
 	// Dispatch and write the page row in a single switch. Three
@@ -58,31 +60,36 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		pageID = live.PageID
 		revisionID = live.HeadRevisionID + 1
 		op = revOpUpdate
+		upsertDisposition = UpsertDispositionUpdate
 		decrementOld = true
 		oldBlobSHA = live.HeadBlobSHA
-		if err := tx.Model(&db.WikiPage{}).
-			Where("page_id = ?", pageID).
-			Updates(pageUpsertColumns(ch, newSHA, bodySize, inline, revisionID, cs, plan, false)).Error; err != nil {
+		if err := measureApplyPhase(ctx, ApplyPhasePageWrite, func() error {
+			return tx.Model(&db.WikiPage{}).
+				Where("page_id = ?", pageID).
+				Updates(pageUpsertColumns(ch, newSHA, bodySize, inline, revisionID, cs, plan, false)).Error
+		}); err != nil {
 			return ChangeResult{}, fmt.Errorf("update page %q: %w", ch.srcSlug, err)
 		}
 	case isTomb:
-		// applyDelete pruned the leaf and parents; restore
-		// re-materializes them and clears deleted_at so the row is
-		// live again. Its prior blob was already decremented at
-		// delete time.
+		// Restore clears deleted_at so the row is live again. Its prior
+		// blob was already decremented at delete time.
 		pageID = tomb.PageID
 		revisionID = tomb.HeadRevisionID + 1
 		op = revOpRestore
-		needsNewLeaf = true
-		if err := tx.Model(&db.WikiPage{}).
-			Where("page_id = ?", pageID).
-			Updates(pageUpsertColumns(ch, newSHA, bodySize, inline, revisionID, cs, plan, true)).Error; err != nil {
+		upsertDisposition = UpsertDispositionRestore
+		newlyVisible = true
+		if err := measureApplyPhase(ctx, ApplyPhasePageWrite, func() error {
+			return tx.Model(&db.WikiPage{}).
+				Where("page_id = ?", pageID).
+				Updates(pageUpsertColumns(ch, newSHA, bodySize, inline, revisionID, cs, plan, true)).Error
+		}); err != nil {
 			return ChangeResult{}, fmt.Errorf("restore page %q: %w", ch.srcSlug, err)
 		}
 	default:
 		op = revOpCreate
+		upsertDisposition = UpsertDispositionCreate
 		revisionID = 1
-		needsNewLeaf = true
+		newlyVisible = true
 		page := db.WikiPage{
 			RepositoryID:    plan.repoID,
 			Slug:            ch.srcSlug,
@@ -96,19 +103,12 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 			CreatedAt:       plan.committedAt,
 			UpdatedAt:       plan.committedAt,
 		}
-		if err := tx.Create(&page).Error; err != nil {
+		if err := measureApplyPhase(ctx, ApplyPhasePageWrite, func() error {
+			return tx.Create(&page).Error
+		}); err != nil {
 			return ChangeResult{}, fmt.Errorf("create page %q: %w", ch.srcSlug, err)
 		}
 		pageID = page.PageID
-	}
-
-	if needsNewLeaf {
-		if err := ensureDirChain(tx, plan.repoID, ch.srcSlug); err != nil {
-			return ChangeResult{}, err
-		}
-		if err := insertDirLeaf(tx, plan.repoID, ch.srcSlug, pageID); err != nil {
-			return ChangeResult{}, err
-		}
 	}
 
 	rev := db.WikiPageRevision{
@@ -124,20 +124,36 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		AuthorID:    plan.authorID,
 		CommittedAt: plan.committedAt,
 	}
-	if err := tx.Create(&rev).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseRevisionInsert, func() error {
+		return tx.Create(&rev).Error
+	}); err != nil {
 		return ChangeResult{}, fmt.Errorf("create revision for %q: %w", ch.srcSlug, err)
 	}
 
-	if err := incrementBlobRef(tx, newSHA, bodySize, plan.committedAt); err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseBlobRefs, func() error {
+		if err := incrementBlobRef(tx, newSHA, bodySize, plan.committedAt); err != nil {
+			return err
+		}
+		if decrementOld && !equalNonEmptySHA(oldBlobSHA, newSHA) {
+			return decrementBlobRef(tx, oldBlobSHA, live.BodySize)
+		}
+		return nil
+	}); err != nil {
 		return ChangeResult{}, err
 	}
-	if decrementOld && !equalNonEmptySHA(oldBlobSHA, newSHA) {
-		if err := decrementBlobRef(tx, oldBlobSHA); err != nil {
-			return ChangeResult{}, err
-		}
-	}
 
-	if err := refreshOutlinks(tx, plan.repoID, pageID, string(ch.body)); err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseOutlinks, func() error {
+		return refreshOutlinks(
+			tx,
+			plan.repoID,
+			pageID,
+			ch.srcSlug,
+			string(ch.body),
+			!newlyVisible,
+			preRead.outlinkTargets,
+			preRead.outlinksKnown,
+		)
+	}); err != nil {
 		return ChangeResult{}, err
 	}
 
@@ -145,27 +161,38 @@ func (c *Catalog) applyUpsert(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	// is newly visible. Any inbound link whose target matches this
 	// slug should now resolve. Update path leaves these untouched
 	// because the mapping didn't change.
-	if needsNewLeaf {
-		if err := resolveInboundLinks(tx, plan.repoID, ch.srcSlug, pageID); err != nil {
-			return ChangeResult{}, err
+	if err := measureApplyPhase(ctx, ApplyPhaseInboundLinks, func() error {
+		if newlyVisible && preRead.needsInboundResolution(ch.srcSlug) {
+			return resolveInboundLinks(tx, plan.repoID, ch.srcSlug, pageID)
 		}
+		return nil
+	}); err != nil {
+		return ChangeResult{}, err
 	}
 
-	if err := tx.Where("blob_sha = ?", newSHA).Delete(&db.WikiPendingBlob{}).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhasePendingBlobCleanup, func() error {
+		if bodySize > MaxBodyInlineBytes {
+			return tx.Where("blob_sha = ?", newSHA).Delete(&db.WikiPendingBlob{}).Error
+		}
+		return nil
+	}); err != nil {
 		return ChangeResult{}, err
 	}
 
 	return ChangeResult{
-		Op:         OpUpsert,
-		Slug:       ch.srcSlug,
-		PageID:     pageID,
-		RevisionID: revisionID,
-		BlobSHA:    newSHA,
-		BodySize:   bodySize,
+		Op:                OpUpsert,
+		UpsertDisposition: upsertDisposition,
+		Slug:              ch.srcSlug,
+		PageID:            pageID,
+		RevisionID:        revisionID,
+		BlobSHA:           newSHA,
+		BodySize:          bodySize,
+		Body:              ch.body,
+		BodyAvailable:     true,
 	}, nil
 }
 
-func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages) (ChangeResult, error) {
+func (c *Catalog) applyDelete(ctx context.Context, tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages) (ChangeResult, error) {
 	existing := preRead.live[ch.srcSlug] // existence verified in checkConflicts
 	pageID := existing.PageID
 	revisionID := existing.HeadRevisionID + 1
@@ -182,45 +209,50 @@ func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		AuthorID:    plan.authorID,
 		CommittedAt: plan.committedAt,
 	}
-	if err := tx.Create(&rev).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseRevisionInsert, func() error {
+		return tx.Create(&rev).Error
+	}); err != nil {
 		return ChangeResult{}, fmt.Errorf("delete revision for %q: %w", existing.Slug, err)
 	}
 
-	if err := tx.Model(&db.WikiPage{}).
-		Where("page_id = ?", pageID).
-		Updates(map[string]any{
-			"deleted_at":        plan.committedAt,
-			"updated_at":        plan.committedAt,
-			"head_revision_id":  revisionID,
-			"head_changeset_id": cs.ChangesetID,
-		}).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhasePageWrite, func() error {
+		return tx.Model(&db.WikiPage{}).
+			Where("page_id = ?", pageID).
+			Updates(map[string]any{
+				"deleted_at":        plan.committedAt,
+				"updated_at":        plan.committedAt,
+				"head_revision_id":  revisionID,
+				"head_changeset_id": cs.ChangesetID,
+			}).Error
+	}); err != nil {
 		return ChangeResult{}, fmt.Errorf("soft-delete page %q: %w", existing.Slug, err)
 	}
 
-	if err := decrementBlobRef(tx, existing.HeadBlobSHA); err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseBlobRefs, func() error {
+		return decrementBlobRef(tx, existing.HeadBlobSHA, existing.BodySize)
+	}); err != nil {
 		return ChangeResult{}, err
 	}
 
-	if err := removeDirLeaf(tx, plan.repoID, existing.Slug); err != nil {
-		return ChangeResult{}, err
-	}
-	if err := pruneEmptyParents(tx, plan.repoID, existing.Slug); err != nil {
-		return ChangeResult{}, err
-	}
-
-	if err := tx.Where("src_page_id = ?", pageID).Delete(&db.WikiPageLink{}).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseOutlinks, func() error {
+		return tx.Where("src_page_id = ?", pageID).Delete(&db.WikiPageLink{}).Error
+	}); err != nil {
 		return ChangeResult{}, fmt.Errorf("clear outlinks for %q: %w", existing.Slug, err)
 	}
 
 	// Any link pointing at this page now points at a soft-deleted
 	// row; clear the resolution so backlink queries via the resolved
 	// page-id index don't surface phantom hits.
-	if err := clearInboundLinksForPage(tx, plan.repoID, pageID); err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseInboundLinks, func() error {
+		return clearInboundLinksForPage(tx, plan.repoID, pageID)
+	}); err != nil {
 		return ChangeResult{}, err
 	}
 
-	if err := tx.Where("repository_id = ? AND slug = ?", plan.repoID, existing.Slug).
-		Delete(&db.WikiPageLabel{}).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseLabelMutation, func() error {
+		return tx.Where("repository_id = ? AND slug = ?", plan.repoID, existing.Slug).
+			Delete(&db.WikiPageLabel{}).Error
+	}); err != nil {
 		return ChangeResult{}, fmt.Errorf("clear labels for %q: %w", existing.Slug, err)
 	}
 
@@ -233,7 +265,7 @@ func (c *Catalog) applyDelete(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 	}, nil
 }
 
-func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
+func (c *Catalog) applyRename(ctx context.Context, tx *gorm.DB, plan changesetPlan, cs *db.WikiChangeset, ch plannedChange, preRead preReadPages, blobBySlug map[string]string) (ChangeResult, error) {
 	existing := preRead.live[ch.srcSlug] // existence verified in checkConflicts
 	pageID := existing.PageID
 	revisionID := existing.HeadRevisionID + 1
@@ -269,7 +301,9 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		AuthorID:    plan.authorID,
 		CommittedAt: plan.committedAt,
 	}
-	if err := tx.Create(&rev).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseRevisionInsert, func() error {
+		return tx.Create(&rev).Error
+	}); err != nil {
 		return ChangeResult{}, fmt.Errorf("rename revision for %q: %w", existing.Slug, err)
 	}
 
@@ -285,65 +319,87 @@ func (c *Catalog) applyRename(tx *gorm.DB, plan changesetPlan, cs *db.WikiChange
 		updates["body_size"] = newSize
 		updates["body_inline"] = newInline
 	}
-	if err := tx.Model(&db.WikiPage{}).
-		Where("page_id = ?", pageID).
-		Updates(updates).Error; err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhasePageWrite, func() error {
+		return tx.Model(&db.WikiPage{}).
+			Where("page_id = ?", pageID).
+			Updates(updates).Error
+	}); err != nil {
 		return ChangeResult{}, fmt.Errorf("rename page %q -> %q: %w", existing.Slug, ch.dstSlug, err)
 	}
 
-	if bodyChanged {
+	if err := measureApplyPhase(ctx, ApplyPhaseBlobRefs, func() error {
+		if !bodyChanged {
+			return nil
+		}
 		if err := incrementBlobRef(tx, newSHA, newSize, plan.committedAt); err != nil {
-			return ChangeResult{}, err
+			return err
 		}
 		if !equalNonEmptySHA(existing.HeadBlobSHA, newSHA) {
-			if err := decrementBlobRef(tx, existing.HeadBlobSHA); err != nil {
-				return ChangeResult{}, err
-			}
+			return decrementBlobRef(tx, existing.HeadBlobSHA, existing.BodySize)
 		}
-		if err := refreshOutlinks(tx, plan.repoID, pageID, string(ch.body)); err != nil {
-			return ChangeResult{}, err
-		}
-		if err := tx.Where("blob_sha = ?", newSHA).Delete(&db.WikiPendingBlob{}).Error; err != nil {
-			return ChangeResult{}, err
-		}
+		return nil
+	}); err != nil {
+		return ChangeResult{}, err
 	}
 
-	if err := removeDirLeaf(tx, plan.repoID, oldSlug); err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseOutlinks, func() error {
+		if !bodyChanged {
+			return nil
+		}
+		return refreshOutlinks(
+			tx,
+			plan.repoID,
+			pageID,
+			ch.dstSlug,
+			string(ch.body),
+			true,
+			nil,
+			false,
+		)
+	}); err != nil {
 		return ChangeResult{}, err
 	}
-	if err := ensureDirChain(tx, plan.repoID, ch.dstSlug); err != nil {
-		return ChangeResult{}, err
-	}
-	if err := insertDirLeaf(tx, plan.repoID, ch.dstSlug, pageID); err != nil {
-		return ChangeResult{}, err
-	}
-	if err := pruneEmptyParents(tx, plan.repoID, oldSlug); err != nil {
+
+	if err := measureApplyPhase(ctx, ApplyPhasePendingBlobCleanup, func() error {
+		if bodyChanged && newSize > MaxBodyInlineBytes {
+			return tx.Where("blob_sha = ?", newSHA).Delete(&db.WikiPendingBlob{}).Error
+		}
+		return nil
+	}); err != nil {
 		return ChangeResult{}, err
 	}
 
 	// Inbound links anchored on the old slug text now point at a
-	// page that no longer occupies that slug — clear them.
-	if err := clearInboundLinksForSlug(tx, plan.repoID, oldSlug, pageID); err != nil {
-		return ChangeResult{}, err
-	}
-	// Inbound links waiting for the new slug to materialize can now
-	// resolve. (Symmetric to the create/restore case in applyUpsert.)
-	if err := resolveInboundLinks(tx, plan.repoID, ch.dstSlug, pageID); err != nil {
+	// page that no longer occupies that slug — clear them. Then resolve
+	// any links that were waiting for the destination slug.
+	if err := measureApplyPhase(ctx, ApplyPhaseInboundLinks, func() error {
+		if err := clearInboundLinksForSlug(tx, plan.repoID, oldSlug, pageID); err != nil {
+			return err
+		}
+		if preRead.needsInboundResolution(ch.dstSlug) {
+			return resolveInboundLinks(tx, plan.repoID, ch.dstSlug, pageID)
+		}
+		return nil
+	}); err != nil {
 		return ChangeResult{}, err
 	}
 
-	if err := renameLabels(tx, plan.repoID, existing.Slug, ch.dstSlug); err != nil {
+	if err := measureApplyPhase(ctx, ApplyPhaseLabelMutation, func() error {
+		return renameLabels(tx, plan.repoID, existing.Slug, ch.dstSlug)
+	}); err != nil {
 		return ChangeResult{}, err
 	}
 
 	return ChangeResult{
-		Op:         OpRename,
-		Slug:       ch.dstSlug,
-		PrevSlug:   existing.Slug,
-		PageID:     pageID,
-		RevisionID: revisionID,
-		BlobSHA:    newSHA,
-		BodySize:   newSize,
+		Op:            OpRename,
+		Slug:          ch.dstSlug,
+		PrevSlug:      existing.Slug,
+		PageID:        pageID,
+		RevisionID:    revisionID,
+		BlobSHA:       newSHA,
+		BodySize:      newSize,
+		Body:          ch.body,
+		BodyAvailable: bodyChanged,
 	}, nil
 }
 
