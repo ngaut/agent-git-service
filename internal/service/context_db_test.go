@@ -49,7 +49,7 @@ func TestDBForCtxUsesTenantDB(t *testing.T) {
 	}
 }
 
-func TestWikiBackgroundMigrationStateIsTenantScoped_Issue1448(t *testing.T) {
+func TestWikiBackgroundGitIngestStateIsTenantScoped(t *testing.T) {
 	defaultDB := openMigratedServiceTestDB(t)
 	tenantDB := openMigratedServiceTestDB(t)
 
@@ -96,16 +96,16 @@ func TestWikiBackgroundMigrationStateIsTenantScoped_Issue1448(t *testing.T) {
 
 	defaultRepo := "shared-owner/shared-name"
 	tenantRepo := "shared-owner/shared-name"
-	if !svc.ClaimWikiBackgroundMigrationForTest(defaultCtx, defaultRepo) {
-		t.Fatal("expected to claim default tenant migration slot")
+	if !svc.ClaimWikiBackgroundGitIngestForTest(defaultCtx, defaultRepo) {
+		t.Fatal("expected to claim default tenant git ingest slot")
 	}
-	defer svc.ReleaseWikiBackgroundMigrationForTest(defaultCtx, defaultRepo)
+	defer svc.ReleaseWikiBackgroundGitIngestForTest(defaultCtx, defaultRepo)
 
-	if !svc.IsWikiBackgroundMigrationRunning(defaultCtx, defaultRepo) {
-		t.Fatal("expected default tenant migration state to be visible in default context")
+	if !svc.IsWikiBackgroundGitIngestRunning(defaultCtx, defaultRepo) {
+		t.Fatal("expected default tenant git ingest state to be visible in default context")
 	}
-	if svc.IsWikiBackgroundMigrationRunning(tenantCtx, tenantRepo) {
-		t.Fatal("tenant-scoped migration state leaked from default DB into tenant DB")
+	if svc.IsWikiBackgroundGitIngestRunning(tenantCtx, tenantRepo) {
+		t.Fatal("tenant-scoped git ingest state leaked from default DB into tenant DB")
 	}
 }
 
@@ -201,7 +201,7 @@ func TestContextHelpers(t *testing.T) {
 	}
 }
 
-func TestKickBackgroundWikiMigration_UsesCallerTenantContext_Issue1448(t *testing.T) {
+func TestKickBackgroundWikiGitIngest_UsesCallerTenantContext(t *testing.T) {
 	defaultDB := openMigratedServiceTestDB(t)
 	tenantDB := openMigratedServiceTestDB(t)
 
@@ -243,27 +243,27 @@ func TestKickBackgroundWikiMigration_UsesCallerTenantContext_Issue1448(t *testin
 	}
 
 	started := make(chan struct{}, 1)
-	svc.SetWikiBackgroundMigrationStartedHookForTest(func(fullName string) {
+	svc.SetWikiBackgroundGitIngestStartedHookForTest(func(fullName string) {
 		if fullName == repoFullName {
 			started <- struct{}{}
 		}
 	})
-	defer svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
+	defer svc.SetWikiBackgroundGitIngestStartedHookForTest(nil)
 
-	svc.KickBackgroundWikiMigration(tenantCtx, repoFullName)
+	svc.KickBackgroundWikiGitIngest(tenantCtx, repoFullName)
 
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for background migration to start")
+		t.Fatal("timed out waiting for background git ingest to start")
 	}
 	svc.Wg.Wait()
 
 	pages, err := svc.ListWikiPages(tenantCtx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
 	if err != nil {
-		t.Fatalf("ListWikiPages after background migration: %v", err)
+		t.Fatalf("ListWikiPages after background git ingest: %v", err)
 	}
 	if len(pages) != 2 {
-		t.Fatalf("pages = %+v, want 2 pages after background migration", pages)
+		t.Fatalf("pages = %+v, want 2 pages after background git ingest", pages)
 	}
 }

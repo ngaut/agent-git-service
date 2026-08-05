@@ -387,12 +387,12 @@ func writeWikiAuthorCommit(t *testing.T, ctx context.Context, svc *service.Servi
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git fast-import: %v, output=%s", err, out)
 	}
-	// After a direct git write, run MigrateWiki to incorporate the
+	// After a direct git write, run IngestWikiGit to incorporate the
 	// new commit into the catalog. Production wires the same call
 	// behind the receive-pack handler; tests invoke it explicitly so
 	// catalog-backed reads see the freshly-pushed commit.
-	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
-		t.Fatalf("MigrateWiki after fast-import: %v", err)
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
+		t.Fatalf("IngestWikiGit after fast-import: %v", err)
 	}
 }
 

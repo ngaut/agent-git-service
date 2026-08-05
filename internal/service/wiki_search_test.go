@@ -541,10 +541,10 @@ func TestWikiSearchDoesNotReturnGitOnlyPageWhenCatalogHasLiveRows(t *testing.T) 
 	if _, err := svc.Git.WriteFile(ctx, full+".wiki", "master", "guides/live.md", "add live page", []byte("# Live\n\nFresh git-only search text.")); err != nil {
 		t.Fatalf("git write live page: %v", err)
 	}
-	if !svc.ClaimWikiBackgroundMigrationForTest(ctx, full) {
+	if !svc.ClaimWikiBackgroundGitIngestForTest(ctx, full) {
 		t.Fatal("claim background wiki migration slot")
 	}
-	defer svc.ReleaseWikiBackgroundMigrationForTest(ctx, full)
+	defer svc.ReleaseWikiBackgroundGitIngestForTest(ctx, full)
 
 	resp, err := svc.SearchWikiPages(ctx, full, "fresh git-only search text", 20, 0)
 	if err != nil {

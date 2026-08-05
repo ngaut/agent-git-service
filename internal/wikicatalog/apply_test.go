@@ -606,14 +606,14 @@ func TestApplyChangeSet_OverrideCommitSHA(t *testing.T) {
 	historical := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	res, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID:        repoID,
-		Source:              SourceMigration,
+		Source:              SourceGit,
 		OverrideCommitSHA:   originalSHA,
 		OverrideCommittedAt: &historical,
 		Message:             "imported",
 		Changes:             []Change{{Op: OpUpsert, Slug: "home", Body: []byte("legacy")}},
 	})
 	if err != nil {
-		t.Fatalf("migration apply: %v", err)
+		t.Fatalf("git apply: %v", err)
 	}
 	if res.CommitSHA != originalSHA {
 		t.Fatalf("CommitSHA = %q, want %q (override)", res.CommitSHA, originalSHA)
@@ -1254,8 +1254,8 @@ func TestApplyChangeSet_EmptyBodyAllowed(t *testing.T) {
 }
 
 // TestApplyChangeSet_MixedOpsInOneChangeset confirms upsert + delete
-// + rename can coexist in a single transaction. Migration replay
-// produces these; the test pins that the changeset commits atomically.
+// + rename can coexist in a single transaction. Git replay produces these;
+// the test pins that the changeset commits atomically.
 func TestApplyChangeSet_MixedOpsInOneChangeset(t *testing.T) {
 	cat, repoID, gdb := applyTestEnv(t)
 	ctx := context.Background()

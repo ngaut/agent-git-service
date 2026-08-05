@@ -57,7 +57,7 @@ func preloadPages(tb testing.TB, cat *Catalog, repoID uint, n int) {
 		}
 		if _, err := cat.ApplyChangeSet(context.Background(), ChangeSetRequest{
 			RepositoryID: repoID,
-			Source:       SourceMigration, // skip the post-commit hook noise
+			Source:       SourceGit, // skip post-commit async work
 			Message:      fmt.Sprintf("bulk load %d-%d", off, end),
 			Changes:      changes,
 		}); err != nil {
@@ -68,7 +68,7 @@ func preloadPages(tb testing.TB, cat *Catalog, repoID uint, n int) {
 
 // BenchmarkApplyChangeSet_BulkLoad measures the cost of loading N
 // pages into the catalog in a single changeset. This is the path
-// MigrateWiki uses; the user's "1.5s/page" pain came from the legacy
+// IngestWikiGit uses; the user's "1.5s/page" pain came from the legacy
 // per-page git commit path, so this benchmark exercises the catalog's
 // bulk-write path on the TiDB test backend. The scaling shape (linear in N,
 // no super-linear drift) is what this benchmark guards.
@@ -89,7 +89,7 @@ func BenchmarkApplyChangeSet_BulkLoad(b *testing.B) {
 				b.StartTimer()
 				if _, err := cat.ApplyChangeSet(context.Background(), ChangeSetRequest{
 					RepositoryID: repoID,
-					Source:       SourceMigration,
+					Source:       SourceGit,
 					Message:      "bulk",
 					Changes:      changes,
 				}); err != nil {

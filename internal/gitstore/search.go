@@ -442,6 +442,16 @@ func (s *Store) ListAllCommits(ctx context.Context, fullName string, opts *ListC
 	return s.listCommits(ctx, fullName, nil, nil, opts)
 }
 
+// ListCommitsRange returns commits reachable from head but not from base.
+// Results follow git log's natural order (newest first). Callers that replay
+// history should reverse the slice before applying commits.
+func (s *Store) ListCommitsRange(ctx context.Context, fullName, base, head string, opts *ListCommitsOptions) ([]SearchCommitInfo, error) {
+	if !IsValidRev(base) || !IsValidRev(head) {
+		return nil, fmt.Errorf("invalid commit range")
+	}
+	return s.listCommits(ctx, fullName, nil, nil, opts, base+".."+head)
+}
+
 // ListCommitsPage returns one page of commits on the default branch.
 func (s *Store) ListCommitsPage(ctx context.Context, fullName string, page, perPage int, opts *ListCommitsOptions) ([]SearchCommitInfo, error) {
 	if page < 1 {
@@ -479,7 +489,7 @@ func (s *Store) CountCommits(ctx context.Context, fullName string, opts *ListCom
 	return count, nil
 }
 
-func (s *Store) listCommits(ctx context.Context, fullName string, maxCount *int, skip *int, opts *ListCommitsOptions) ([]SearchCommitInfo, error) {
+func (s *Store) listCommits(ctx context.Context, fullName string, maxCount *int, skip *int, opts *ListCommitsOptions, revs ...string) ([]SearchCommitInfo, error) {
 	dir, err := s.repoPath(ctx, fullName)
 	if err != nil {
 		return nil, err
@@ -497,6 +507,7 @@ func (s *Store) listCommits(ctx context.Context, fullName string, maxCount *int,
 	if skip != nil && *skip > 0 {
 		args = append(args, fmt.Sprintf("--skip=%d", *skip))
 	}
+	args = append(args, revs...)
 
 	// Add path filter if specified
 	if opts != nil && opts.Path != "" {

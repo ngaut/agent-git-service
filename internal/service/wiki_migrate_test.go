@@ -1,7 +1,7 @@
 package service_test
 
 // Migration tool tests: build a real legacy wiki via PutWikiPage,
-// then call MigrateWiki and verify the catalog reflects the same
+// then call IngestWikiGit and verify the catalog reflects the same
 // state (page rows, blob SHAs, commit identities). These are
 // end-to-end tests that go through the actual gitstore on disk.
 
@@ -20,21 +20,21 @@ import (
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
-func setupWikiMigrationTestService(t testing.TB) (*service.Service, func()) {
+func setupWikiGitIngestTestService(t testing.TB) (*service.Service, func()) {
 	return testharness.NewService(t, testharness.ServiceConfig{MaxOpenConns: 1})
 }
 
 func TestMigrateAllWikis_ContinuesAfterRepoFailure(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	badRepo := seedRepoForWikiMigration(t, svc, "alice", "bad")
-	goodRepo := seedRepoForWikiMigration(t, svc, "bob", "good")
+	badRepo := seedRepoForWikiGitIngest(t, svc, "alice", "bad")
+	goodRepo := seedRepoForWikiGitIngest(t, svc, "bob", "good")
 
-	// Seed git directly (bypassing the catalog) so MigrateWiki has
+	// Seed git directly (bypassing the catalog) so IngestWikiGit has
 	// real work to do. After the runtime cutover, the only scenario
-	// where MigrateWiki sees uncataloged git commits is when the data
+	// where IngestWikiGit sees uncataloged git commits is when the data
 	// pre-existed in git — exactly what this test models.
 	for _, full := range []string{badRepo + ".wiki", goodRepo + ".wiki"} {
 		if err := svc.Git.Init(ctx, full, "master", false); err != nil {
@@ -61,7 +61,7 @@ func TestMigrateAllWikis_ContinuesAfterRepoFailure(t *testing.T) {
 		return nil
 	}
 
-	report, err := svc.MigrateAllWikis(ctx, service.WikiMigrationOptions{})
+	report, err := svc.MigrateAllWikis(ctx, service.WikiGitIngestOptions{})
 	if err == nil {
 		t.Fatal("MigrateAllWikis should surface the first repo error")
 	}
@@ -79,38 +79,39 @@ func TestMigrateAllWikis_ContinuesAfterRepoFailure(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_EmptyRepoIsNoOp(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_EmptyRepoIsNoOp(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
-	stats, err := svc.MigrateWiki(context.Background(), repoFullName, service.WikiMigrationOptions{})
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
+	stats, err := svc.IngestWikiGit(context.Background(), repoFullName, service.WikiGitIngestOptions{})
 	if err != nil {
-		t.Fatalf("MigrateWiki: %v", err)
+		t.Fatalf("IngestWikiGit: %v", err)
 	}
 	if stats.GitCommits != 0 || stats.NewCommits != 0 || stats.Pages != 0 {
 		t.Fatalf("expected empty stats, got %+v", stats)
 	}
 }
 
-func TestMigrateWiki_ReplaysSinglePage(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_ReplaysSinglePage(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "# Home\n\nBody.", "create", ""); err != nil {
 		t.Fatalf("PutWikiPage: %v", err)
 	}
 
-	stats, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	stats, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 	if err != nil {
-		t.Fatalf("MigrateWiki: %v", err)
+		t.Fatalf("IngestWikiGit: %v", err)
 	}
 	// PutWikiPage routes through the catalog and reconciles
 	// synth_commit_sha after materializing git, so the commit is
-	// already present in wiki_changesets when MigrateWiki runs.
-	if stats.GitCommits != 1 || stats.NewCommits != 0 || stats.SkippedExist != 1 || stats.Pages != 1 {
+	// already present in wiki_changesets when IngestWikiGit runs, so the
+	// fast path sees the catalog is current without scanning history.
+	if stats.GitCommits != 0 || stats.NewCommits != 0 || stats.SkippedExist != 0 || stats.Pages != 1 {
 		t.Fatalf("stats %+v", stats)
 	}
 
@@ -129,11 +130,11 @@ func TestMigrateWiki_ReplaysSinglePage(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_ReplaysHistoryInOrder(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	// Build a tiny history: create home, update home, create about, delete home.
 	v1, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", "")
@@ -150,15 +151,15 @@ func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
 		t.Fatalf("delete home: %v", err)
 	}
 
-	stats, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	stats, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 	if err != nil {
-		t.Fatalf("MigrateWiki: %v", err)
+		t.Fatalf("IngestWikiGit: %v", err)
 	}
 	// PutWikiPage and DeleteWikiPage both route through the catalog
 	// and reconcile synth_commit_sha to the materialized git SHA, so
 	// all four commits are already known to the catalog and
-	// MigrateWiki has nothing left to do.
-	if stats.GitCommits != 4 || stats.NewCommits != 0 || stats.SkippedExist != 4 {
+	// IngestWikiGit has nothing left to do.
+	if stats.GitCommits != 0 || stats.NewCommits != 0 || stats.SkippedExist != 0 {
 		t.Fatalf("stats %+v", stats)
 	}
 	if stats.Pages != 1 {
@@ -167,7 +168,7 @@ func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
 
 	rep, _ := svc.GetRepo(ctx, repoFullName)
 
-	// Live page after migration: only "about" survives.
+	// Live page after ingest: only "about" survives.
 	var pages []db.WikiPage
 	if err := svc.DB.Where("repository_id = ? AND deleted_at IS NULL", rep.ID).Find(&pages).Error; err != nil {
 		t.Fatalf("list pages: %v", err)
@@ -199,44 +200,44 @@ func TestMigrateWiki_ReplaysHistoryInOrder(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_IsIdempotent(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_IsIdempotent(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "body", "create", ""); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 
-	stats1, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	stats1, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	// PUT already populated the catalog with synth_commit_sha == git
-	// SHA, so the first MigrateWiki call has nothing new to do — both
-	// runs of MigrateWiki are no-ops in this scenario.
-	if stats1.NewCommits != 0 || stats1.SkippedExist != 1 {
-		t.Fatalf("first run stats %+v, want NewCommits=0 SkippedExist=1", stats1)
+	// SHA, so the first IngestWikiGit call has nothing new to do — both
+	// runs of IngestWikiGit are no-ops in this scenario.
+	if stats1.NewCommits != 0 || stats1.SkippedExist != 0 {
+		t.Fatalf("first run stats %+v, want NewCommits=0 SkippedExist=0", stats1)
 	}
 
-	stats2, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	stats2, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	if stats2.NewCommits != 0 {
 		t.Fatalf("second run should be a no-op, got NewCommits=%d", stats2.NewCommits)
 	}
-	if stats2.SkippedExist != 1 {
-		t.Fatalf("second run SkippedExist = %d, want 1", stats2.SkippedExist)
+	if stats2.SkippedExist != 0 {
+		t.Fatalf("second run SkippedExist = %d, want 0", stats2.SkippedExist)
 	}
 }
 
 func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if _, err := svc.CreateLabel(ctx, repoFullName, "stale", "ff0000", "stale wiki label"); err != nil {
 		t.Fatalf("CreateLabel stale: %v", err)
@@ -266,7 +267,7 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 		t.Fatalf("update home: %v", err)
 	}
 
-	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
 		t.Fatalf("initial migrate: %v", err)
 	}
 
@@ -352,10 +353,10 @@ func TestListWikiPages_RebuildsCatalogAfterNonFastForwardRewrite(t *testing.T) {
 }
 
 func TestGetWikiPageAndHistory_RefreshCatalogAfterNonFastForwardRewrite(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	homeV1, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", "")
 	if err != nil {
@@ -372,7 +373,7 @@ func TestGetWikiPageAndHistory_RefreshCatalogAfterNonFastForwardRewrite(t *testi
 		t.Fatalf("update home: %v", err)
 	}
 
-	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
 		t.Fatalf("initial migrate: %v", err)
 	}
 
@@ -423,10 +424,10 @@ func TestGetWikiPageAndHistory_RefreshCatalogAfterNonFastForwardRewrite(t *testi
 }
 
 func TestEnsureWikiCatalogCurrent_PreservesRESTHeadWhenGitProjectionLags_Issue1446(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "projection-lag")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "projection-lag")
 
 	page, err := svc.PutWikiPage(ctx, repoFullName, "home", "catalog body", "create home", "")
 	if err != nil {
@@ -467,10 +468,10 @@ func TestEnsureWikiCatalogCurrent_PreservesRESTHeadWhenGitProjectionLags_Issue14
 }
 
 func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "nonblocking")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "nonblocking")
 
 	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", ""); err != nil {
 		t.Fatalf("PutWikiPage home: %v", err)
@@ -482,19 +483,19 @@ func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var released int32
-	svc.SetWikiBackgroundMigrationStartedHookForTest(func(fullName string) {
+	svc.SetWikiBackgroundGitIngestStartedHookForTest(func(fullName string) {
 		if fullName == repoFullName {
 			started <- struct{}{}
 		}
 	})
-	svc.SetWikiMigrationAfterSnapshotHookForTest(func(fullName string) {
+	svc.SetWikiGitIngestAfterSnapshotHookForTest(func(fullName string) {
 		if fullName == repoFullName {
 			<-release
 		}
 	})
 	defer func() {
-		svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
-		svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		svc.SetWikiBackgroundGitIngestStartedHookForTest(nil)
+		svc.SetWikiGitIngestAfterSnapshotHookForTest(nil)
 		if atomic.CompareAndSwapInt32(&released, 0, 1) {
 			close(release)
 		}
@@ -506,7 +507,7 @@ func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
 		t.Fatalf("ListWikiPages: %v", err)
 	}
 	if elapsed := time.Since(begin); elapsed > 100*time.Millisecond {
-		t.Fatalf("ListWikiPages took %s, want <= 100ms while migration runs in background", elapsed)
+		t.Fatalf("ListWikiPages took %s, want <= 100ms while git ingest runs in background", elapsed)
 	}
 	if len(pages) != 1 || pages[0].Slug != "home" {
 		t.Fatalf("initial pages = %+v, want current catalog snapshot only", pages)
@@ -515,10 +516,10 @@ func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for background migration to start")
+		t.Fatal("timed out waiting for background git ingest to start")
 	}
-	if !svc.IsWikiBackgroundMigrationRunning(ctx, repoFullName) {
-		t.Fatal("expected background migration to be marked running")
+	if !svc.IsWikiBackgroundGitIngestRunning(ctx, repoFullName) {
+		t.Fatal("expected background git ingest to be marked running")
 	}
 
 	if atomic.CompareAndSwapInt32(&released, 0, 1) {
@@ -528,18 +529,18 @@ func TestEnsureWikiCatalogCurrent_NonBlocking(t *testing.T) {
 
 	pages, err = svc.ListWikiPages(ctx, repoFullName, service.ListWikiPagesOptions{Recursive: true})
 	if err != nil {
-		t.Fatalf("ListWikiPages after background migration: %v", err)
+		t.Fatalf("ListWikiPages after background git ingest: %v", err)
 	}
 	if len(pages) != 2 {
-		t.Fatalf("final pages = %+v, want 2 pages after background migration", pages)
+		t.Fatalf("final pages = %+v, want 2 pages after background git ingest", pages)
 	}
 }
 
 func TestEnsureWikiCatalogCurrent_BackgroundSingleflight(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "singleflight")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "singleflight")
 
 	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", ""); err != nil {
 		t.Fatalf("PutWikiPage home: %v", err)
@@ -552,7 +553,7 @@ func TestEnsureWikiCatalogCurrent_BackgroundSingleflight(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var released int32
-	svc.SetWikiBackgroundMigrationStartedHookForTest(func(fullName string) {
+	svc.SetWikiBackgroundGitIngestStartedHookForTest(func(fullName string) {
 		if fullName != repoFullName {
 			return
 		}
@@ -560,14 +561,14 @@ func TestEnsureWikiCatalogCurrent_BackgroundSingleflight(t *testing.T) {
 			started <- struct{}{}
 		}
 	})
-	svc.SetWikiMigrationAfterSnapshotHookForTest(func(fullName string) {
+	svc.SetWikiGitIngestAfterSnapshotHookForTest(func(fullName string) {
 		if fullName == repoFullName {
 			<-release
 		}
 	})
 	defer func() {
-		svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
-		svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		svc.SetWikiBackgroundGitIngestStartedHookForTest(nil)
+		svc.SetWikiGitIngestAfterSnapshotHookForTest(nil)
 		if atomic.CompareAndSwapInt32(&released, 0, 1) {
 			close(release)
 		}
@@ -584,14 +585,14 @@ func TestEnsureWikiCatalogCurrent_BackgroundSingleflight(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for background migration to start")
+		t.Fatal("timed out waiting for background git ingest to start")
 	}
 	time.Sleep(150 * time.Millisecond)
 	if got := atomic.LoadInt32(&startedCount); got != 1 {
-		t.Fatalf("background migration started %d times, want 1", got)
+		t.Fatalf("background git ingest started %d times, want 1", got)
 	}
-	if !svc.IsWikiBackgroundMigrationRunning(ctx, repoFullName) {
-		t.Fatal("expected background migration to be running")
+	if !svc.IsWikiBackgroundGitIngestRunning(ctx, repoFullName) {
+		t.Fatal("expected background git ingest to be running")
 	}
 
 	if atomic.CompareAndSwapInt32(&released, 0, 1) {
@@ -606,10 +607,10 @@ func TestEnsureWikiCatalogCurrent_BackgroundSingleflight(t *testing.T) {
 }
 
 func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if _, err := svc.CreateLabel(ctx, repoFullName, "current", "00ff00", "current wiki label"); err != nil {
 		t.Fatalf("CreateLabel current: %v", err)
@@ -620,7 +621,7 @@ func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 	if _, err := svc.SetWikiPageLabels(ctx, repoFullName, "home", []string{"current"}); err != nil {
 		t.Fatalf("SetWikiPageLabels home: %v", err)
 	}
-	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
 		t.Fatalf("initial migrate: %v", err)
 	}
 
@@ -685,11 +686,11 @@ func TestListWikiPages_ClearsCatalogAfterWikiBranchDeletion(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	homeV1, err := svc.PutWikiPage(ctx, repoFullName, "home", "v1", "create home", "")
 	if err != nil {
@@ -706,7 +707,7 @@ func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
 		t.Fatalf("update home: %v", err)
 	}
 
-	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
 		t.Fatalf("initial migrate: %v", err)
 	}
 
@@ -731,7 +732,7 @@ func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
 	enterCh := make(chan struct{}, 1)
 	releaseCh := make(chan struct{})
 	var entered int32
-	svc.SetWikiMigrationAfterSnapshotHookForTest(func(fullName string) {
+	svc.SetWikiGitIngestAfterSnapshotHookForTest(func(fullName string) {
 		if fullName != repoFullName {
 			return
 		}
@@ -741,29 +742,29 @@ func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
 		}
 	})
 	defer func() {
-		svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		svc.SetWikiGitIngestAfterSnapshotHookForTest(nil)
 	}()
 
 	errCh := make(chan error, 2)
 	go func() {
-		_, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+		_, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 		errCh <- err
 	}()
 
 	select {
 	case <-enterCh:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for first migration to reach the snapshot hook")
+		t.Fatal("timed out waiting for first ingest to reach the snapshot hook")
 	}
 
 	go func() {
-		_, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+		_, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 		errCh <- err
 	}()
 
 	time.Sleep(150 * time.Millisecond)
 	if got := atomic.LoadInt32(&entered); got != 1 {
-		t.Fatalf("snapshot hook entered %d times while first migration was blocked, want serialization", got)
+		t.Fatalf("snapshot hook entered %d times while first ingest was blocked, want serialization", got)
 	}
 
 	close(releaseCh)
@@ -789,17 +790,17 @@ func TestMigrateWiki_SerializesConcurrentRefreshAfterRewrite(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_PreservesGitCommitSHAs(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_PreservesGitCommitSHAs(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "body", "create", ""); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 
-	// Capture the legacy git commit SHA before migration.
+	// Capture the legacy git commit SHA before ingest.
 	commits, err := svc.Git.ListCommits(ctx, repoFullName+".wiki", 10, nil)
 	if err != nil {
 		t.Fatalf("list legacy commits: %v", err)
@@ -809,7 +810,7 @@ func TestMigrateWiki_PreservesGitCommitSHAs(t *testing.T) {
 	}
 	originalSHA := strings.ToLower(commits[0].SHA)
 
-	if _, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
+	if _, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -824,11 +825,11 @@ func TestMigrateWiki_PreservesGitCommitSHAs(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_RejectsIncompatibleSlugPath(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_RejectsIncompatibleSlugPath(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if err := svc.Git.Init(ctx, repoFullName+".wiki", "master", false); err != nil {
 		t.Fatalf("init wiki: %v", err)
@@ -838,20 +839,20 @@ func TestMigrateWiki_RejectsIncompatibleSlugPath(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	_, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	_, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 	if err == nil {
-		t.Fatal("MigrateWiki succeeded, want incompatible slug error")
+		t.Fatal("IngestWikiGit succeeded, want incompatible slug error")
 	}
 	if !strings.Contains(err.Error(), "cannot be represented by the catalog") {
-		t.Fatalf("MigrateWiki error = %v, want incompatible slug message", err)
+		t.Fatalf("IngestWikiGit error = %v, want incompatible slug message", err)
 	}
 }
 
-func TestMigrateWiki_SkipIncompatibleSlugPathDropsPage(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_SkipIncompatibleSlugPathDropsPage(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if err := svc.Git.Init(ctx, repoFullName+".wiki", "master", false); err != nil {
 		t.Fatalf("init wiki: %v", err)
@@ -861,9 +862,9 @@ func TestMigrateWiki_SkipIncompatibleSlugPathDropsPage(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	stats, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{SkipIncompatibleSlugs: true})
+	stats, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{SkipIncompatibleSlugs: true})
 	if err != nil {
-		t.Fatalf("MigrateWiki: %v", err)
+		t.Fatalf("IngestWikiGit: %v", err)
 	}
 	if stats.NewCommits != 1 || stats.Pages != 0 {
 		t.Fatalf("stats %+v, want one skipped commit and zero pages", stats)
@@ -879,11 +880,11 @@ func TestMigrateWiki_SkipIncompatibleSlugPathDropsPage(t *testing.T) {
 	}
 }
 
-func TestMigrateWiki_PreservesEmptyCommitSHA(t *testing.T) {
-	svc, cleanup := setupWikiMigrationTestService(t)
+func TestIngestWikiGit_PreservesEmptyCommitSHA(t *testing.T) {
+	svc, cleanup := setupWikiGitIngestTestService(t)
 	defer cleanup()
 	ctx := context.Background()
-	repoFullName := seedRepoForWikiMigration(t, svc, "alice", "rpo")
+	repoFullName := seedRepoForWikiGitIngest(t, svc, "alice", "rpo")
 
 	if _, err := svc.PutWikiPage(ctx, repoFullName, "home", "body", "create", ""); err != nil {
 		t.Fatalf("PutWikiPage: %v", err)
@@ -920,18 +921,18 @@ func TestMigrateWiki_PreservesEmptyCommitSHA(t *testing.T) {
 	}
 	emptySHA := strings.ToLower(strings.TrimSpace(commits[0].SHA))
 
-	stats, err := svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{})
+	stats, err := svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{})
 	if err != nil {
-		t.Fatalf("MigrateWiki: %v", err)
+		t.Fatalf("IngestWikiGit: %v", err)
 	}
 	// After the runtime cutover, the first commit was created by
 	// PutWikiPage routing through ApplyChangeSet and is already in the
 	// catalog (synth_commit_sha == git SHA, reconciled by the
-	// post-commit materialize hook). MigrateWiki only needs to replay
+	// post-commit materialize hook). IngestWikiGit only needs to replay
 	// the externally-pushed empty commit, so NewCommits == 1 and the
-	// first commit shows up as SkippedExist == 1.
-	if stats.NewCommits != 1 || stats.SkippedExist != 1 {
-		t.Fatalf("stats %+v, want NewCommits=1 SkippedExist=1", stats)
+	// already-cataloged first commit stays outside the replay range.
+	if stats.NewCommits != 1 || stats.SkippedExist != 0 {
+		t.Fatalf("stats %+v, want NewCommits=1 SkippedExist=0", stats)
 	}
 
 	rep, _ := svc.GetRepo(ctx, repoFullName)
@@ -944,9 +945,9 @@ func TestMigrateWiki_PreservesEmptyCommitSHA(t *testing.T) {
 	}
 }
 
-// seedRepoForWikiMigration creates owner, repo, and flags has_wiki=true.
+// seedRepoForWikiGitIngest creates owner, repo, and flags has_wiki=true.
 // Returns the repo's full name.
-func seedRepoForWikiMigration(t *testing.T, svc *service.Service, login, name string) string {
+func seedRepoForWikiGitIngest(t *testing.T, svc *service.Service, login, name string) string {
 	t.Helper()
 	ctx := context.Background()
 	if err := svc.DB.Create(&db.User{Login: login, Name: login, Type: db.TypeUser}).Error; err != nil {
@@ -960,7 +961,7 @@ func seedRepoForWikiMigration(t *testing.T, svc *service.Service, login, name st
 	}
 	full := login + "/" + name
 	// Flag has_wiki=true so MigrateAllWikis picks it up; per-repo
-	// MigrateWiki does not consult the flag but production runs
+	// IngestWikiGit does not consult the flag but production runs
 	// usually do.
 	if err := svc.DB.Model(&db.Repository{}).
 		Where("full_name = ?", full).

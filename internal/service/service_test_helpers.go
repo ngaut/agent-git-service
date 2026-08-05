@@ -89,17 +89,17 @@ func (s *Service) SetWorkflowStepRunnerForTest(timeout time.Duration, fn func(ct
 	})
 }
 
-// SetWikiMigrationAfterSnapshotHookForTest installs a test-only hook
-// after migrateOneWiki snapshots the migrated commit set and before it
-// replays any git commits.
-func (s *Service) SetWikiMigrationAfterSnapshotHookForTest(fn func(repoFullName string)) {
-	s.testWikiMigrationAfterSnapshot = fn
+// SetWikiGitIngestAfterSnapshotHookForTest installs a test-only hook after
+// ingestOneWikiGit snapshots catalog/git state and before it replays any git
+// commits.
+func (s *Service) SetWikiGitIngestAfterSnapshotHookForTest(fn func(repoFullName string)) {
+	s.testWikiGitIngestAfterSnapshot = fn
 }
 
-// SetWikiBackgroundMigrationStartedHookForTest installs a test-only hook fired
-// when a repo-scoped background wiki migration is claimed and scheduled.
-func (s *Service) SetWikiBackgroundMigrationStartedHookForTest(fn func(repoFullName string)) {
-	s.testWikiBackgroundMigrationStarted = fn
+// SetWikiBackgroundGitIngestStartedHookForTest installs a test-only hook fired
+// when a repo-scoped background wiki git ingest is claimed and scheduled.
+func (s *Service) SetWikiBackgroundGitIngestStartedHookForTest(fn func(repoFullName string)) {
+	s.testWikiBackgroundGitIngestStarted = fn
 }
 
 // IsPublicRepoForTest exposes isPublicRepo to external-package tests.
@@ -125,20 +125,20 @@ func SetTestWikiCompactionJobContinueForTest(s *Service, fn func(jobID string)) 
 	s.testWikiCompactionJobContinue = fn
 }
 
-// ClaimWikiBackgroundMigrationForTest exposes background migration slot claims for tests.
-func (s *Service) ClaimWikiBackgroundMigrationForTest(ctx context.Context, repoFullName string) bool {
+// ClaimWikiBackgroundGitIngestForTest exposes background git ingest slot claims for tests.
+func (s *Service) ClaimWikiBackgroundGitIngestForTest(ctx context.Context, repoFullName string) bool {
 	repo, err := s.LookupRepoIdentity(ctx, repoFullName)
 	if err != nil {
 		return false
 	}
-	return s.claimWikiBackgroundMigration(s.wikiRepoKey(ctx, repo))
+	return s.claimWikiBackgroundGitIngest(s.wikiRepoKey(ctx, repo))
 }
 
-// ReleaseWikiBackgroundMigrationForTest exposes background migration cleanup for tests.
-func (s *Service) ReleaseWikiBackgroundMigrationForTest(ctx context.Context, repoFullName string) {
+// ReleaseWikiBackgroundGitIngestForTest exposes background git ingest cleanup for tests.
+func (s *Service) ReleaseWikiBackgroundGitIngestForTest(ctx context.Context, repoFullName string) {
 	repo, err := s.LookupRepoIdentity(ctx, repoFullName)
 	if err != nil {
 		return
 	}
-	s.releaseWikiBackgroundMigration(s.wikiRepoKey(ctx, repo))
+	s.releaseWikiBackgroundGitIngest(s.wikiRepoKey(ctx, repo))
 }

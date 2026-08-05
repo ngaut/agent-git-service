@@ -70,12 +70,12 @@ type Change struct {
 type Source string
 
 const (
-	SourceREST      Source = "rest"
-	SourceAdmin     Source = "admin"
-	SourceBatch     Source = "batch"
-	SourceCompact   Source = "compact"
-	SourceMigration Source = "migration"
-	SourcePush      Source = "push" // reserved for the future git façade
+	SourceREST    Source = "rest"
+	SourceAdmin   Source = "admin"
+	SourceBatch   Source = "batch"
+	SourceCompact Source = "compact"
+	SourceGit     Source = "git"
+	SourcePush    Source = "push" // reserved for the future git façade
 )
 
 // ChangeSetRequest is the input to ApplyChangeSet.
@@ -88,16 +88,16 @@ type ChangeSetRequest struct {
 	Changes        []Change
 
 	// OverrideCommitSHA pins the synth_commit_sha for this changeset
-	// instead of letting the catalog mint one. The migration tool uses
-	// this to keep the original git commit SHA, including empty git
-	// commits, so existing GetWikiPage?ref=<sha> requests and history
-	// sampling continue to resolve after the catalog cutover. Must be
-	// 40 lowercase hex characters.
+	// instead of letting the catalog mint one. Git ingest uses this to
+	// keep the original git commit SHA, including empty git commits, so
+	// existing GetWikiPage?ref=<sha> requests and history sampling continue
+	// to resolve after the catalog cutover. Must be 40 lowercase hex
+	// characters.
 	OverrideCommitSHA string
 
 	// OverrideCommittedAt pins wiki_changesets.committed_at and the
-	// per-revision committed_at instead of using Catalog.Now(). Used
-	// by migration to preserve historical timestamps.
+	// per-revision committed_at instead of using Catalog.Now(). Used by
+	// git ingest to preserve historical timestamps.
 	OverrideCommittedAt *time.Time
 }
 
@@ -198,7 +198,7 @@ const (
 
 // ErrChangeSetTooLarge is returned by ApplyChangeSet when a request
 // exceeds MaxChangesPerChangeset or MaxBytesPerChangeset. Callers
-// (REST handlers, migration tool) translate this to a clean
-// client-facing error rather than letting it surface as a
-// dialect-specific transaction failure mid-flight.
+// (REST handlers, git ingest) translate this to a clean client-facing
+// error rather than letting it surface as a dialect-specific transaction
+// failure mid-flight.
 var ErrChangeSetTooLarge = errors.New("wiki catalog: changeset exceeds size limits")

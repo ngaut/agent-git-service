@@ -71,13 +71,13 @@ type Service struct {
 	workflowSyncMu     map[string]*sync.Mutex
 	workflowSyncMapMu  sync.Mutex
 
-	wikiMigrationSyncMuOnce sync.Once
-	wikiMigrationSyncMu     map[string]*sync.Mutex
-	wikiMigrationSyncMapMu  sync.Mutex
+	wikiGitIngestSyncMuOnce sync.Once
+	wikiGitIngestSyncMu     map[string]*sync.Mutex
+	wikiGitIngestSyncMapMu  sync.Mutex
 
-	wikiBgMigrationMuOnce sync.Once
-	wikiBgMigrationMu     map[string]struct{}
-	wikiBgMigrationMapMu  sync.RWMutex
+	wikiBgGitIngestMuOnce sync.Once
+	wikiBgGitIngestMu     map[string]struct{}
+	wikiBgGitIngestMapMu  sync.RWMutex
 
 	wikiBgCompactionMuOnce sync.Once
 	wikiBgCompactionMu     map[string]string
@@ -94,14 +94,14 @@ type Service struct {
 	webhookWorkersOnce sync.Once
 	webhookJobs        chan webhookJob
 
-	// testWikiMigrationAfterSnapshot is a test-only hook used to
-	// coordinate concurrent migration callers after they have loaded the
-	// migrated-commit snapshot but before they replay any git commits.
-	testWikiMigrationAfterSnapshot func(repoFullName string)
+	// testWikiGitIngestAfterSnapshot is a test-only hook used to
+	// coordinate concurrent ingest callers after they have loaded the
+	// catalog/git snapshot but before they replay any git commits.
+	testWikiGitIngestAfterSnapshot func(repoFullName string)
 
-	// testWikiBackgroundMigrationStarted is a test-only hook fired when a
-	// repo-scoped background wiki migration is claimed and scheduled.
-	testWikiBackgroundMigrationStarted func(repoFullName string)
+	// testWikiBackgroundGitIngestStarted is a test-only hook fired when a
+	// repo-scoped background wiki git ingest is claimed and scheduled.
+	testWikiBackgroundGitIngestStarted func(repoFullName string)
 
 	// testWikiCompactRefUpdateFailure lets tests force the compact ref update
 	// path to fail after the catalog transaction commits.
@@ -140,53 +140,53 @@ func (s *Service) getWorkflowSyncMu(repoFullName string) *sync.Mutex {
 	return mu
 }
 
-func (s *Service) wikiMigrationSyncMuInit() {
-	s.wikiMigrationSyncMu = make(map[string]*sync.Mutex)
+func (s *Service) wikiGitIngestSyncMuInit() {
+	s.wikiGitIngestSyncMu = make(map[string]*sync.Mutex)
 }
 
-func (s *Service) getWikiMigrationSyncMu(key scopedRepoKey) *sync.Mutex {
-	s.wikiMigrationSyncMuOnce.Do(s.wikiMigrationSyncMuInit)
+func (s *Service) getWikiGitIngestSyncMu(key scopedRepoKey) *sync.Mutex {
+	s.wikiGitIngestSyncMuOnce.Do(s.wikiGitIngestSyncMuInit)
 
-	s.wikiMigrationSyncMapMu.Lock()
-	defer s.wikiMigrationSyncMapMu.Unlock()
+	s.wikiGitIngestSyncMapMu.Lock()
+	defer s.wikiGitIngestSyncMapMu.Unlock()
 
 	muKey := s.scopedRepoMutexKey(key)
-	mu, ok := s.wikiMigrationSyncMu[muKey]
+	mu, ok := s.wikiGitIngestSyncMu[muKey]
 	if !ok {
 		mu = &sync.Mutex{}
-		s.wikiMigrationSyncMu[muKey] = mu
+		s.wikiGitIngestSyncMu[muKey] = mu
 	}
 	return mu
 }
 
-func (s *Service) wikiBgMigrationMuInit() {
-	s.wikiBgMigrationMu = make(map[string]struct{})
+func (s *Service) wikiBgGitIngestMuInit() {
+	s.wikiBgGitIngestMu = make(map[string]struct{})
 }
 
 func (s *Service) wikiBgCompactionMuInit() {
 	s.wikiBgCompactionMu = make(map[string]string)
 }
 
-func (s *Service) claimWikiBackgroundMigration(key scopedRepoKey) bool {
-	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
+func (s *Service) claimWikiBackgroundGitIngest(key scopedRepoKey) bool {
+	s.wikiBgGitIngestMuOnce.Do(s.wikiBgGitIngestMuInit)
 
-	s.wikiBgMigrationMapMu.Lock()
-	defer s.wikiBgMigrationMapMu.Unlock()
+	s.wikiBgGitIngestMapMu.Lock()
+	defer s.wikiBgGitIngestMapMu.Unlock()
 
 	muKey := s.scopedRepoMutexKey(key)
-	if _, ok := s.wikiBgMigrationMu[muKey]; ok {
+	if _, ok := s.wikiBgGitIngestMu[muKey]; ok {
 		return false
 	}
-	s.wikiBgMigrationMu[muKey] = struct{}{}
+	s.wikiBgGitIngestMu[muKey] = struct{}{}
 	return true
 }
 
-func (s *Service) releaseWikiBackgroundMigration(key scopedRepoKey) {
-	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
+func (s *Service) releaseWikiBackgroundGitIngest(key scopedRepoKey) {
+	s.wikiBgGitIngestMuOnce.Do(s.wikiBgGitIngestMuInit)
 
-	s.wikiBgMigrationMapMu.Lock()
-	defer s.wikiBgMigrationMapMu.Unlock()
-	delete(s.wikiBgMigrationMu, s.scopedRepoMutexKey(key))
+	s.wikiBgGitIngestMapMu.Lock()
+	defer s.wikiBgGitIngestMapMu.Unlock()
+	delete(s.wikiBgGitIngestMu, s.scopedRepoMutexKey(key))
 }
 
 func (s *Service) claimWikiBackgroundCompaction(key scopedRepoKey, jobID string) bool {
@@ -215,12 +215,12 @@ func (s *Service) releaseWikiBackgroundCompaction(key scopedRepoKey, jobID strin
 	}
 }
 
-func (s *Service) isWikiBackgroundMigrationRunning(key scopedRepoKey) bool {
-	s.wikiBgMigrationMuOnce.Do(s.wikiBgMigrationMuInit)
+func (s *Service) isWikiBackgroundGitIngestRunning(key scopedRepoKey) bool {
+	s.wikiBgGitIngestMuOnce.Do(s.wikiBgGitIngestMuInit)
 
-	s.wikiBgMigrationMapMu.RLock()
-	defer s.wikiBgMigrationMapMu.RUnlock()
-	_, ok := s.wikiBgMigrationMu[s.scopedRepoMutexKey(key)]
+	s.wikiBgGitIngestMapMu.RLock()
+	defer s.wikiBgGitIngestMapMu.RUnlock()
+	_, ok := s.wikiBgGitIngestMu[s.scopedRepoMutexKey(key)]
 	return ok
 }
 

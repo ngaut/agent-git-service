@@ -217,6 +217,35 @@ func TestStore_ListCommits(t *testing.T) {
 		}
 	})
 
+	t.Run("list commits range", func(t *testing.T) {
+		fullRepoName := "user/list-commits-range"
+		if err := store.Init(ctx, fullRepoName, "main", true); err != nil {
+			t.Fatalf("Init failed: %v", err)
+		}
+		base, err := store.HeadSHA(ctx, fullRepoName, "main")
+		if err != nil {
+			t.Fatalf("HeadSHA(base): %v", err)
+		}
+		if _, err := store.WriteFile(ctx, fullRepoName, "main", "history.txt", "range commit 1", []byte("content 1\n")); err != nil {
+			t.Fatalf("WriteFile #1 failed: %v", err)
+		}
+		head, err := store.WriteFile(ctx, fullRepoName, "main", "history.txt", "range commit 2", []byte("content 2\n"))
+		if err != nil {
+			t.Fatalf("WriteFile #2 failed: %v", err)
+		}
+
+		results, err := store.ListCommitsRange(ctx, fullRepoName, base, head, nil)
+		if err != nil {
+			t.Fatalf("ListCommitsRange failed: %v", err)
+		}
+		if len(results) != 2 {
+			t.Fatalf("expected 2 range commits, got %d", len(results))
+		}
+		if results[0].Message != "range commit 2" || results[1].Message != "range commit 1" {
+			t.Fatalf("unexpected range ordering: %+v", results)
+		}
+	})
+
 	t.Run("empty repo returns seed commit", func(t *testing.T) {
 		emptyRepoName := "user/empty-repo"
 		if err := store.Init(ctx, emptyRepoName, "main", true); err != nil {

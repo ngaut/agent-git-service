@@ -131,7 +131,7 @@ func TestCompactWikiHistory_ReadRefreshDoesNotReplayMasterAfterCompact_Issue1472
 	}
 
 	started := make(chan string, 1)
-	svc.SetWikiBackgroundMigrationStartedHookForTest(func(repoFullName string) {
+	svc.SetWikiBackgroundGitIngestStartedHookForTest(func(repoFullName string) {
 		started <- repoFullName
 	})
 
@@ -144,7 +144,7 @@ func TestCompactWikiHistory_ReadRefreshDoesNotReplayMasterAfterCompact_Issue1472
 
 	select {
 	case repoFullName := <-started:
-		t.Fatalf("background migration unexpectedly started for %q after compact", repoFullName)
+		t.Fatalf("background git ingest unexpectedly started for %q after compact", repoFullName)
 	case <-time.After(200 * time.Millisecond):
 	}
 }
