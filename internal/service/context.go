@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/ngaut/agent-git-service/internal/db"
@@ -38,18 +39,27 @@ type repoCache struct {
 	// Keyed by repo ID (not fullName) so renames don't leave stale
 	// entries under old names.  A secondary name→ID index allows
 	// lookup by fullName without scanning.
-	repos   map[uint]db.Repository
-	nameIdx map[string]uint
-	stats   map[uint]repoStatsCacheEntry
+	repos                map[uint]db.Repository
+	complete             map[uint]bool
+	nameIdx              map[string]uint
+	stats                map[uint]repoStatsCacheEntry
+	wikiCatalogFreshness map[string]*requestCheck
+}
+
+type requestCheck struct {
+	done chan struct{}
+	err  error
 }
 
 // ContextWithRepoCache returns a context carrying a fresh per-request
 // repo cache.  Call this once per HTTP request (e.g. in middleware).
 func ContextWithRepoCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, repoCacheKey{}, &repoCache{
-		repos:   make(map[uint]db.Repository),
-		nameIdx: make(map[string]uint),
-		stats:   make(map[uint]repoStatsCacheEntry),
+		repos:                make(map[uint]db.Repository),
+		complete:             make(map[uint]bool),
+		nameIdx:              make(map[string]uint),
+		stats:                make(map[uint]repoStatsCacheEntry),
+		wikiCatalogFreshness: make(map[string]*requestCheck),
 	})
 }
 
@@ -69,19 +79,60 @@ func repoCacheGet(ctx context.Context, fullName string) (db.Repository, bool) {
 	if !ok {
 		return db.Repository{}, false
 	}
+	if !rc.complete[id] {
+		return db.Repository{}, false
+	}
+	r, ok := rc.repos[id]
+	return r, ok
+}
+
+func repoIdentityCacheGet(ctx context.Context, fullName string) (db.Repository, bool) {
+	rc := getRepoCache(ctx)
+	if rc == nil {
+		return db.Repository{}, false
+	}
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	id, ok := rc.nameIdx[fullName]
+	if !ok {
+		return db.Repository{}, false
+	}
 	r, ok := rc.repos[id]
 	return r, ok
 }
 
 func repoCacheSet(ctx context.Context, repo db.Repository) {
+	repoCacheSetForLookup(ctx, repo.FullName, repo)
+}
+
+func repoCacheSetForLookup(ctx context.Context, lookupName string, repo db.Repository) {
+	repoCacheSetForLookupCompleteness(ctx, lookupName, repo, true)
+}
+
+func repoIdentityCacheSetForLookup(ctx context.Context, lookupName string, repo db.Repository) {
+	repoCacheSetForLookupCompleteness(ctx, lookupName, repo, false)
+}
+
+// repoCacheSetForLookup records both the canonical repository name and the
+// name used to resolve it. The latter may be a redirect or case variant and is
+// safe to retain because the cache lives for one request only. Identity-only
+// entries remain available to mutation paths without satisfying GetRepo,
+// whose callers require fully preloaded associations.
+func repoCacheSetForLookupCompleteness(ctx context.Context, lookupName string, repo db.Repository, complete bool) {
 	rc := getRepoCache(ctx)
 	if rc == nil {
 		return
 	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	rc.repos[repo.ID] = repo
+	if !rc.complete[repo.ID] || complete {
+		rc.repos[repo.ID] = repo
+	}
+	rc.complete[repo.ID] = rc.complete[repo.ID] || complete
 	rc.nameIdx[repo.FullName] = repo.ID
+	if lookupName != "" {
+		rc.nameIdx[lookupName] = repo.ID
+	}
 }
 
 func repoPermissionCacheGet(ctx context.Context, repoID uint) (RepoPermission, bool) {
@@ -176,12 +227,49 @@ func RepoCacheInvalidate(ctx context.Context, repoID uint) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	delete(rc.repos, repoID)
+	delete(rc.complete, repoID)
 	delete(rc.stats, repoID)
 	for name, id := range rc.nameIdx {
 		if id == repoID {
+			delete(rc.wikiCatalogFreshness, normalizeRequestCacheName(name))
 			delete(rc.nameIdx, name)
 		}
 	}
+}
+
+// wikiCatalogFreshnessCacheDo runs a catalog freshness check at most once for
+// one repository in a request. Multiple service methods can compose a single
+// response without repeating filesystem, database, and git-head probes.
+func wikiCatalogFreshnessCacheDo(ctx context.Context, repoFullName string, check func() error) error {
+	rc := getRepoCache(ctx)
+	key := normalizeRequestCacheName(repoFullName)
+	if rc == nil || key == "" {
+		return check()
+	}
+
+	rc.mu.Lock()
+	cachedCheck, ok := rc.wikiCatalogFreshness[key]
+	if !ok {
+		cachedCheck = &requestCheck{done: make(chan struct{})}
+		rc.wikiCatalogFreshness[key] = cachedCheck
+		rc.mu.Unlock()
+
+		cachedCheck.err = check()
+		close(cachedCheck.done)
+		return cachedCheck.err
+	}
+	rc.mu.Unlock()
+
+	select {
+	case <-cachedCheck.done:
+		return cachedCheck.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func normalizeRequestCacheName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // ── Anonymous-request marker ───────────────────────────────────

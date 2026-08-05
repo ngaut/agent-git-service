@@ -465,14 +465,11 @@ func TestBuildWikiTreePageRowsQuery_UsesCurrentPagesWithoutLargeFields(t *testin
 
 	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
 		var rows []wikiTreePageRow
-		return buildWikiTreePageRowsQuery(tx, 42).Find(&rows)
+		return buildWikiTreePageRowsQuery(tx, 42, "").Find(&rows)
 	})
 
 	if !strings.Contains(sql, "wiki_pages") {
 		t.Fatalf("expected wiki_pages in live tree query, got %q", sql)
-	}
-	if strings.Contains(sql, "wiki_dir_index") {
-		t.Fatalf("expected live tree query to avoid stale directory index rows, got %q", sql)
 	}
 	if strings.Contains(sql, "SELECT *") || strings.Contains(sql, "body_inline") {
 		t.Fatalf("expected live tree query to select only sidebar fields, got %q", sql)
@@ -482,6 +479,39 @@ func TestBuildWikiTreePageRowsQuery_UsesCurrentPagesWithoutLargeFields(t *testin
 	}
 	if !strings.Contains(sql, "repository_id = 42") || !strings.Contains(sql, "deleted_at IS NULL") {
 		t.Fatalf("expected repo and live-page predicates, got %q", sql)
+	}
+}
+
+func TestBuildWikiTreePageRowsQuery_PushesDirectoryRangeIntoSQL(t *testing.T) {
+	gdb := newWikiSearchDryRunMySQLDB(t)
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		var rows []wikiTreePageRow
+		return buildWikiTreePageRowsQuery(tx, 42, "generated/perf").Find(&rows)
+	})
+
+	if !strings.Contains(sql, "slug >= 'generated/perf/'") || !strings.Contains(sql, "slug < 'generated/perf0'") {
+		t.Fatalf("expected indexed slug range for directory, got %q", sql)
+	}
+	if !strings.Contains(sql, "ORDER BY slug ASC") {
+		t.Fatalf("expected stable index order, got %q", sql)
+	}
+}
+
+func TestApplyWikiPathFilterQuery_NonRecursiveUsesExactDepth(t *testing.T) {
+	gdb := newWikiSearchDryRunMySQLDB(t)
+
+	sql := gdb.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		var rows []wikiTreePageRow
+		query := tx.Model(&db.WikiPage{}).Where("repository_id = ?", 42)
+		return applyWikiPathFilterQuery(query, "slug", "guides", false).Find(&rows)
+	})
+
+	if !strings.Contains(sql, "slug >= 'guides/'") || !strings.Contains(sql, "slug < 'guides0'") {
+		t.Fatalf("expected indexed slug range, got %q", sql)
+	}
+	if !strings.Contains(sql, "LENGTH(slug) - LENGTH(REPLACE(slug, '/', '')) = 1") {
+		t.Fatalf("expected direct-child depth predicate, got %q", sql)
 	}
 }
 

@@ -237,6 +237,43 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 		result WikiCompactResult
 	)
 	err := s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
+		projection, exists, err := s.loadWikiHeadProjectionState(ctx, rep.ID)
+		if err != nil {
+			return fmt.Errorf("load wiki projection before compaction: %w", err)
+		}
+		if exists &&
+			wikicatalog.Source(strings.TrimSpace(projection.Source)) == wikicatalog.SourceCompact &&
+			projection.SynthFormatVer < synthProjectionMaterialized {
+			result = WikiCompactResult{
+				PreviousHead:    projection.SynthCommitSHA,
+				NewHead:         projection.SynthCommitSHA,
+				CompactedBefore: projection.CommittedAt,
+			}
+			return s.resumePendingWikiCompactProjection(ctx, repoFullName, projection.WikiChangeset)
+		}
+
+		recoveredEffects, err := s.reconcileWikiWriteStateLocked(ctx, s.Git, rep)
+		if err != nil {
+			return fmt.Errorf("reconcile wiki projection before compaction: %w", err)
+		}
+		if recoveredEffects != nil {
+			if err := <-recoveredEffects; err != nil {
+				return fmt.Errorf("finish recovered wiki effects before compaction: %w", err)
+			}
+		}
+
+		projection, exists, err = s.loadWikiHeadProjectionState(ctx, rep.ID)
+		if err != nil {
+			return fmt.Errorf("load wiki projection before compaction: %w", err)
+		}
+		if exists && projection.PendingProjectionCount != 0 {
+			return fmt.Errorf(
+				"wiki projection for %s has %d pending changesets; refusing compaction until repaired",
+				repoFullName,
+				projection.PendingProjectionCount,
+			)
+		}
+
 		now := time.Now().UTC()
 
 		var livePages []db.WikiPage
@@ -262,15 +299,6 @@ func (s *Service) compactWikiHistoryForRepo(ctx context.Context, rep db.Reposito
 		if err := s.DBForCtx(ctx).Where("changeset_id = ?", repoHead.HeadChangesetID).Take(&previousChangeset).Error; err != nil {
 			return err
 		}
-		if previousChangeset.Source == string(wikicatalog.SourceCompact) && previousChangeset.SynthFormatVer < synthProjectionMaterialized {
-			result = WikiCompactResult{
-				PreviousHead:    previousChangeset.SynthCommitSHA,
-				NewHead:         previousChangeset.SynthCommitSHA,
-				CompactedBefore: previousChangeset.CommittedAt,
-			}
-			return s.resumePendingWikiCompactProjection(ctx, repoFullName, previousChangeset)
-		}
-
 		pageIDs := make([]uint64, 0, len(livePages))
 		for _, page := range livePages {
 			pageIDs = append(pageIDs, page.PageID)

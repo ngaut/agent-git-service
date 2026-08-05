@@ -52,6 +52,63 @@ func TestConditionalETag_PathCoverage(t *testing.T) {
 	}
 }
 
+func TestUsesWikiNavigationETag(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "live tree", url: "/api/ext/v1/repos/acme/widgets/wiki/tree?path=guides", want: true},
+		{name: "historical tree", url: "/api/ext/v1/repos/acme/widgets/wiki/tree?ref=abc123", want: false},
+		{name: "tree-only catalog", url: "/api/ext/v1/repos/acme/widgets/wiki/catalog?include=tree&path=guides", want: true},
+		{name: "tree-only catalog with unknown include", url: "/api/ext/v1/repos/acme/widgets/wiki/catalog?include=tree,unknown", want: true},
+		{name: "default catalog", url: "/api/ext/v1/repos/acme/widgets/wiki/catalog", want: false},
+		{name: "catalog pages", url: "/api/ext/v1/repos/acme/widgets/wiki/catalog?include=tree,pages", want: false},
+		{name: "catalog label filter", url: "/api/ext/v1/repos/acme/widgets/wiki/catalog?include=tree&labels=ops", want: false},
+		{name: "wiki pages", url: "/api/ext/v1/repos/acme/widgets/wiki/pages", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			if got := UsesWikiNavigationETag(req); got != tt.want {
+				t.Fatalf("UsesWikiNavigationETag(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSemanticETag(t *testing.T) {
+	firstReq := httptest.NewRequest(http.MethodGet, "/api/ext/v1/repos/acme/widgets/wiki/catalog?include=tree&path=guides", nil)
+	first := httptest.NewRecorder()
+	etag := BuildSemanticETag(firstReq, "wiki-catalog-tree-v1", "catalog:abc123")
+	SetSemanticETag(first, etag)
+	if !strings.HasPrefix(etag, `W/"`) {
+		t.Fatalf("ETag = %q, want weak validator", etag)
+	}
+	if !varyContains(first.Header(), "Authorization") {
+		t.Fatalf("Vary = %q, want Authorization", first.Header().Values("Vary"))
+	}
+
+	secondReq := httptest.NewRequest(http.MethodGet, firstReq.URL.String(), nil)
+	secondReq.Header.Set("If-None-Match", etag)
+	second := httptest.NewRecorder()
+	if !WriteSemanticNotModified(second, secondReq, etag) {
+		t.Fatal("matching request was not completed as not modified")
+	}
+	if second.Code != http.StatusNotModified || second.Body.Len() != 0 {
+		t.Fatalf("matching response = %d %q, want empty 304", second.Code, second.Body.String())
+	}
+
+	changed := httptest.NewRecorder()
+	changedETag := BuildSemanticETag(secondReq, "wiki-catalog-tree-v1", "catalog:def456")
+	if WriteSemanticNotModified(changed, secondReq, changedETag) {
+		t.Fatal("changed Wiki version unexpectedly matched old ETag")
+	}
+	if changedETag == etag {
+		t.Fatalf("changed Wiki version kept ETag %q", changedETag)
+	}
+}
+
 func TestConditionalETag_TargetedJSONResponseGetsETag(t *testing.T) {
 	handler := ConditionalETag()(jsonHandler(http.StatusOK, `{"ok":true}`))
 
@@ -64,6 +121,8 @@ func TestConditionalETag_TargetedJSONResponseGetsETag(t *testing.T) {
 	}
 	if got := w.Header().Get("ETag"); got == "" {
 		t.Fatal("expected ETag header")
+	} else if !strings.HasPrefix(got, `W/"`) {
+		t.Fatalf("ETag = %q, want weak validator across content codings", got)
 	}
 	if !varyContains(w.Header(), "Authorization") {
 		t.Fatalf("expected Vary to contain Authorization, got %q", strings.Join(w.Header().Values("Vary"), ", "))

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
+	driversql "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -206,8 +208,122 @@ func Init(dsn string) (*gorm.DB, error) {
 }
 
 func dialectorForDSN(dsn string) (gorm.Dialector, string) {
+	return mysql.Open(runtimeMySQLDSN(dsn)), "mysql"
+}
+
+func runtimeMySQLDSN(dsn string) string {
 	raw := strings.TrimSpace(dsn)
-	return mysql.Open(raw), "mysql"
+	cfg, err := driversql.ParseDSN(raw)
+	if err != nil {
+		// Preserve the original initialization error for malformed DSNs.
+		return raw
+	}
+	if preservesDriverSideParameterBinding(raw, cfg) {
+		return raw
+	}
+	// GORM sends parameterized one-shot queries throughout the request path.
+	// Driver-side interpolation retains escaping while avoiding a server-side
+	// prepare/execute/close cycle for every statement.
+	cfg.InterpolateParams = true
+	optimized := cfg.FormatDSN()
+	if _, err := driversql.ParseDSN(optimized); err != nil {
+		return raw
+	}
+	return optimized
+}
+
+func preservesDriverSideParameterBinding(dsn string, cfg *driversql.Config) bool {
+	params, hasQuery, queryOK := mysqlDSNQueryParams(dsn)
+	if !hasQuery {
+		return false
+	}
+	if !queryOK {
+		return true
+	}
+	if hasFalseBoolParam(params, "interpolateParams") {
+		return true
+	}
+	for _, value := range params["charset"] {
+		for _, charset := range strings.Split(value, ",") {
+			name, ok := canonicalMySQLCharset(charset)
+			if !ok || unsafeMySQLCharsets[name] {
+				return true
+			}
+		}
+	}
+	for _, value := range params["collation"] {
+		if unsafeMySQLCollations[strings.ToLower(value)] {
+			return true
+		}
+	}
+	if len(cfg.Params) > 0 {
+		return true
+	}
+	return false
+}
+
+func mysqlDSNQueryParams(dsn string) (url.Values, bool, bool) {
+	slash := strings.LastIndexByte(dsn, '/')
+	if slash == -1 {
+		return nil, false, true
+	}
+	queryStart := strings.IndexByte(dsn[slash+1:], '?')
+	if queryStart == -1 {
+		return nil, false, true
+	}
+	params, err := url.ParseQuery(dsn[slash+1+queryStart+1:])
+	if err != nil {
+		return nil, true, false
+	}
+	return params, true, true
+}
+
+func hasFalseBoolParam(params url.Values, key string) bool {
+	for _, value := range params[key] {
+		switch value {
+		case "0", "false", "FALSE", "False":
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalMySQLCharset(charset string) (string, bool) {
+	charset = strings.ToLower(strings.TrimSpace(charset))
+	if charset == "" {
+		return "", false
+	}
+	for _, r := range charset {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return "", false
+		}
+	}
+	return charset, true
+}
+
+var unsafeMySQLCharsets = map[string]bool{
+	"big5":    true,
+	"cp932":   true,
+	"gb18030": true,
+	"gb2312":  true,
+	"gbk":     true,
+	"sjis":    true,
+}
+
+var unsafeMySQLCollations = map[string]bool{
+	"big5_chinese_ci":        true,
+	"sjis_japanese_ci":       true,
+	"gbk_chinese_ci":         true,
+	"big5_bin":               true,
+	"gb2312_chinese_ci":      true,
+	"gb2312_bin":             true,
+	"gbk_bin":                true,
+	"sjis_bin":               true,
+	"cp932_japanese_ci":      true,
+	"cp932_bin":              true,
+	"gb18030_chinese_ci":     true,
+	"gb18030_bin":            true,
+	"gb18030_unicode_520_ci": true,
 }
 
 // Migrate runs AutoMigrate for all application models on the given DB.
@@ -287,16 +403,20 @@ func Migrate(database *gorm.DB) error {
 		&WikiBacklink{},
 		&WikiPageHistory{},
 		&WikiSearchDocument{},
+		&WikiSearchProjectionTask{},
 		&WikiPage{},
 		&WikiPageRevision{},
 		&WikiChangeset{},
 		&WikiRepoHead{},
+		&WikiGitRepairObligation{},
 		&WikiCompactionJob{},
-		&WikiDirIndex{},
 		&WikiPageLink{},
 		&WikiBlobRef{},
 		&WikiPendingBlob{},
 	); err != nil {
+		return err
+	}
+	if err := DropRetiredWikiDirIndex(database); err != nil {
 		return err
 	}
 	if err := MigrateIssueCommentPinningColumns(database); err != nil {

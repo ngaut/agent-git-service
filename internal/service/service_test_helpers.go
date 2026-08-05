@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // Test helper methods - exported only for testing purposes.
@@ -111,6 +112,42 @@ func IsPublicRepoForTest(s *Service, ctx context.Context, repoID uint) bool {
 // force CompactWikiHistory to fail before the compacted catalog state commits.
 func SetTestWikiCompactRefUpdateFailureForTest(s *Service, fn func(repoFullName, commitSHA string) error) {
 	s.testWikiCompactRefUpdateFailure = fn
+}
+
+// SetTestWikiPostCommitEffectsForTest installs a test-only hook at the start
+// of ordered post-commit side-effect processing.
+func SetTestWikiPostCommitEffectsForTest(s *Service, fn func(repoFullName string, result wikicatalog.ChangeSetResult)) {
+	s.testWikiPostCommitEffects = fn
+}
+
+// SetTestWikiPreparedPublishFailureForTest installs a test-only hook that can
+// force prepared REST commit publication to fail after the catalog transaction.
+func SetTestWikiPreparedPublishFailureForTest(s *Service, fn func(repoFullName, commitSHA string) error) {
+	s.testWikiPreparedPublishFailure = fn
+}
+
+// SetTestWikiPreparedPersistForTest installs a test-only hook immediately
+// before a prepared REST commit's objects are persisted.
+func SetTestWikiPreparedPersistForTest(s *Service, fn func(repoFullName, commitSHA string) error) {
+	s.testWikiPreparedPersist = fn
+}
+
+// SetTestWikiRESTSnapshotForTest installs a test-only hook after a REST writer
+// captures its catalog snapshot and before it waits for the repository Git lock.
+func SetTestWikiRESTSnapshotForTest(s *Service, fn func(repoFullName string)) {
+	s.testWikiRESTSnapshot = fn
+}
+
+// SetTestWikiReceivePackIngestFailureForTest installs a test-only hook that can
+// force the catalog ingest after receive-pack has updated the Git ref to fail.
+func SetTestWikiReceivePackIngestFailureForTest(s *Service, fn func(repoFullName string) error) {
+	s.testWikiReceivePackIngestFailure = fn
+}
+
+// SetTestWikiGitRepairObligationLoadedForTest installs a hook after a wiki
+// repair obligation is loaded and before it is consumed or cleared.
+func SetTestWikiGitRepairObligationLoadedForTest(s *Service, fn func(repoFullName string, obligation db.WikiGitRepairObligation)) {
+	s.testWikiGitRepairObligationLoaded = fn
 }
 
 // SetTestWikiCompactionJobStartedForTest installs a test-only hook fired after

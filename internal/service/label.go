@@ -115,26 +115,30 @@ func (s *Service) DeleteLabel(ctx context.Context, repoFullName, name string) er
 		return err
 	}
 
-	// Delete references from issue_labels and pr_labels join tables using raw SQL
-	if err := s.DBForCtx(ctx).Exec("DELETE FROM issue_labels WHERE label_id = ?", label.ID).Error; err != nil {
-		return wrapErr(err)
-	}
-	if err := s.DBForCtx(ctx).Exec("DELETE FROM pr_labels WHERE label_id = ?", label.ID).Error; err != nil {
-		return wrapErr(err)
-	}
-	if err := s.DBForCtx(ctx).Exec("DELETE FROM wiki_page_labels WHERE label_id = ?", label.ID).Error; err != nil {
-		return wrapErr(err)
-	}
+	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		// Delete references from issue_labels and pr_labels join tables using raw SQL.
+		if err := tx.Exec("DELETE FROM issue_labels WHERE label_id = ?", label.ID).Error; err != nil {
+			return wrapErr(err)
+		}
+		if err := tx.Exec("DELETE FROM pr_labels WHERE label_id = ?", label.ID).Error; err != nil {
+			return wrapErr(err)
+		}
+		if err := tx.Exec("DELETE FROM wiki_page_labels WHERE label_id = ?", label.ID).Error; err != nil {
+			return wrapErr(err)
+		}
 
-	// Now delete the label itself
-	res := s.DBForCtx(ctx).Where("id = ?", label.ID).Delete(&db.Label{})
-	if err := res.Error; err != nil {
-		return wrapErr(err)
+		res := tx.Where("id = ?", label.ID).Delete(&db.Label{})
+		if err := res.Error; err != nil {
+			return wrapErr(err)
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return persistWikiSearchProjectionTasks(tx, rep.ID, affectedWikiSlugs)
+	}); err != nil {
+		return err
 	}
-	if res.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	s.queueWikiSearchRefreshBySlugs(ctx, repoFullName, affectedWikiSlugs)
+	s.kickWikiSearchProjection(ctx, len(affectedWikiSlugs))
 	return nil
 }
 
@@ -622,13 +626,18 @@ func (s *Service) EditLabel(ctx context.Context, repoFullName, oldName string, i
 	if in.Description != nil {
 		label.Description = *in.Description
 	}
-	if err := s.DBForCtx(ctx).Save(&label).Error; err != nil {
+	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&label).Error; err != nil {
+			return err
+		}
+		return persistWikiSearchProjectionTasks(tx, rep.ID, affectedWikiSlugs)
+	}); err != nil {
 		return label, err
 	}
 	if err := s.DBForCtx(ctx).Preload("Repository").Preload("Repository.Owner").First(&label, label.ID).Error; err != nil {
 		return label, err
 	}
-	s.queueWikiSearchRefreshBySlugs(ctx, repoFullName, affectedWikiSlugs)
+	s.kickWikiSearchProjection(ctx, len(affectedWikiSlugs))
 	return label, nil
 }
 

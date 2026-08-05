@@ -60,10 +60,15 @@ type Service struct {
 	embedSemOnce sync.Once
 	embedSem     chan struct{}
 
-	// vectorInitMu and vectorInitDBs track per-DB vector column initialization
-	// to ensure scoped DB handles get embedding columns before writes.
+	// vectorInitMu and vectorInitDBs track per-connection-pool vector column
+	// initialization so short-lived GORM sessions do not repeat schema probes.
 	vectorInitMu  sync.Mutex
-	vectorInitDBs map[*gorm.DB]bool
+	vectorInitDBs map[*sql.DB]bool
+
+	// wikiSearchEmbeddingColumns caches whether each database has the optional
+	// wiki embedding column. Both present and absent results are cached.
+	wikiSearchEmbeddingColumnMu sync.Mutex
+	wikiSearchEmbeddingColumns  map[*sql.DB]bool
 
 	// workflowSyncMu serializes workflow syncs per repository so stale snapshot
 	// cleanup cannot race with a newer push's sync.
@@ -74,6 +79,15 @@ type Service struct {
 	wikiGitIngestSyncMuOnce sync.Once
 	wikiGitIngestSyncMu     map[string]*sync.Mutex
 	wikiGitIngestSyncMapMu  sync.Mutex
+
+	wikiSearchProjectionMu         sync.Mutex
+	wikiSearchProjectionDrains     map[string]bool
+	wikiSearchProjectionWake       map[string]uint64
+	wikiSearchProjectionWorkerOnce sync.Once
+
+	wikiReferenceQueuesMu           sync.Mutex
+	wikiReferenceQueues             map[string]*wikiReferenceQueue
+	wikiReferenceRecoveryWorkerOnce sync.Once
 
 	wikiBgGitIngestMuOnce sync.Once
 	wikiBgGitIngestMu     map[string]struct{}
@@ -106,6 +120,30 @@ type Service struct {
 	// testWikiCompactRefUpdateFailure lets tests force the compact ref update
 	// path to fail after the catalog transaction commits.
 	testWikiCompactRefUpdateFailure func(repoFullName, commitSHA string) error
+
+	// testWikiPostCommitEffects is a test-only hook used to pause ordered
+	// reference/search side effects after the catalog and Git ref are committed.
+	testWikiPostCommitEffects func(repoFullName string, result wikicatalog.ChangeSetResult)
+
+	// testWikiPreparedPublishFailure lets tests force prepared REST commit
+	// publication to fail after the catalog transaction commits.
+	testWikiPreparedPublishFailure func(repoFullName, commitSHA string) error
+
+	// testWikiPreparedPersist lets tests pause or fail Git object persistence
+	// while the catalog transaction proceeds independently.
+	testWikiPreparedPersist func(repoFullName, commitSHA string) error
+
+	// testWikiRESTSnapshot is a test-only hook fired after a REST writer captures
+	// its catalog snapshot and before it waits for the repository Git lock.
+	testWikiRESTSnapshot func(repoFullName string)
+
+	// testWikiReceivePackIngestFailure lets handler tests force the post-ref
+	// receive-pack catalog ingest to fail.
+	testWikiReceivePackIngestFailure func(repoFullName string) error
+
+	// testWikiGitRepairObligationLoaded is a test-only hook used to stage
+	// cross-instance stale repair-obligation consumers after they load a row.
+	testWikiGitRepairObligationLoaded func(repoFullName string, obligation db.WikiGitRepairObligation)
 
 	// testWikiCompactionJobStarted is a test-only hook fired after the async
 	// compaction worker marks a job running.
@@ -628,19 +666,12 @@ func (s *Service) GetRepo(ctx context.Context, fullName string) (db.Repository, 
 	if err != nil {
 		return rep, err
 	}
-	if viewer, ok := UserFromContext(ctx); ok && viewer.ID != 0 {
-		perm, err := s.HasRepoAccess(ctx, rep.ID, viewer.ID)
-		if err != nil {
-			return db.Repository{}, err
-		}
-		if !perm.AtLeast(RepoPermissionRead) && !s.isPublicRepo(ctx, rep.ID) {
-			return db.Repository{}, ErrNotFound
-		}
-		repoPermissionCacheSet(ctx, rep.ID, perm)
-	} else if err := s.requireRepoPermission(ctx, rep.ID, RepoPermissionRead); err != nil {
+	perm, err := s.repoVisibilityPermission(ctx, rep)
+	if err != nil {
 		return db.Repository{}, err
 	}
-	repoCacheSet(ctx, rep)
+	repoPermissionCacheSet(ctx, rep.ID, perm)
+	repoCacheSetForLookup(ctx, fullName, rep)
 	return rep, nil
 }
 
@@ -695,26 +726,61 @@ func (s *Service) RepoDiskUsageKB(ctx context.Context, repo db.Repository) int {
 	return diskUsageKB
 }
 
-// getRepoBase fetches just the repository identity fields needed for
-// repo-scoped mutations and permission checks.
+// GetRepoIdentity fetches the repository identity fields needed for
+// repo-scoped mutations and permission checks without loading REST response
+// associations such as Owner, Parent, and Labels.
+func (s *Service) GetRepoIdentity(ctx context.Context, fullName string) (db.Repository, error) {
+	return s.getRepoBase(ctx, fullName)
+}
+
 func (s *Service) getRepoBase(ctx context.Context, fullName string) (db.Repository, error) {
+	if cached, ok := repoIdentityCacheGet(ctx, fullName); ok {
+		return cached, nil
+	}
 	rep, err := s.lookupRepo(ctx, fullName, func() *gorm.DB {
-		return s.DBForCtx(ctx).Select("id", "full_name", "owner_id")
+		return s.DBForCtx(ctx).Select("id", "full_name", "owner_id", "private")
 	})
 	if err != nil {
 		return rep, err
 	}
-	if err := s.requireRepoPermission(ctx, rep.ID, RepoPermissionRead); err != nil {
+	perm, err := s.repoVisibilityPermission(ctx, rep)
+	if err != nil {
 		return db.Repository{}, err
 	}
+	repoPermissionCacheSet(ctx, rep.ID, perm)
+	repoIdentityCacheSetForLookup(ctx, fullName, rep)
 	return rep, nil
+}
+
+func (s *Service) repoVisibilityPermission(ctx context.Context, rep db.Repository) (RepoPermission, error) {
+	viewer, ok := UserFromContext(ctx)
+	if ok && viewer.ID != 0 {
+		// Agent-owned repositories are the common automation path. Their
+		// ownership is already authoritative, and unlike human owners they do
+		// not need the legacy organization-admin backfill in HasRepoAccess.
+		if viewer.UserKind == db.UserKindAgent && viewer.ID == rep.OwnerID {
+			return RepoPermissionAdmin, nil
+		}
+		perm, err := s.HasRepoAccess(ctx, rep.ID, viewer.ID)
+		if err != nil {
+			return RepoPermissionNone, err
+		}
+		if !perm.AtLeast(RepoPermissionRead) && rep.Private {
+			return RepoPermissionNone, ErrNotFound
+		}
+		return perm, nil
+	}
+	if IsAnonRequest(ctx) && rep.Private {
+		return RepoPermissionNone, ErrNotFound
+	}
+	return RepoPermissionNone, nil
 }
 
 // LookupRepoIdentity resolves a repository and redirects without loading
 // associations or checking permissions. Callers must enforce authorization.
 func (s *Service) LookupRepoIdentity(ctx context.Context, fullName string) (db.Repository, error) {
 	return s.lookupRepo(ctx, fullName, func() *gorm.DB {
-		return s.DBForCtx(ctx).Select("id", "full_name", "owner_id", "default_branch", "private")
+		return s.DBForCtx(ctx).Select("id", "full_name", "owner_id", "default_branch", "private", "has_wiki")
 	})
 }
 
@@ -885,10 +951,16 @@ func (s *Service) deleteRepoCascade(tx *gorm.DB, repoID uint, fullName string) e
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.CommitStatus{})); err != nil {
 		return err
 	}
+	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.WikiGitRepairObligation{})); err != nil {
+		return err
+	}
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.WikiCompactionJob{})); err != nil {
 		return err
 	}
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.WikiSearchDocument{})); err != nil {
+		return err
+	}
+	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.WikiSearchProjectionTask{})); err != nil {
 		return err
 	}
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.DependabotAlert{})); err != nil {

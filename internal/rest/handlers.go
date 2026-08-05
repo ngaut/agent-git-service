@@ -198,11 +198,28 @@ func (d *Deps) mustGetRepo(w http.ResponseWriter, r *http.Request) *db.Repositor
 	return &repo
 }
 
+func (d *Deps) mustGetRepoIdentity(w http.ResponseWriter, r *http.Request) *db.Repository {
+	full := repoFullName(r)
+	repo, err := d.Svc.GetRepoIdentity(r.Context(), full)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return nil
+	}
+	return &repo
+}
+
 func (d *Deps) requireRepoPermission(w http.ResponseWriter, r *http.Request, repoID uint, required service.RepoPermission) bool {
 	viewer, ok := service.UserFromContext(r.Context())
 	if !ok {
 		respond.NotFound(w)
 		return false
+	}
+	if perm, ok := d.Svc.CachedRepoPermission(r.Context(), repoID); ok {
+		if !perm.AtLeast(required) {
+			respond.ServiceErrorRequest(r, w, service.ErrNotFound)
+			return false
+		}
+		return true
 	}
 	perm, err := d.Svc.HasRepoAccess(r.Context(), repoID, viewer.ID)
 	if err != nil {

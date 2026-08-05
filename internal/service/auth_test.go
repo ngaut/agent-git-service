@@ -11,6 +11,7 @@ import (
 
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/service"
+	"gorm.io/gorm"
 )
 
 // --- ApproveDeviceCode ---
@@ -420,5 +421,41 @@ func TestExchangeDeviceCodeConcurrentEnsuresSingleToken(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly 1 token row for access token, got %d", count)
+	}
+}
+
+func TestValidateAndResolveTokenDetailedLoadsUserInOneQuery(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	user := db.User{
+		Login:    "single-query-token-user",
+		Name:     "Single Query",
+		Email:    "single-query@example.com",
+		Type:     db.TypeUser,
+		UserKind: db.UserKindAgent,
+	}
+	if err := svc.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	const tokenValue = "single-query-token"
+	if err := svc.DB.Create(&db.Token{UserID: user.ID, Value: tokenValue}).Error; err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	counter := newQueryCounterLogger()
+	svc.DB = svc.DB.Session(&gorm.Session{Logger: counter})
+	got, failure, err := svc.ValidateAndResolveTokenDetailed(context.Background(), tokenValue)
+	if err != nil {
+		t.Fatalf("ValidateAndResolveTokenDetailed: %v", err)
+	}
+	if failure != service.TokenValidationFailureNone {
+		t.Fatalf("failure = %q, want none", failure)
+	}
+	if got.ID != user.ID || got.Login != user.Login || got.UserKind != user.UserKind {
+		t.Fatalf("resolved user = %+v, want ID=%d login=%q kind=%q", got, user.ID, user.Login, user.UserKind)
+	}
+	if counter.count != 1 {
+		t.Fatalf("ValidateAndResolveTokenDetailed query count = %d, want 1", counter.count)
 	}
 }

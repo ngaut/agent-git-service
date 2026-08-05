@@ -69,8 +69,11 @@ git push origin main
       → ReceivePack handler
       → require write access via `Svc.HasRepoAccess`
       → enforce `GITHTTP_MAX_PUSH_BYTES` limit (default `2 GiB`) for the incoming pack
-      → serve() → CGI to git-http-backend (receive objects and update refs)
-      → on success, spawn background goroutine:
+      → acquire the gitstore repository write lock
+      → snapshot refs and serve() → CGI to git-http-backend
+          (receive objects and update refs)
+      → release the repository write lock
+      → on success, complete synchronous follow-up:
           → fixHEAD(repoPath)
               → git symbolic-ref HEAD → check target branch exists
               → if dangling: git for-each-ref → find first branch → git symbolic-ref HEAD <branch>
@@ -78,6 +81,14 @@ git push origin main
               → scan .github/workflows/ for workflow definitions
               → sync to DB (30-second context timeout)
 ```
+
+For a synthetic `{repo}.wiki.git` backing repository, receive-pack additionally
+holds the parent Wiki catalog serialization lock. Before CGI runs, service
+reconciliation republishes any pending REST commit and ingests an older
+unhandled Git head. The CGI response is buffered while the newly updated ref is
+ingested synchronously; it is released only after catalog catch-up succeeds.
+If ingest fails, the client receives an HTTP failure and the advanced Git head
+remains detectable for the next locked reconciliation attempt.
 
 ### CGI Delegation (`serve`)
 
@@ -108,8 +119,10 @@ The current route is authenticated and permission-aware:
 - **Transport auth happens before CGI delegation.** Git Smart HTTP now depends on middleware auth plus `service.HasRepoAccess`; `REMOTE_USER` in the CGI environment is still not a security boundary.
 - **InfoRefs must enforce intent-specific permissions.** `info/refs` serves both clone/fetch and push discovery, so the handler must derive required access from the `service` query parameter before delegating to CGI.
 - **Git pushes bypass the generic API body cap.** The router keeps the normal 50 MB request cap for REST/API traffic, but `git-receive-pack` enforces its own `GITHTTP_MAX_PUSH_BYTES` limit so large repository pushes can behave more like GitHub. This avoids the previous bug where pushes just over 50 MB were rejected by the generic API limit and, behind AWS ALB, could present to clients as an edge `504`.
+- **Receive-pack shares gitstore's repository write lock.** Ref negotiation and update are serialized with service merges and prepared Wiki ref publication. This prevents a push from advancing a Wiki branch between catalog commit preparation and the final parent-CAS publication.
+- **Wiki receive-pack acknowledges only after catalog ingest.** The handler buffers the successful CGI response for synthetic Wiki backing repos, runs synchronous ingest under the shared catalog/Git locks, and discards that response if ingest fails. The next Wiki push or REST mutation reconciles any Git head left by such a failure before accepting another write.
 - **Dual dependency on gitstore and service.** The handler depends on both `*gitstore.Store` (for repo paths and existence checks) and `*service.Service` (for DB repo lookup, webhook dispatch, and workflow sync). This is an accepted coupling documented as visible technical debt.
-- **Post-push follow-up is asynchronous.** HEAD fixing, push webhook fan-out, pull request synchronize webhook fan-out, and workflow sync run in a background goroutine after the push response is sent to the client. Failures are logged but do not affect the client response.
+- **Post-push follow-up stays synchronous after the repository lock.** HEAD fixing, push webhook fan-out, pull request synchronize webhook fan-out, and workflow sync run after `git-receive-pack` releases the concrete repository lock but before the HTTP request returns. Failures are logged, but the request-scoped DB and user context stay valid for the full follow-up window.
 - **HEAD repair handles branch naming mismatches.** When a client pushes to a branch that differs from the repository's HEAD target (e.g., pushing to `master` when HEAD points to `main`), `fixHEAD` corrects the dangling reference to the first available branch.
 - **Current canonical repo path = physical path.** The request URL still starts as `/{owner}/{repo}.git`, but the handler first resolves the repo through `service.GetRepo` (including redirects) and then maps the canonical full name to `GIT_REPO_DIR/{owner}/{repo}.git`.
 
@@ -120,7 +133,7 @@ For the full dependency-boundary rules see [module-contracts.md § githttp](../m
 **Adding post-push follow-up work:**
 
 1. Add the follow-up logic as a service method (githttp should not own business rules).
-2. Call the new service method from the background goroutine in `ReceivePack`, alongside the existing webhook dispatch and workflow sync follow-up.
+2. Call the new service method from the post-lock follow-up block in `ReceivePack`, alongside the existing webhook dispatch and workflow sync follow-up.
 3. Use a context with timeout for the follow-up work.
 
 **Common patterns:**

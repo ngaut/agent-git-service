@@ -390,6 +390,7 @@ func TestIsTransientError(t *testing.T) {
 	}{
 		{"429 rate limit", "embedding: API returned 429: {\"code\":\"RATE_CONCURRENCY_LIMIT_EXCEEDED\"}", true},
 		{"429 in message", "embedding: API returned 429: too many requests", true},
+		{"429 insufficient quota", "embedding: API returned 429: {\"code\":\"insufficient_quota\"}", false},
 		{"500 server error", "embedding: API returned 500: internal server error", true},
 		{"502 bad gateway", "embedding: API returned 502: bad gateway", true},
 		{"503 unavailable", "embedding: API returned 503: service unavailable", true},

@@ -111,6 +111,12 @@ Repository full names are logical GitHub-compatible identities. Git store code
 must validate full names before mapping them to filesystem paths, and
 write-sensitive operations must take the per-repository mutex.
 
+Multi-file plumbing writes create blob/tree/commit objects separately from ref
+publication. Callers that coordinate Git with another system of record persist
+the prepared SHA first and then publish it with a parent CAS. Any process-local
+tree cache must be bounded, transfer mutable ownership to only one preparer,
+and validate the cached commit against the current branch parent.
+
 `service` is responsible for deciding whether a caller may access a repository.
 `gitstore` should not know about auth or DB permissions.
 
@@ -122,6 +128,8 @@ write-sensitive operations must take the per-repository mutex.
 - `githttp` asks `service.HasRepoAccess(...)` for read/write authorization.
 - `git-http-backend` remains responsible for protocol-level pack and ref
   negotiation.
+- `git-receive-pack` holds the same concrete-store repository mutex used by
+  service writes while it snapshots and updates refs.
 - Post-push side effects, such as workflow sync and webhook dispatch, are
   coordinated through service-level helpers.
 

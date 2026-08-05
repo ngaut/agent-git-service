@@ -9,11 +9,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// incrementBlobRef bumps refcount via a single ON CONFLICT statement.
-// Size is consulted only on first insert; the SHA is content-derived
-// so concurrent inserts can't disagree on it.
+// incrementBlobRef bumps the filesystem CAS refcount via a single ON CONFLICT
+// statement. Inline bodies never materialize in the CAS and therefore need no
+// reference row.
 func incrementBlobRef(tx *gorm.DB, blobSHA string, size int, now time.Time) error {
-	if blobSHA == "" {
+	if blobSHA == "" || size <= MaxBodyInlineBytes {
 		return nil
 	}
 	row := db.WikiBlobRef{
@@ -32,12 +32,11 @@ func incrementBlobRef(tx *gorm.DB, blobSHA string, size int, now time.Time) erro
 	}).Create(&row).Error
 }
 
-// decrementBlobRef lowers the refcount for blobSHA. A row hitting
-// zero is left in place (with refcount=0) so a follow-up GC pass can
-// reclaim both the row and the on-disk blob; this avoids racing with
-// concurrent inserts that may take a fresh reference.
-func decrementBlobRef(tx *gorm.DB, blobSHA string) error {
-	if blobSHA == "" {
+// decrementBlobRef lowers the filesystem CAS refcount for blobSHA. A row
+// hitting zero is left in place so a follow-up GC pass can reclaim both the
+// row and the on-disk blob without racing a concurrent fresh reference.
+func decrementBlobRef(tx *gorm.DB, blobSHA string, size int) error {
+	if blobSHA == "" || size <= MaxBodyInlineBytes {
 		return nil
 	}
 	return tx.Model(&db.WikiBlobRef{}).
@@ -45,104 +44,27 @@ func decrementBlobRef(tx *gorm.DB, blobSHA string) error {
 		UpdateColumn("refcount", gorm.Expr("refcount - 1")).Error
 }
 
-// ensureDirChain inserts a "tree" row for every intermediate directory
-// in slug's parent chain. Inserts are idempotent via DoNothing
-// upsert so concurrent creators of sibling pages don't conflict.
-func ensureDirChain(tx *gorm.DB, repoID uint, slug string) error {
-	for _, dir := range parentChain(slug) {
-		parent, leaf := splitParentLeaf(dir)
-		row := db.WikiDirIndex{
-			RepositoryID: repoID,
-			ParentDir:    parent,
-			ChildName:    leaf,
-			ChildKind:    childKindTree,
-		}
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// insertDirLeaf records slug's leaf entry in its parent directory.
-func insertDirLeaf(tx *gorm.DB, repoID uint, slug string, pageID uint64) error {
-	parent, leaf := splitParentLeaf(slug)
-	row := db.WikiDirIndex{
-		RepositoryID: repoID,
-		ParentDir:    parent,
-		ChildName:    leaf,
-		ChildKind:    childKindBlob,
-		PageID:       &pageID,
-	}
-	return tx.Create(&row).Error
-}
-
-// removeDirLeaf removes slug's leaf entry from its parent directory.
-// Idempotent — missing rows are fine.
-func removeDirLeaf(tx *gorm.DB, repoID uint, slug string) error {
-	parent, leaf := splitParentLeaf(slug)
-	return tx.Where("repository_id = ? AND parent_dir = ? AND child_name = ?",
-		repoID, parent, leaf).
-		Delete(&db.WikiDirIndex{}).Error
-}
-
-// pruneEmptyParents walks slug's ancestor chain from leaf up to
-// root, removing each tree row whose directory has become empty.
-// Stops at the first non-empty ancestor.
-//
-// Implementation: one GROUP BY query collects the live child counts
-// for every ancestor at once, then we walk deepest-first deleting
-// tree rows until we hit one with children. Replaces the legacy
-// "COUNT then DELETE per ancestor" loop that did 2·depth round
-// trips. Bounded by wikiMaxSlugDepth (≤ 6 ancestors per page).
-func pruneEmptyParents(tx *gorm.DB, repoID uint, slug string) error {
-	chain := parentChain(slug)
-	if len(chain) == 0 {
-		return nil
-	}
-	type row struct {
-		ParentDir string
-		N         int64
-	}
-	var rows []row
-	if err := tx.Model(&db.WikiDirIndex{}).
-		Select("parent_dir, COUNT(*) AS n").
-		Where("repository_id = ? AND parent_dir IN ?", repoID, chain).
-		Group("parent_dir").
-		Find(&rows).Error; err != nil {
-		return err
-	}
-	childCount := make(map[string]int64, len(chain))
-	for _, r := range rows {
-		childCount[r.ParentDir] = r.N
-	}
-	for i := len(chain) - 1; i >= 0; i-- {
-		dir := chain[i]
-		if childCount[dir] > 0 {
-			return nil
-		}
-		parent, leaf := splitParentLeaf(dir)
-		if err := tx.Where("repository_id = ? AND parent_dir = ? AND child_name = ? AND child_kind = ?",
-			repoID, parent, leaf, childKindTree).
-			Delete(&db.WikiDirIndex{}).Error; err != nil {
-			return err
-		}
-		// Pruning this tree row decrements the parent's live count
-		// for any subsequent iteration on the same chain.
-		childCount[parent]--
-	}
-	return nil
-}
-
-// refreshOutlinks replaces the wiki_page_links rows for srcPageID
-// with the current outbound link set extracted from body. Dangling
-// links (no matching wiki_pages row in this repo) keep dst_page_id
-// NULL and remain queryable by dst_slug for the future resolver.
-func refreshOutlinks(tx *gorm.DB, repoID uint, srcPageID uint64, body string) error {
-	if err := tx.Where("src_page_id = ?", srcPageID).Delete(&db.WikiPageLink{}).Error; err != nil {
-		return err
-	}
+// refreshOutlinks writes the current outbound link set for srcPageID. When
+// replace is true it first removes the previous set; creates and restores pass
+// false because no live outlinks can exist for their page. A prepared
+// single-upsert snapshot can provide every live target and avoid re-reading
+// wiki_pages inside the transaction.
+func refreshOutlinks(
+	tx *gorm.DB,
+	repoID uint,
+	srcPageID uint64,
+	srcSlug string,
+	body string,
+	replace bool,
+	snapshotTargets map[string]uint64,
+	snapshotKnown bool,
+) error {
 	outs := ExtractOutlinks(body)
+	if replace {
+		if err := tx.Where("src_page_id = ?", srcPageID).Delete(&db.WikiPageLink{}).Error; err != nil {
+			return err
+		}
+	}
 	if len(outs) == 0 {
 		return nil
 	}
@@ -151,15 +73,18 @@ func refreshOutlinks(tx *gorm.DB, repoID uint, srcPageID uint64, body string) er
 	// reference to a soft-deleted slug would resolve to the
 	// tombstoned page_id, breaking the catalog invariant that every
 	// non-NULL dst_page_id points at a live page.
-	var matches []db.WikiPage
-	if err := tx.Select("page_id", "slug").
-		Where("repository_id = ? AND slug IN ? AND deleted_at IS NULL", repoID, outs).
-		Find(&matches).Error; err != nil {
-		return err
-	}
-	resolved := make(map[string]uint64, len(matches))
-	for _, m := range matches {
-		resolved[m.Slug] = m.PageID
+	resolved := snapshotTargets
+	if !snapshotKnown {
+		var matches []db.WikiPage
+		if err := tx.Select("page_id", "slug").
+			Where("repository_id = ? AND slug IN ? AND deleted_at IS NULL", repoID, outs).
+			Find(&matches).Error; err != nil {
+			return err
+		}
+		resolved = make(map[string]uint64, len(matches))
+		for _, m := range matches {
+			resolved[m.Slug] = m.PageID
+		}
 	}
 	rows := make([]db.WikiPageLink, 0, len(outs))
 	for _, dst := range outs {
@@ -168,7 +93,11 @@ func refreshOutlinks(tx *gorm.DB, repoID uint, srcPageID uint64, body string) er
 			SrcPageID:    srcPageID,
 			DstSlug:      dst,
 		}
-		if pid, ok := resolved[dst]; ok {
+		pid, ok := resolved[dst]
+		if snapshotKnown && dst == srcSlug {
+			pid, ok = srcPageID, true
+		}
+		if ok {
 			pidCopy := pid
 			link.DstPageID = &pidCopy
 		}

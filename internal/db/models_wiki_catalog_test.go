@@ -22,10 +22,11 @@ func TestWikiCatalogAutoMigrate(t *testing.T) {
 		"wiki_page_revisions",
 		"wiki_changesets",
 		"wiki_repo_heads",
-		"wiki_dir_index",
+		"wiki_git_repair_obligations",
 		"wiki_page_links",
 		"wiki_blob_refs",
 		"wiki_pending_blobs",
+		"wiki_search_projection_tasks",
 	}
 	for _, table := range tables {
 		if !gdb.Migrator().HasTable(table) {
@@ -46,14 +47,19 @@ func TestWikiCatalogAutoMigrate(t *testing.T) {
 		{"wiki_changesets", "idx_wiki_changesets_repo"},
 		{"wiki_changesets", "idx_wiki_changesets_parent"},
 		{"wiki_changesets", "idx_wiki_changesets_superseded"},
-		{"wiki_dir_index", "idx_wiki_dir_repo_parent_kind_name"},
+		{"wiki_repo_heads", "idx_wiki_repo_heads_reference_pending"},
 		{"wiki_page_links", "idx_wiki_links_dst_resolved"},
 		{"wiki_page_links", "idx_wiki_links_repo_dst_slug"},
+		{"wiki_search_projection_tasks", "idx_wiki_search_projection_task"},
+		{"wiki_search_projection_tasks", "idx_wiki_search_projection_claim"},
 	}
 	for _, idx := range indexes {
 		if !gdb.Migrator().HasIndex(idx.table, idx.name) {
 			t.Errorf("expected index %q on %q after Migrate", idx.name, idx.table)
 		}
+	}
+	if !gdb.Migrator().HasConstraint(&WikiSearchProjectionTask{}, "Repository") {
+		t.Error("expected repository foreign key on wiki_search_projection_tasks after Migrate")
 	}
 }
 
@@ -64,6 +70,10 @@ func TestWikiSlugModelTypesAvoidIndexedCollationRewrite(t *testing.T) {
 	}
 	if !strings.Contains(wikiSearchSlugTag, "size:255") {
 		t.Fatalf("WikiSearchDocument.Slug gorm tag = %q, want size:255", wikiSearchSlugTag)
+	}
+	projectionSlugTag := gormTag(t, WikiSearchProjectionTask{}, "Slug")
+	if !strings.Contains(projectionSlugTag, "size:255") {
+		t.Fatalf("WikiSearchProjectionTask.Slug gorm tag = %q, want size:255", projectionSlugTag)
 	}
 
 	wikiPageSlugTag := gormTag(t, WikiPage{}, "Slug")
@@ -156,17 +166,6 @@ func TestWikiCatalogRoundTrip(t *testing.T) {
 	if err := gdb.Create(&rev).Error; err != nil {
 		t.Fatalf("create revision: %v", err)
 	}
-	dir := WikiDirIndex{
-		RepositoryID: repo.ID,
-		ParentDir:    "",
-		ChildName:    "home",
-		ChildKind:    "blob",
-		PageID:       &page.PageID,
-	}
-	if err := gdb.Create(&dir).Error; err != nil {
-		t.Fatalf("create dir entry: %v", err)
-	}
-
 	// Round-trip readback.
 	var got WikiPage
 	if err := gdb.First(&got, "page_id = ?", page.PageID).Error; err != nil {

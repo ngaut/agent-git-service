@@ -112,29 +112,64 @@ func wikiSearchResponse(repoFullName, routePrefix string, resp service.WikiSearc
 
 // WikiTreeEntry shapes one wiki tree entry.
 func WikiTreeEntry(repoFullName string, entry service.WikiTreeEntry, ref string) map[string]any {
+	typed := WikiTreeEntryTyped(repoFullName, entry, ref)
+	out := map[string]any{
+		"path": typed.Path,
+		"name": typed.Name,
+		"kind": typed.Kind,
+		"sha":  typed.SHA,
+		"url":  typed.URL,
+	}
+	if typed.Slug != "" {
+		out["slug"] = typed.Slug
+		out["title"] = typed.Title
+		out["size"] = typed.Size
+		out["html_url"] = typed.HTMLURL
+	}
+	return out
+}
+
+// WikiTreeEntryResponse is the allocation-light wire shape used when encoding
+// a full tree response. Size remains an interface so a zero-byte page is
+// emitted as size: 0 while directory-only fields stay absent.
+type WikiTreeEntryResponse struct {
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	SHA     string `json:"sha"`
+	URL     string `json:"url"`
+	Slug    string `json:"slug,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Size    any    `json:"size,omitempty"`
+	HTMLURL string `json:"html_url,omitempty"`
+}
+
+// WikiTreeEntryTyped shapes one wiki tree entry without allocating a map.
+func WikiTreeEntryTyped(repoFullName string, entry service.WikiTreeEntry, ref string) WikiTreeEntryResponse {
 	treeQuery := url.Values{"path": []string{entry.Path}}
 	if ref != "" {
 		treeQuery.Set("ref", ref)
 	}
-	out := map[string]any{
-		"path": entry.Path,
-		"name": entry.Name,
-		"kind": entry.Kind,
-		"sha":  entry.SHA,
-		"url":  fmt.Sprintf("%s/repos/%s/wiki/tree?%s", extensionAPIBase(), repoFullName, treeQuery.Encode()),
+	out := WikiTreeEntryResponse{
+		Path: entry.Path,
+		Name: entry.Name,
+		Kind: entry.Kind,
+		SHA:  entry.SHA,
+		URL:  fmt.Sprintf("%s/repos/%s/wiki/tree?%s", extensionAPIBase(), repoFullName, treeQuery.Encode()),
 	}
-	if entry.Kind == "page" {
-		apiSlug := url.PathEscape(entry.Slug)
-		pageQuery := ""
-		if ref != "" {
-			pageQuery = "?ref=" + url.QueryEscape(ref)
-		}
-		out["slug"] = entry.Slug
-		out["title"] = entry.Title
-		out["size"] = entry.Size
-		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s%s", htmlBase(), repoFullName, entry.Slug, pageQuery)
-		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s%s", extensionAPIBase(), repoFullName, apiSlug, pageQuery)
+	if entry.Kind != "page" {
+		return out
 	}
+	apiSlug := url.PathEscape(entry.Slug)
+	pageQuery := ""
+	if ref != "" {
+		pageQuery = "?ref=" + url.QueryEscape(ref)
+	}
+	out.Slug = entry.Slug
+	out.Title = entry.Title
+	out.Size = entry.Size
+	out.HTMLURL = fmt.Sprintf("%s/%s/wiki/%s%s", htmlBase(), repoFullName, entry.Slug, pageQuery)
+	out.URL = fmt.Sprintf("%s/repos/%s/wiki/pages/%s%s", extensionAPIBase(), repoFullName, apiSlug, pageQuery)
 	return out
 }
 

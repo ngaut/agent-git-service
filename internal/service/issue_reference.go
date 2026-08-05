@@ -119,7 +119,7 @@ func (s *Service) syncWikiPageReferences(ctx context.Context, repo db.Repository
 		Body:                     body,
 		CreatedAt:                createdAt,
 	})
-	if isMissingTableErr(err) {
+	if isMissingIssueReferencesTableErr(err) {
 		return nil
 	}
 	return err
@@ -155,13 +155,13 @@ func (s *Service) syncIssueReferencesForSource(ctx context.Context, source issue
 	if err != nil {
 		return err
 	}
+	if len(refs) == 0 {
+		return s.deleteIssueReferencesForSource(ctx, source).Error
+	}
 	return s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := ContextWithDB(ctx, tx)
 		if err := s.deleteIssueReferencesForSource(txCtx, source).Error; err != nil {
 			return err
-		}
-		if len(refs) == 0 {
-			return nil
 		}
 		for i := range refs {
 			if !source.CreatedAt.IsZero() {
@@ -186,7 +186,11 @@ func (s *Service) resolveIssueReferenceMatches(ctx context.Context, source issue
 			}
 			return nil, err
 		}
-		if !s.issueReferenceTargetExists(ctx, targetRepo.ID, match.Number) {
+		targetExists, err := s.issueReferenceTargetExists(ctx, targetRepo.ID, match.Number)
+		if err != nil {
+			return nil, err
+		}
+		if !targetExists {
 			continue
 		}
 		if source.SourceRepositoryID == targetRepo.ID {
@@ -223,24 +227,22 @@ func (s *Service) lookupIssueReferenceTargetRepo(ctx context.Context, fullName s
 	})
 }
 
-func (s *Service) issueReferenceTargetExists(ctx context.Context, repoID uint, number int) bool {
+func (s *Service) issueReferenceTargetExists(ctx context.Context, repoID uint, number int) (bool, error) {
 	var count int64
 	if err := s.DBForCtx(ctx).Model(&db.Issue{}).
 		Where("repository_id = ? AND number = ?", repoID, number).
 		Count(&count).Error; err != nil {
-		slog.WarnContext(ctx, "issue reference target issue lookup failed", "repo_id", repoID, "number", number, "error", err)
-		return false
+		return false, fmt.Errorf("lookup issue reference target issue: %w", err)
 	}
 	if count > 0 {
-		return true
+		return true, nil
 	}
 	if err := s.DBForCtx(ctx).Model(&db.PullRequest{}).
 		Where("repository_id = ? AND number = ?", repoID, number).
 		Count(&count).Error; err != nil {
-		slog.WarnContext(ctx, "issue reference target pull request lookup failed", "repo_id", repoID, "number", number, "error", err)
-		return false
+		return false, fmt.Errorf("lookup issue reference target pull request: %w", err)
 	}
-	return count > 0
+	return count > 0, nil
 }
 
 func (s *Service) deleteIssueReferencesForSource(ctx context.Context, source issueReferenceSource) *gorm.DB {
@@ -274,7 +276,7 @@ func (s *Service) deleteIssueReferencesForWikiPage(ctx context.Context, repoID u
 		SourceRepositoryID: repoID,
 		SourceWikiSlug:     &slug,
 	}).Error
-	if isMissingTableErr(err) {
+	if isMissingIssueReferencesTableErr(err) {
 		return nil
 	}
 	return err

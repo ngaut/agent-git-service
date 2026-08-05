@@ -30,6 +30,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/router"
 	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness/testdb"
+	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
 // skipIfNoBackend skips the test if git-http-backend is not available.
@@ -75,6 +76,11 @@ func setupTestServer(t *testing.T, owner, repo, defaultBranch string, seed bool)
 		&db.User{}, &db.Team{}, &db.TeamMember{}, &db.TeamRepository{},
 		&db.Repository{}, &db.RepoRedirect{}, &db.Token{}, &db.Label{}, &db.Workflow{}, &db.Collaborator{},
 		&db.Webhook{}, &db.HookDelivery{}, &db.PullRequest{},
+		&db.WikiPage{}, &db.WikiPageRevision{}, &db.WikiChangeset{}, &db.WikiRepoHead{},
+		&db.WikiGitRepairObligation{}, &db.WikiPageLink{}, &db.WikiBlobRef{}, &db.WikiPendingBlob{},
+		&db.WikiPageLabel{}, &db.WikiSearchDocument{},
+		&db.WikiSearchProjectionTask{},
+		&db.WikiPageIndex{}, &db.WikiIndexState{}, &db.WikiBacklink{}, &db.WikiPageHistory{},
 	); err != nil {
 		t.Fatalf("auto-migrate: %v", err)
 	}
@@ -88,6 +94,12 @@ func setupTestServer(t *testing.T, owner, repo, defaultBranch string, seed bool)
 		DB:  gdb,
 		Git: gitStore,
 	}
+	wikiBlob := wikicatalog.NewBlobStore(tmpDir)
+	wikiCat := wikicatalog.New(gdb, wikiBlob)
+	svc.WikiBlob = wikiBlob
+	svc.WikiCatalog = wikiCat
+	wikiCat.DBFor = svc.DBForCtx
+	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
 
 	gitHandler := githttp.New(gitStore, svc)
 	restDeps := &rest.Deps{Svc: svc}
@@ -309,6 +321,311 @@ func TestReceivePackDispatchesPushWebhook(t *testing.T) {
 	}
 }
 
+func TestReceivePack_AllowsOrdinaryDotWikiRepositoryNames(t *testing.T) {
+	env := setupTestServer(t, "dotwiki", "project.wiki", "main", true)
+
+	cloneDir := filepath.Join(env.TmpDir, "dotwiki-clone")
+	runGit(t, env.TmpDir, "clone", env.RepoURL, cloneDir)
+	if err := os.WriteFile(filepath.Join(cloneDir, "dotwiki.txt"), []byte("ordinary repo\n"), 0o644); err != nil {
+		t.Fatalf("write ordinary repo file: %v", err)
+	}
+	runGit(t, cloneDir, "add", "dotwiki.txt")
+	runGit(t, cloneDir, "commit", "-m", "ordinary dotwiki push")
+	runGit(t, cloneDir, "push", "origin", "main")
+
+	headSHA, err := env.Store.HeadSHA(context.Background(), "dotwiki/project.wiki", "main")
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+	if headSHA == "" {
+		t.Fatalf("expected pushed head sha")
+	}
+}
+
+func TestReceivePack_DoesNotTreatRealDotWikiRepoAsParentWiki(t *testing.T) {
+	env := setupTestServer(t, "dotwiki", "project.wiki", "main", true)
+
+	var parentOwner db.User
+	if err := env.DB.First(&parentOwner, "login = ?", "dotwiki").Error; err != nil {
+		t.Fatalf("load parent owner: %v", err)
+	}
+	parentRepo := db.Repository{
+		Name:          "project",
+		FullName:      "dotwiki/project",
+		OwnerID:       parentOwner.ID,
+		DefaultBranch: "main",
+		HasWiki:       true,
+	}
+	if err := env.DB.Create(&parentRepo).Error; err != nil {
+		t.Fatalf("create parent repo: %v", err)
+	}
+	if err := env.Store.Init(context.Background(), parentRepo.FullName, parentRepo.DefaultBranch, true); err != nil {
+		t.Fatalf("init parent repo: %v", err)
+	}
+
+	ingested := make(chan string, 1)
+	env.Svc.SetWikiGitIngestAfterSnapshotHookForTest(func(repoFullName string) {
+		select {
+		case ingested <- repoFullName:
+		default:
+		}
+	})
+	defer env.Svc.SetWikiGitIngestAfterSnapshotHookForTest(nil)
+
+	cloneDir := filepath.Join(env.TmpDir, "dotwiki-coexist-clone")
+	runGit(t, env.TmpDir, "clone", env.RepoURL, cloneDir)
+	if err := os.WriteFile(filepath.Join(cloneDir, "coexist.txt"), []byte("ordinary coexist repo\n"), 0o644); err != nil {
+		t.Fatalf("write coexist file: %v", err)
+	}
+	runGit(t, cloneDir, "add", "coexist.txt")
+	runGit(t, cloneDir, "commit", "-m", "ordinary dotwiki coexist push")
+	runGit(t, cloneDir, "push", "origin", "main")
+
+	select {
+	case repoFullName := <-ingested:
+		t.Fatalf("unexpected wiki ingest for ordinary .wiki repo push: %s", repoFullName)
+	default:
+	}
+
+	headSHA, err := env.Store.HeadSHA(context.Background(), "dotwiki/project.wiki", "main")
+	if err != nil {
+		t.Fatalf("HeadSHA(dotwiki/project.wiki): %v", err)
+	}
+	if headSHA == "" {
+		t.Fatalf("expected ordinary .wiki repo push head sha")
+	}
+	if env.Store.Exists(context.Background(), "dotwiki/project.wiki.wiki") {
+		t.Fatalf("unexpected synthetic wiki repo created for ordinary .wiki repository")
+	}
+}
+
+func TestReceivePack_WikiBackingRepoPushTriggersSynchronousIngest(t *testing.T) {
+	env := setupTestServer(t, "wikio", "project", "main", true)
+
+	ingested := make(chan string, 1)
+	env.Svc.SetWikiGitIngestAfterSnapshotHookForTest(func(repoFullName string) {
+		select {
+		case ingested <- repoFullName:
+		default:
+		}
+	})
+	defer env.Svc.SetWikiGitIngestAfterSnapshotHookForTest(nil)
+
+	wikiURL := fmt.Sprintf("%s/%s/%s.git", env.Server.URL, "wikio", "project.wiki")
+	localDir := filepath.Join(env.TmpDir, "wiki-backing-local")
+	runGit(t, env.TmpDir, "init", localDir)
+	runGit(t, localDir, "checkout", "-b", "master")
+	if err := os.WriteFile(filepath.Join(localDir, "home.md"), []byte("# Home\n\nWiki push\n"), 0o644); err != nil {
+		t.Fatalf("write wiki page: %v", err)
+	}
+	runGit(t, localDir, "add", "home.md")
+	runGit(t, localDir, "commit", "-m", "wiki backing push")
+	runGit(t, localDir, "remote", "add", "origin", wikiURL)
+	runGit(t, localDir, "push", "origin", "master")
+
+	select {
+	case repoFullName := <-ingested:
+		if repoFullName != "wikio/project" {
+			t.Fatalf("ingested repo = %q, want %q", repoFullName, "wikio/project")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for synchronous wiki ingest")
+	}
+
+	headSHA, err := env.Store.HeadSHA(context.Background(), "wikio/project.wiki", "master")
+	if err != nil {
+		t.Fatalf("HeadSHA(wikio/project.wiki): %v", err)
+	}
+	if headSHA == "" {
+		t.Fatalf("expected wiki backing repo head sha after push")
+	}
+}
+
+func TestReceivePack_WikiForcePushRebuildsCatalog(t *testing.T) {
+	env := setupTestServer(t, "wikiforce", "project", "main", true)
+
+	wikiURL := fmt.Sprintf("%s/%s/%s.git", env.Server.URL, "wikiforce", "project.wiki")
+	localDir := filepath.Join(env.TmpDir, "wiki-force-push-local")
+	runGit(t, env.TmpDir, "init", localDir)
+	runGit(t, localDir, "checkout", "-b", "master")
+	pagePath := filepath.Join(localDir, "home.md")
+	if err := os.WriteFile(pagePath, []byte("# Home\n\nFirst version\n"), 0o644); err != nil {
+		t.Fatalf("write first wiki page: %v", err)
+	}
+	runGit(t, localDir, "add", "home.md")
+	runGit(t, localDir, "commit", "-m", "first wiki version")
+	firstCommit := strings.TrimSpace(runGit(t, localDir, "rev-parse", "HEAD"))
+	runGit(t, localDir, "remote", "add", "origin", wikiURL)
+	runGit(t, localDir, "push", "origin", "master")
+
+	if err := os.WriteFile(pagePath, []byte("# Home\n\nSecond version\n"), 0o644); err != nil {
+		t.Fatalf("write second wiki page: %v", err)
+	}
+	runGit(t, localDir, "add", "home.md")
+	runGit(t, localDir, "commit", "-m", "second wiki version")
+	runGit(t, localDir, "push", "origin", "master")
+
+	page, err := env.Svc.GetWikiPage(context.Background(), "wikiforce/project", "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage after second push: %v", err)
+	}
+	if page.Body != "# Home\n\nSecond version\n" {
+		t.Fatalf("page body after second push = %q", page.Body)
+	}
+
+	runGit(t, localDir, "reset", "--hard", firstCommit)
+	runGit(t, localDir, "push", "--force", "origin", "master")
+
+	page, err = env.Svc.GetWikiPage(context.Background(), "wikiforce/project", "home")
+	if err != nil {
+		t.Fatalf("GetWikiPage after force push: %v", err)
+	}
+	if page.Body != "# Home\n\nFirst version\n" {
+		t.Fatalf("page body after force push = %q", page.Body)
+	}
+	history, total, err := env.Svc.ListWikiPageHistoryPage(context.Background(), "wikiforce/project", "home", 1, 10)
+	if err != nil {
+		t.Fatalf("ListWikiPageHistoryPage after force push: %v", err)
+	}
+	if total != 1 || len(history) != 1 {
+		t.Fatalf("history after force push = %d entries (%d total), want 1", len(history), total)
+	}
+	if history[0].SHA != firstCommit {
+		t.Fatalf("history SHA after force push = %q, want %q", history[0].SHA, firstCommit)
+	}
+}
+
+func TestReceivePack_WikiBranchDeletionClearsCatalog(t *testing.T) {
+	env := setupTestServer(t, "wikidelete", "project", "main", true)
+
+	wikiURL := fmt.Sprintf("%s/%s/%s.git", env.Server.URL, "wikidelete", "project.wiki")
+	localDir := filepath.Join(env.TmpDir, "wiki-delete-branch-local")
+	runGit(t, env.TmpDir, "init", localDir)
+	runGit(t, localDir, "checkout", "-b", "master")
+	if err := os.WriteFile(filepath.Join(localDir, "home.md"), []byte("# Home\n"), 0o644); err != nil {
+		t.Fatalf("write wiki page: %v", err)
+	}
+	runGit(t, localDir, "add", "home.md")
+	runGit(t, localDir, "commit", "-m", "wiki page before branch deletion")
+	runGit(t, localDir, "remote", "add", "origin", wikiURL)
+	runGit(t, localDir, "push", "origin", "master")
+
+	if _, err := env.Svc.GetWikiPage(context.Background(), "wikidelete/project", "home"); err != nil {
+		t.Fatalf("GetWikiPage before branch deletion: %v", err)
+	}
+	runGit(t, localDir, "push", "origin", "--delete", "master")
+
+	if _, err := env.Svc.GetWikiPage(context.Background(), "wikidelete/project", "home"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("GetWikiPage after branch deletion error = %v, want ErrNotFound", err)
+	}
+	pages, err := env.Svc.ListWikiPages(context.Background(), "wikidelete/project", service.ListWikiPagesOptions{})
+	if err != nil {
+		t.Fatalf("ListWikiPages after branch deletion: %v", err)
+	}
+	if len(pages) != 0 {
+		t.Fatalf("ListWikiPages after branch deletion returned %d pages, want 0", len(pages))
+	}
+}
+
+func TestReceivePack_WikiIngestFailureReturnsErrorAndNextRESTWriteRecovers(t *testing.T) {
+	env := setupTestServer(t, "wikif", "project", "main", true)
+
+	ingestErr := errors.New("forced wiki receive-pack ingest failure")
+	service.SetTestWikiReceivePackIngestFailureForTest(env.Svc, func(repoFullName string) error {
+		if repoFullName == "wikif/project" {
+			return ingestErr
+		}
+		return nil
+	})
+	defer service.SetTestWikiReceivePackIngestFailureForTest(env.Svc, nil)
+
+	wikiURL := fmt.Sprintf("%s/%s/%s.git", env.Server.URL, "wikif", "project.wiki")
+	localDir := filepath.Join(env.TmpDir, "wiki-failed-ingest-local")
+	runGit(t, env.TmpDir, "init", localDir)
+	runGit(t, localDir, "checkout", "-b", "master")
+	if err := os.WriteFile(filepath.Join(localDir, "pushed.md"), []byte("# Pushed\n"), 0o644); err != nil {
+		t.Fatalf("write wiki page: %v", err)
+	}
+	runGit(t, localDir, "add", "pushed.md")
+	runGit(t, localDir, "commit", "-m", "wiki push with failed ingest")
+	runGit(t, localDir, "remote", "add", "origin", wikiURL)
+	if output, err := runGitAllowFailure(t, localDir, "push", "origin", "master"); err == nil {
+		t.Fatalf("push succeeded despite ingest failure: %s", output)
+	}
+
+	if _, err := env.Store.HeadSHA(context.Background(), "wikif/project.wiki", "master"); err != nil {
+		t.Fatalf("wiki ref did not advance before forced ingest failure: %v", err)
+	}
+	var repo db.Repository
+	if err := env.DB.First(&repo, "full_name = ?", "wikif/project").Error; err != nil {
+		t.Fatalf("load parent repo: %v", err)
+	}
+	var pushedBefore int64
+	if err := env.DB.Model(&db.WikiPage{}).
+		Where("repository_id = ? AND slug = ? AND deleted_at IS NULL", repo.ID, "pushed").
+		Count(&pushedBefore).Error; err != nil {
+		t.Fatalf("count pushed page before recovery: %v", err)
+	}
+	if pushedBefore != 0 {
+		t.Fatalf("pushed page count before recovery = %d, want 0", pushedBefore)
+	}
+
+	service.SetTestWikiReceivePackIngestFailureForTest(env.Svc, nil)
+	if _, err := env.Svc.PutWikiPage(context.Background(), "wikif/project", "rest", "# Rest\n", "create rest", ""); err != nil {
+		t.Fatalf("PutWikiPage after failed receive-pack ingest: %v", err)
+	}
+	env.Svc.Wg.Wait()
+
+	for slug := range map[string]struct{}{"pushed": {}, "rest": {}} {
+		if _, err := env.Svc.GetWikiPage(context.Background(), "wikif/project", slug); err != nil {
+			t.Fatalf("GetWikiPage(%s): %v", slug, err)
+		}
+	}
+}
+
+func TestReceivePack_WikiPreBackendServeErrorClearsRepairOwner(t *testing.T) {
+	env := setupTestServer(t, "wikiclean", "project", "main", true)
+
+	badSpoolPath := filepath.Join(env.TmpDir, "not-a-directory")
+	if err := os.WriteFile(badSpoolPath, []byte("not a directory"), 0644); err != nil {
+		t.Fatalf("write bad spool path: %v", err)
+	}
+	t.Setenv("GITHTTP_SPOOL_DIR", badSpoolPath)
+
+	var owner db.User
+	if err := env.DB.First(&owner, "login = ?", "wikiclean").Error; err != nil {
+		t.Fatalf("load owner: %v", err)
+	}
+	handler := githttp.New(env.Store, env.Svc)
+	req := newRequestWithParams(
+		http.MethodPost,
+		"http://example.com/wikiclean/project.wiki.git/git-receive-pack",
+		strings.NewReader("not a git receive-pack request"),
+		map[string]string{"owner": "wikiclean", "repo": "project.wiki.git"},
+	)
+	req = req.WithContext(service.ContextWithUser(req.Context(), owner))
+	req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
+	req.TransferEncoding = []string{"chunked"}
+	req.ContentLength = -1
+
+	rr := httptest.NewRecorder()
+	handler.ReceivePack(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want %d", rr.Code, http.StatusInternalServerError)
+	}
+	var obligations int64
+	if err := env.DB.Model(&db.WikiGitRepairObligation{}).Count(&obligations).Error; err != nil {
+		t.Fatalf("count repair obligations: %v", err)
+	}
+	if obligations != 0 {
+		t.Fatalf("repair obligations after pre-backend serve error = %d, want 0", obligations)
+	}
+	if _, err := env.Svc.PutWikiPage(context.Background(), "wikiclean/project", "home", "# Home\n", "create home", ""); err != nil {
+		t.Fatalf("PutWikiPage after pre-backend serve error: %v", err)
+	}
+}
+
 func waitForPushWebhookDelivery(t *testing.T, database *gorm.DB, repoID uint, hits *atomic.Int64) db.HookDelivery {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -446,6 +763,10 @@ func (s *stubStore) RepoRoot(ctx context.Context) (string, error) {
 		return "", s.rootErr
 	}
 	return s.root, nil
+}
+
+func (s *stubStore) WithRepoLock(ctx context.Context, fullName string, fn func() error) error {
+	return fn()
 }
 
 var _ githttp.Store = (*stubStore)(nil)

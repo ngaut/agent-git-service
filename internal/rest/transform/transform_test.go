@@ -1,6 +1,7 @@
 package transform_test
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -575,6 +576,45 @@ func TestWikiTreeEntryCarriesRefInPageURLs(t *testing.T) {
 	}
 	if got, want := result["html_url"], "https://test.local/alice/myrepo/wiki/docs/old?ref=1111111111111111111111111111111111111111"; got != want {
 		t.Fatalf("html_url = %q, want %q", got, want)
+	}
+}
+
+func TestWikiTreeEntryTypedPreservesOptionalFieldsAndZeroSize(t *testing.T) {
+	directory, err := json.Marshal(transform.WikiTreeEntryTyped("alice/myrepo", service.WikiTreeEntry{
+		Path: "docs",
+		Name: "docs",
+		Kind: "directory",
+	}, ""))
+	if err != nil {
+		t.Fatalf("marshal directory: %v", err)
+	}
+	var directoryJSON map[string]any
+	if err := json.Unmarshal(directory, &directoryJSON); err != nil {
+		t.Fatalf("decode directory: %v", err)
+	}
+	for _, field := range []string{"slug", "title", "size", "html_url"} {
+		if _, ok := directoryJSON[field]; ok {
+			t.Fatalf("directory unexpectedly contains %q: %s", field, directory)
+		}
+	}
+
+	page, err := json.Marshal(transform.WikiTreeEntryTyped("alice/myrepo", service.WikiTreeEntry{
+		Path:  "empty",
+		Name:  "Empty",
+		Kind:  "page",
+		Slug:  "empty",
+		Title: "Empty",
+		Size:  0,
+	}, ""))
+	if err != nil {
+		t.Fatalf("marshal page: %v", err)
+	}
+	var pageJSON map[string]any
+	if err := json.Unmarshal(page, &pageJSON); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if size, ok := pageJSON["size"]; !ok || size != float64(0) {
+		t.Fatalf("zero-byte page size = %v (present=%v), want present 0: %s", size, ok, page)
 	}
 }
 

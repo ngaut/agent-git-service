@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	srvmiddleware "github.com/ngaut/agent-git-service/internal/middleware"
 	"github.com/ngaut/agent-git-service/internal/rest/respond"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 	"github.com/ngaut/agent-git-service/internal/service"
@@ -36,10 +37,23 @@ type wikiV2StateResponse struct {
 // ListWikiTree handles GET /api/ext/v1/repos/{owner}/{repo}/wiki/tree
 func (d *Deps) ListWikiTree(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	semanticETag := ""
+	if srvmiddleware.UsesWikiNavigationETag(r) {
+		version, err := d.Svc.WikiNavigationVersion(r.Context(), full, r.URL.Query().Get("path"))
+		if err != nil {
+			d.respondWikiReadError(w, r, full, err)
+			return
+		}
+		semanticETag = srvmiddleware.BuildSemanticETag(r, "wiki-tree-v1", version+"\x00"+transform.HTMLBase()+"\x00"+transform.ExtensionAPIBase())
+		d.setWikiSyncInProgressHeaderForRequest(w, r, full)
+		if srvmiddleware.WriteSemanticNotModified(w, r, semanticETag) {
+			return
+		}
+	}
 	tree, err := d.Svc.ListWikiTreeAtRef(
 		r.Context(),
 		full,
@@ -51,9 +65,12 @@ func (d *Deps) ListWikiTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
-	out := make([]any, 0, len(tree))
+	if semanticETag != "" {
+		srvmiddleware.SetSemanticETag(w, semanticETag)
+	}
+	out := make([]transform.WikiTreeEntryResponse, 0, len(tree))
 	for _, entry := range tree {
-		out = append(out, transform.WikiTreeEntry(full, entry, ref))
+		out = append(out, transform.WikiTreeEntryTyped(full, entry, ref))
 	}
 	respond.JSON(w, http.StatusOK, out)
 }
@@ -97,7 +114,7 @@ func (d *Deps) respondWikiReadError(w http.ResponseWriter, r *http.Request, full
 // SearchWikiPages handles GET /api/ext/v1/repos/{owner}/{repo}/wiki/search
 func (d *Deps) SearchWikiPages(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	limit, offset := 20, 0
@@ -135,7 +152,7 @@ func (d *Deps) SearchWikiPages(w http.ResponseWriter, r *http.Request) {
 // ListWikiPages handles GET /api/ext/v1/repos/{owner}/{repo}/wiki/pages
 func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	page, perPage := parsePagination(r)
@@ -149,18 +166,18 @@ func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 		recursive = parsed
 	}
 	labels, excludeLabels := wikiLabelFiltersFromQuery(r.URL.Query())
-	pages, err := d.Svc.ListWikiPages(r.Context(), full, service.ListWikiPagesOptions{
+	pages, total, err := d.Svc.ListWikiPagesPaginated(r.Context(), full, service.ListWikiPagesOptions{
 		Path:          r.URL.Query().Get("path"),
 		Recursive:     recursive,
 		Labels:        labels,
 		ExcludeLabels: excludeLabels,
-	})
+	}, (page-1)*perPage, perPage)
 	if err != nil {
 		d.respondWikiReadError(w, r, full, err)
 		return
 	}
 	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
-	pages = paginate(w, r, d.Svc.BaseURL, pages, page, perPage)
+	setLinkHeader(w, r, d.Svc.BaseURL, total, page, perPage)
 	out := make([]any, 0, len(pages))
 	for _, p := range pages {
 		out = append(out, transform.WikiPageSummary(full, p))
@@ -171,7 +188,7 @@ func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 // GetWikiState handles GET /api/ext/v1/repos/{owner}/{repo}/wiki/state
 func (d *Deps) GetWikiState(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	state, err := d.Svc.GetWikiV2State(r.Context(), full)
@@ -192,7 +209,7 @@ func (d *Deps) GetWikiState(w http.ResponseWriter, r *http.Request) {
 // RequestWikiReconcile handles POST /api/ext/v1/repos/{owner}/{repo}/wiki/reconcile/request
 func (d *Deps) RequestWikiReconcile(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -214,7 +231,7 @@ func (d *Deps) RequestWikiReconcile(w http.ResponseWriter, r *http.Request) {
 // ReconcileWiki handles POST /api/ext/v1/repos/{owner}/{repo}/wiki/reconcile
 func (d *Deps) ReconcileWiki(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -271,7 +288,7 @@ func (d *Deps) RemoveAllWikiPageLabels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Deps) listWikiPageLabels(w http.ResponseWriter, r *http.Request, full, slug string) {
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	labels, err := d.Svc.ListWikiPageLabels(r.Context(), full, slug)
@@ -283,7 +300,7 @@ func (d *Deps) listWikiPageLabels(w http.ResponseWriter, r *http.Request, full, 
 }
 
 func (d *Deps) addWikiPageLabels(w http.ResponseWriter, r *http.Request, full, slug string) {
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -310,7 +327,7 @@ func (d *Deps) addWikiPageLabels(w http.ResponseWriter, r *http.Request, full, s
 }
 
 func (d *Deps) setWikiPageLabels(w http.ResponseWriter, r *http.Request, full, slug string) {
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -337,7 +354,7 @@ func (d *Deps) setWikiPageLabels(w http.ResponseWriter, r *http.Request, full, s
 }
 
 func (d *Deps) removeWikiPageLabel(w http.ResponseWriter, r *http.Request, full, slug, name string) {
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -357,7 +374,7 @@ func (d *Deps) removeWikiPageLabel(w http.ResponseWriter, r *http.Request, full,
 }
 
 func (d *Deps) removeAllWikiPageLabels(w http.ResponseWriter, r *http.Request, full, slug string) {
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -378,7 +395,7 @@ func (d *Deps) removeAllWikiPageLabels(w http.ResponseWriter, r *http.Request, f
 // MoveWikiPagePrefix handles POST /api/ext/v1/repos/{owner}/{repo}/wiki/move
 func (d *Deps) MoveWikiPagePrefix(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -464,7 +481,7 @@ func (d *Deps) MoveWikiPagePrefix(w http.ResponseWriter, r *http.Request) {
 func (d *Deps) MoveWikiPage(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -507,7 +524,7 @@ func (d *Deps) GetWikiPage(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	page, err := d.Svc.GetWikiPageAtRef(r.Context(), full, slug, ref)
@@ -523,7 +540,7 @@ func (d *Deps) GetWikiPage(w http.ResponseWriter, r *http.Request) {
 func (d *Deps) ListWikiPageHistory(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	d.listWikiPageHistory(w, r, full, slug)
@@ -548,7 +565,7 @@ func (d *Deps) listWikiPageHistory(w http.ResponseWriter, r *http.Request, full,
 // CompactWikiHistory handles POST /api/ext/v1/repos/{owner}/{repo}/wiki/compact
 func (d *Deps) CompactWikiHistory(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -583,7 +600,7 @@ func (d *Deps) CompactWikiHistory(w http.ResponseWriter, r *http.Request) {
 // GetWikiCompactionJob handles GET /api/ext/v1/repos/{owner}/{repo}/wiki/compact/{jobID}
 func (d *Deps) GetWikiCompactionJob(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -601,7 +618,7 @@ func (d *Deps) GetWikiCompactionJob(w http.ResponseWriter, r *http.Request) {
 // RepairWikiLocks handles POST /api/ext/v1/admin/wiki/repos/{owner}/{repo}/repair-locks
 func (d *Deps) RepairWikiLocks(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -670,7 +687,7 @@ func wikiCompactionJobResponse(job db.WikiCompactionJob, statusURL string) map[s
 func (d *Deps) ListWikiBacklinks(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
-	if d.mustGetRepo(w, r) == nil {
+	if d.mustGetRepoIdentity(w, r) == nil {
 		return
 	}
 	backlinks, err := d.Svc.ListWikiBacklinks(r.Context(), full, slug)
@@ -690,7 +707,7 @@ func (d *Deps) ListWikiBacklinks(w http.ResponseWriter, r *http.Request) {
 func (d *Deps) PutWikiPage(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}
@@ -749,7 +766,7 @@ func (d *Deps) PutWikiPage(w http.ResponseWriter, r *http.Request) {
 func (d *Deps) DeleteWikiPage(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	slug := wikiSlugParam(r)
-	repo := d.mustGetRepo(w, r)
+	repo := d.mustGetRepoIdentity(w, r)
 	if repo == nil {
 		return
 	}

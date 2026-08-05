@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/gitstore"
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 	"github.com/ngaut/agent-git-service/internal/wikiv2"
 )
@@ -55,6 +56,7 @@ type WikiPageSummary struct {
 	Slug       string
 	Title      string
 	SHA        string
+	Size       int64
 	UpdatedAt  time.Time
 	LastAuthor *db.User
 	Labels     []db.Label
@@ -617,23 +619,123 @@ func (s *Service) ensureWikiRepo(ctx context.Context, repoFullName string) error
 	if s.Git == nil {
 		return errors.New("git store unavailable")
 	}
-	return s.Git.Init(ctx, wikiRepoFullName(repoFullName), wikiDefaultBranch, false)
+	return ensureWikiRepoWithGit(ctx, s.Git, repoFullName)
+}
+
+func ensureWikiRepoWithGit(ctx context.Context, git *gitstore.Store, repoFullName string) error {
+	return git.Init(ctx, wikiRepoFullName(repoFullName), wikiDefaultBranch, false)
 }
 
 // withWikiCatalogWriteLock serializes catalog writes and git-ingest refreshes
 // for one wiki repository. This keeps the read-path freshness hook from racing
 // REST writes through the same catalog tables in tests and production.
 func (s *Service) withWikiCatalogWriteLock(ctx context.Context, repoFullName string, fn func() error) error {
+	if s.Git == nil {
+		return errors.New("git store unavailable")
+	}
+	return s.withWikiCatalogWriteLockAndGit(ctx, s.Git, repoFullName, fn)
+}
+
+func (s *Service) withWikiCatalogWriteLockOnly(ctx context.Context, repoFullName string, fn func(db.Repository) error) error {
+	stageStarted := time.Now()
 	repo, err := s.LookupRepoIdentity(ctx, repoFullName)
+	observeWikiWritePhase(ctx, wikiWritePhaseLockRepoLookup, stageStarted)
 	if err != nil {
 		return err
 	}
-	mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(ctx, repo))
-	mu.Lock()
-	defer mu.Unlock()
+	return s.withWikiCatalogWriteLockOnlyForRepo(ctx, repo, fn)
+}
 
-	full := wikiRepoFullName(repoFullName)
-	return s.Git.WithRepoLock(ctx, full, fn)
+func (s *Service) withWikiCatalogWriteLockOnlyForRepo(ctx context.Context, repo db.Repository, fn func(db.Repository) error) error {
+	mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(ctx, repo))
+	stageStarted := time.Now()
+	mu.Lock()
+	observeWikiWritePhase(ctx, wikiWritePhaseCatalogLockWait, stageStarted)
+	defer mu.Unlock()
+	return fn(repo)
+}
+
+// WithWikiCatalogWriteLockForReceivePack serializes wiki receive-pack catalog
+// ingestion with REST writes while the caller manages the wiki repo git lock.
+func (s *Service) WithWikiCatalogWriteLockForReceivePack(ctx context.Context, repoFullName string, fn func() error) error {
+	return s.withWikiCatalogWriteLockOnly(ctx, repoFullName, func(db.Repository) error {
+		return fn()
+	})
+}
+
+func (s *Service) withWikiCatalogWriteLockAndGit(ctx context.Context, git *gitstore.Store, repoFullName string, fn func() error) error {
+	return s.withWikiCatalogWriteLockOnly(ctx, repoFullName, func(repo db.Repository) error {
+		return s.withWikiGitLock(ctx, git, repo, fn)
+	})
+}
+
+func (s *Service) withWikiCatalogWriteLockAndGitForRepo(ctx context.Context, git *gitstore.Store, repo db.Repository, fn func() error) error {
+	// The caller already loaded the authenticated repository identity.
+	recordWikiWriteDuration(ctx, wikiWritePhaseLockRepoLookup, 0)
+	return s.withWikiCatalogWriteLockOnlyForRepo(ctx, repo, func(repo db.Repository) error {
+		return s.withWikiGitLock(ctx, git, repo, fn)
+	})
+}
+
+// withWikiRESTWriteLocksForRepo lets the next REST writer capture its catalog
+// snapshot while the previous writer is publishing the already-committed Git
+// ref. The catalog lock remains the outer serialization lock, but it is
+// released after locked returns and before afterCatalogUnlock runs. The Git
+// lock stays held through publication, so no receive-pack, compaction, catalog
+// commit, or later ref update can pass it. The next REST writer may persist
+// immutable child objects early, but validates HEAD after acquiring this lock.
+func (s *Service) withWikiRESTWriteLocksForRepo(
+	ctx context.Context,
+	git *gitstore.Store,
+	repo db.Repository,
+	beforeGit func() error,
+	locked func() (afterCatalogUnlock func() error, err error),
+) (err error) {
+	recordWikiWriteDuration(ctx, wikiWritePhaseLockRepoLookup, 0)
+	mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(ctx, repo))
+	waitStarted := time.Now()
+	mu.Lock()
+	observeWikiWritePhase(ctx, wikiWritePhaseCatalogLockWait, waitStarted)
+	catalogLocked := true
+	criticalSectionStarted := time.Now()
+	defer func() {
+		if catalogLocked {
+			observeWikiWritePhase(ctx, wikiWritePhaseCriticalSection, criticalSectionStarted)
+			mu.Unlock()
+		}
+	}()
+
+	if beforeGit != nil {
+		if err := beforeGit(); err != nil {
+			return err
+		}
+	}
+
+	full := wikiRepoFullName(repo.FullName)
+	gitWaitStarted := time.Now()
+	return git.WithRepoLock(ctx, full, func() error {
+		observeWikiWritePhase(ctx, wikiWritePhaseGitLockWait, gitWaitStarted)
+		afterCatalogUnlock, lockedErr := locked()
+		observeWikiWritePhase(ctx, wikiWritePhaseCriticalSection, criticalSectionStarted)
+		mu.Unlock()
+		catalogLocked = false
+		if lockedErr != nil {
+			return lockedErr
+		}
+		if afterCatalogUnlock == nil {
+			return nil
+		}
+		return afterCatalogUnlock()
+	})
+}
+
+func (s *Service) withWikiGitLock(ctx context.Context, git *gitstore.Store, repo db.Repository, fn func() error) error {
+	full := wikiRepoFullName(repo.FullName)
+	waitStarted := time.Now()
+	return git.WithRepoLock(ctx, full, func() error {
+		observeWikiWritePhase(ctx, wikiWritePhaseGitLockWait, waitStarted)
+		return fn()
+	})
 }
 
 // ListWikiPages returns one summary entry per markdown page at the wiki
@@ -645,80 +747,8 @@ func (s *Service) withWikiCatalogWriteLock(ctx context.Context, repoFullName str
 // replaces the legacy "git ls-tree + per-page git log" walk that
 // produced 55 s sidebar latencies at 3000 pages.
 func (s *Service) ListWikiPages(ctx context.Context, repoFullName string, opts ListWikiPagesOptions) ([]WikiPageSummary, error) {
-	rep, err := s.getRepoBase(ctx, repoFullName)
-	if err != nil {
-		return nil, err
-	}
-	if opts.Path != "" {
-		if err := validateWikiSlug(opts.Path); err != nil {
-			return nil, err
-		}
-	}
-	if rows, ok, err := s.loadCurrentWikiV2Rows(ctx, repoFullName, rep.ID); err != nil {
-		return nil, err
-	} else if ok {
-		return s.listWikiPagesFromV2Rows(ctx, rep.ID, rows, opts)
-	}
-	if s.WikiCatalog == nil {
-		return nil, errors.New("wiki catalog unavailable")
-	}
-	if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
-		return nil, err
-	}
-
-	var pages []db.WikiPage
-	if err := s.DBForCtx(ctx).
-		Preload("LastAuthor").
-		Where("repository_id = ? AND deleted_at IS NULL", rep.ID).
-		Find(&pages).Error; err != nil {
-		return nil, fmt.Errorf("list wiki pages: %w", err)
-	}
-
-	pageSlugs := make([]string, 0, len(pages))
-	filtered := make([]db.WikiPage, 0, len(pages))
-	for _, p := range pages {
-		if !wikiSlugMatchesPathFilter(p.Slug, opts.Path, opts.Recursive) {
-			continue
-		}
-		filtered = append(filtered, p)
-		pageSlugs = append(pageSlugs, p.Slug)
-	}
-
-	labelFilters := WikiLabelFilters{Labels: opts.Labels, ExcludeLabels: opts.ExcludeLabels}
-	var allowedSlugs map[string]struct{}
-	if hasWikiLabelFilters(labelFilters) {
-		var noResults bool
-		allowedSlugs, noResults, err = s.wikiSlugsMatchingLabelFilters(ctx, rep.ID, pageSlugs, labelFilters)
-		if err != nil {
-			return nil, err
-		}
-		if noResults {
-			return []WikiPageSummary{}, nil
-		}
-	}
-	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, rep.ID, pageSlugs)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]WikiPageSummary, 0, len(filtered))
-	for _, p := range filtered {
-		if allowedSlugs != nil {
-			if _, ok := allowedSlugs[p.Slug]; !ok {
-				continue
-			}
-		}
-		out = append(out, WikiPageSummary{
-			Slug:       p.Slug,
-			Title:      titleFromSlug(p.Slug),
-			SHA:        p.HeadBlobSHA,
-			Labels:     labelsBySlug[p.Slug],
-			UpdatedAt:  p.UpdatedAt,
-			LastAuthor: p.LastAuthor,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
-	return out, nil
+	pages, _, err := s.ListWikiPagesPaginated(ctx, repoFullName, opts, 0, 0)
+	return pages, err
 }
 
 // ListWikiTreeAtRef returns the direct children for one wiki directory view.
@@ -742,7 +772,7 @@ func (s *Service) ListWikiTreeAtRef(ctx context.Context, repoFullName, dirPath, 
 			if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
 				return nil, err
 			}
-			tree, ok, err := s.listWikiTreeFromCatalog(ctx, rep.ID, dirPath)
+			tree, _, ok, err := s.listWikiTreeFromCatalog(ctx, rep.ID, dirPath)
 			if err != nil {
 				return nil, err
 			}
@@ -806,32 +836,82 @@ type wikiTreePageRow struct {
 	Size        int    `gorm:"column:body_size"`
 }
 
-func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirPath string) ([]WikiTreeEntry, bool, error) {
+func (s *Service) listWikiTreeFromCatalog(ctx context.Context, repoID uint, dirPath string) ([]WikiTreeEntry, int, bool, error) {
 	var pages []wikiTreePageRow
-	if err := buildWikiTreePageRowsQuery(s.DBForCtx(ctx), repoID).Find(&pages).Error; err != nil {
+	if err := buildWikiTreePageRowsQuery(s.DBForCtx(ctx), repoID, dirPath).Find(&pages).Error; err != nil {
 		if isMissingTableErr(err) {
-			return nil, false, nil
+			return nil, 0, false, nil
 		}
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	if len(pages) == 0 {
 		hasCatalogState, err := s.wikiCatalogHasHead(ctx, repoID)
 		if err != nil {
-			return nil, false, err
+			return nil, 0, false, err
 		}
 		if hasCatalogState {
-			return []WikiTreeEntry{}, true, nil
+			return []WikiTreeEntry{}, 0, true, nil
 		}
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
-	return wikiTreeFromPageRows(pages, dirPath), true, nil
+	return wikiTreeFromPageRows(pages, dirPath), len(pages), true, nil
 }
 
-func buildWikiTreePageRowsQuery(database *gorm.DB, repoID uint) *gorm.DB {
-	return database.
+func buildWikiTreePageRowsQuery(database *gorm.DB, repoID uint, dirPath string) *gorm.DB {
+	query := database.
 		Model(&db.WikiPage{}).
 		Select("slug", "head_blob_sha", "body_size").
 		Where("repository_id = ? AND deleted_at IS NULL", repoID)
+	return applyWikiPathFilterQuery(query, "slug", dirPath, true).Order("slug ASC")
+}
+
+// ListWikiTreeWithPageCount returns the live direct-child tree and the number
+// of descendant pages represented by that tree snapshot. Catalog-backed reads
+// obtain both from the same indexed row scan.
+func (s *Service) ListWikiTreeWithPageCount(ctx context.Context, repoFullName, dirPath string) ([]WikiTreeEntry, int, error) {
+	dirPath = strings.Trim(strings.TrimSpace(dirPath), "/")
+	if dirPath != "" {
+		if err := validateWikiSlug(dirPath); err != nil {
+			return nil, 0, err
+		}
+	}
+	rep, err := s.getRepoBase(ctx, repoFullName)
+	if err != nil {
+		return nil, 0, err
+	}
+	if s.WikiCatalog != nil {
+		if err := s.ensureWikiCatalogCurrent(ctx, repoFullName); err != nil {
+			return nil, 0, err
+		}
+		tree, count, ok, err := s.listWikiTreeFromCatalog(ctx, rep.ID, dirPath)
+		if err != nil {
+			return nil, 0, err
+		}
+		if ok {
+			return tree, count, nil
+		}
+	}
+	if rows, ok, err := s.loadCurrentWikiV2Rows(ctx, repoFullName, rep.ID); err != nil {
+		return nil, 0, err
+	} else if ok {
+		count := 0
+		for _, row := range rows {
+			if wikiSlugMatchesPathFilter(row.Slug, dirPath, true) {
+				count++
+			}
+		}
+		return wikiTreeFromV2Rows(rows, dirPath), count, nil
+	}
+
+	tree, err := s.ListWikiTreeAtRef(ctx, repoFullName, dirPath, "")
+	if err != nil {
+		return nil, 0, err
+	}
+	pages, err := s.ListWikiPages(ctx, repoFullName, ListWikiPagesOptions{Path: dirPath, Recursive: true})
+	if err != nil {
+		return nil, 0, err
+	}
+	return tree, len(pages), nil
 }
 
 func wikiTreeFromV2Rows(rows []db.WikiPageIndex, dirPath string) []WikiTreeEntry {
@@ -905,6 +985,20 @@ func wikiTreeFromPageRows(pages []wikiTreePageRow, dirPath string) []WikiTreeEnt
 		return out[i].Kind < out[j].Kind
 	})
 	return out
+}
+
+// WikiTreeFromPageSummaries reuses a complete recursive list result to build
+// the matching direct-child tree without a second scan of the live page table.
+func WikiTreeFromPageSummaries(pages []WikiPageSummary, dirPath string) []WikiTreeEntry {
+	rows := make([]wikiTreePageRow, 0, len(pages))
+	for _, page := range pages {
+		rows = append(rows, wikiTreePageRow{
+			Slug:        page.Slug,
+			HeadBlobSHA: page.SHA,
+			Size:        int(page.Size),
+		})
+	}
+	return wikiTreeFromPageRows(rows, dirPath)
 }
 
 func (s *Service) wikiCatalogHasHead(ctx context.Context, repoID uint) (bool, error) {
@@ -1112,55 +1206,6 @@ func (s *Service) wikiCurrentBodiesFromCatalog(ctx context.Context, repoID uint,
 		}
 		out[slug] = string(body)
 	}
-	return out, nil
-}
-
-func (s *Service) listWikiPagesFromV2Rows(ctx context.Context, repoID uint, rows []db.WikiPageIndex, opts ListWikiPagesOptions) ([]WikiPageSummary, error) {
-	pageSlugs := make([]string, 0, len(rows))
-	filtered := make([]db.WikiPageIndex, 0, len(rows))
-	for _, row := range rows {
-		if !wikiSlugMatchesPathFilter(row.Slug, opts.Path, opts.Recursive) {
-			continue
-		}
-		filtered = append(filtered, row)
-		pageSlugs = append(pageSlugs, row.Slug)
-	}
-
-	labelFilters := WikiLabelFilters{Labels: opts.Labels, ExcludeLabels: opts.ExcludeLabels}
-	var allowedSlugs map[string]struct{}
-	var err error
-	if hasWikiLabelFilters(labelFilters) {
-		var noResults bool
-		allowedSlugs, noResults, err = s.wikiSlugsMatchingLabelFilters(ctx, repoID, pageSlugs, labelFilters)
-		if err != nil {
-			return nil, err
-		}
-		if noResults {
-			return []WikiPageSummary{}, nil
-		}
-	}
-	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, repoID, pageSlugs)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]WikiPageSummary, 0, len(filtered))
-	for _, row := range filtered {
-		if allowedSlugs != nil {
-			if _, ok := allowedSlugs[row.Slug]; !ok {
-				continue
-			}
-		}
-		out = append(out, WikiPageSummary{
-			Slug:       row.Slug,
-			Title:      row.Title,
-			SHA:        row.HeadBlobSHA,
-			UpdatedAt:  row.UpdatedAt,
-			LastAuthor: row.LastAuthor,
-			Labels:     labelsBySlug[row.Slug],
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
 	return out, nil
 }
 
@@ -1666,16 +1711,28 @@ func (s *Service) ListWikiBacklinks(ctx context.Context, repoFullName, slug stri
 // the change onto the wiki bare git repo so clone/pull continue to
 // work, and feeds the search index. See WikiCatalogPostCommit.
 func (s *Service) PutWikiPage(ctx context.Context, repoFullName, slug, body, message, expectedSHA string) (WikiPage, error) {
+	ctx, timing := withWikiWriteTiming(ctx, "put")
+	started := time.Now()
+	recordWikiWriteValue(ctx, wikiWriteValueBodyBytes, int64(len(body)))
+	defer func() {
+		recordWikiWriteDuration(ctx, wikiWritePhaseTotal, time.Since(started))
+		timing.flush(ctx)
+	}()
+
 	if err := validateWikiSlug(slug); err != nil {
 		return WikiPage{}, err
 	}
 	if s.WikiCatalog == nil {
 		return WikiPage{}, errors.New("wiki catalog unavailable")
 	}
-	if err := s.ensureWikiRepo(ctx, repoFullName); err != nil {
-		return WikiPage{}, err
+	if s.Git == nil {
+		return WikiPage{}, errors.New("git store unavailable")
 	}
+	catalog := s.WikiCatalog
+	git := s.Git
+	stageStarted := time.Now()
 	rep, err := s.getRepoBase(ctx, repoFullName)
+	observeWikiWritePhase(ctx, wikiWritePhaseRepoLookup, stageStarted)
 	if err != nil {
 		return WikiPage{}, err
 	}
@@ -1689,35 +1746,73 @@ func (s *Service) PutWikiPage(ctx context.Context, repoFullName, slug, body, mes
 		Body:    []byte(body),
 		IfMatch: expectedSHA,
 	}
+	authorID := s.resolveWikiAuthor(ctx)
 	var result wikicatalog.ChangeSetResult
-	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
-		var applyErr error
-		result, applyErr = s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+	var postCommit *wikiPostCommitWaiter
+	result, postCommit, err = s.applyWikiRESTChangeSetWithLocks(
+		ctx,
+		git,
+		catalog,
+		rep,
+		wikicatalog.ChangeSetRequest{
 			RepositoryID: rep.ID,
-			AuthorID:     s.resolveWikiAuthor(ctx),
+			AuthorID:     authorID,
 			Source:       wikicatalog.SourceREST,
 			Message:      message,
 			Changes:      []wikicatalog.Change{change},
-		})
-		return applyErr
-	})
+		},
+	)
+	if err == nil {
+		stageStarted = time.Now()
+		err = postCommit.wait()
+		observeWikiWritePhase(ctx, wikiWritePhasePostCommitWait, stageStarted)
+	}
 	if err != nil {
 		return WikiPage{}, s.translateCatalogError(ctx, rep.ID, repoFullName, err, false)
 	}
+	stageStarted = time.Now()
 	written := result.Changes[0]
-	page, err := s.loadLiveWikiPage(ctx, rep.ID, written.Slug)
+	var writtenLabels []db.Label
+	switch written.UpsertDisposition {
+	case wikicatalog.UpsertDispositionCreate, wikicatalog.UpsertDispositionRestore:
+		// New and restored pages cannot have labels: create has no prior row,
+		// and delete clears label links in the catalog transaction.
+	default:
+		labels, labelErr := s.wikiLabelsForSlugs(ctx, rep.ID, []string{written.Slug})
+		if labelErr != nil {
+			err = labelErr
+		} else {
+			writtenLabels = labels[written.Slug]
+		}
+	}
+	observeWikiWritePhase(ctx, wikiWritePhaseLabels, stageStarted)
 	if err != nil {
 		return WikiPage{}, err
 	}
-	bodyBytes, err := s.wikiPageBody(ctx, page)
-	if err != nil {
-		return WikiPage{}, err
+
+	var lastAuthor *db.User
+	if authorID != nil {
+		if user, ok := UserFromContext(ctx); ok && user.ID == *authorID {
+			userCopy := user
+			lastAuthor = &userCopy
+		} else {
+			var author db.User
+			if err := s.DBForCtx(ctx).First(&author, "id = ?", *authorID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return WikiPage{}, err
+			} else if err == nil {
+				lastAuthor = &author
+			}
+		}
 	}
-	labels, err := s.wikiLabelsForSlugs(ctx, rep.ID, []string{written.Slug})
-	if err != nil {
-		return WikiPage{}, err
-	}
-	return s.wikiPageFromCatalog(page, bodyBytes, labels[written.Slug]), nil
+	return WikiPage{
+		Slug:       written.Slug,
+		Title:      wikicatalog.TitleFromSlug(written.Slug),
+		Body:       body,
+		UpdatedAt:  result.CommittedAt,
+		SHA:        written.BlobSHA,
+		LastAuthor: lastAuthor,
+		Labels:     writtenLabels,
+	}, nil
 }
 
 // DeleteWikiPage removes a page. Returns ErrNotFound when the wiki repo
@@ -1734,6 +1829,11 @@ func (s *Service) DeleteWikiPage(ctx context.Context, repoFullName, slug, messag
 	if s.WikiCatalog == nil {
 		return errors.New("wiki catalog unavailable")
 	}
+	if s.Git == nil {
+		return errors.New("git store unavailable")
+	}
+	catalog := s.WikiCatalog
+	git := s.Git
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return err
@@ -1741,16 +1841,22 @@ func (s *Service) DeleteWikiPage(ctx context.Context, repoFullName, slug, messag
 	if message == "" {
 		message = "Delete " + slug
 	}
-	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
-		_, applyErr := s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+	_, postCommit, err := s.applyWikiRESTChangeSetWithLocks(
+		ctx,
+		git,
+		catalog,
+		rep,
+		wikicatalog.ChangeSetRequest{
 			RepositoryID: rep.ID,
 			AuthorID:     s.resolveWikiAuthor(ctx),
 			Source:       wikicatalog.SourceREST,
 			Message:      message,
 			Changes:      []wikicatalog.Change{{Op: wikicatalog.OpDelete, Slug: slug}},
-		})
-		return applyErr
-	})
+		},
+	)
+	if err == nil {
+		err = postCommit.wait()
+	}
 	if err != nil {
 		return s.translateCatalogError(ctx, rep.ID, repoFullName, err, false)
 	}
@@ -1777,6 +1883,11 @@ func (s *Service) MoveWikiPage(ctx context.Context, repoFullName, slug, newSlug,
 	if s.WikiCatalog == nil {
 		return WikiMoveResult{}, errors.New("wiki catalog unavailable")
 	}
+	if s.Git == nil {
+		return WikiMoveResult{}, errors.New("git store unavailable")
+	}
+	catalog := s.WikiCatalog
+	git := s.Git
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return WikiMoveResult{}, err
@@ -1823,23 +1934,30 @@ func (s *Service) MoveWikiPage(ctx context.Context, repoFullName, slug, newSlug,
 		})
 	}
 
-	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
-		_, applyErr := s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+	_, postCommit, err := s.applyWikiRESTChangeSetWithLocks(
+		ctx,
+		git,
+		catalog,
+		rep,
+		wikicatalog.ChangeSetRequest{
 			RepositoryID: rep.ID,
 			AuthorID:     s.resolveWikiAuthor(ctx),
 			Source:       wikicatalog.SourceREST,
 			Message:      commitMessage,
 			Changes:      changes,
-		})
-		return applyErr
-	})
+		},
+	)
+	if err == nil {
+		err = postCommit.wait()
+	}
 	if err != nil {
 		return WikiMoveResult{}, s.translateCatalogError(ctx, rep.ID, repoFullName, err, true)
 	}
-	if err := s.moveWikiPageLabels(ctx, rep.ID, map[string]string{slug: newSlug}); err != nil {
+	labelProjectionCount, err := s.moveWikiPageLabels(ctx, rep.ID, map[string]string{slug: newSlug})
+	if err != nil {
 		return WikiMoveResult{}, err
 	}
-	s.queueWikiSearchRefreshBySlugs(ctx, repoFullName, append([]string{newSlug}, rewriteSlugs...))
+	s.kickWikiSearchProjection(ctx, labelProjectionCount)
 
 	s.invalidateWikiBacklinks(repoFullName)
 
@@ -1928,6 +2046,7 @@ func (s *Service) wikiSummariesFromCatalog(ctx context.Context, repoID uint, slu
 	slugs = uniqueStrings(slugs)
 	var pages []db.WikiPage
 	if err := s.DBForCtx(ctx).
+		Select("page_id", "repository_id", "slug", "head_blob_sha", "body_size", "last_author_id", "updated_at").
 		Preload("LastAuthor").
 		Where("repository_id = ? AND slug IN ? AND deleted_at IS NULL", repoID, slugs).
 		Find(&pages).Error; err != nil {
@@ -1939,6 +2058,7 @@ func (s *Service) wikiSummariesFromCatalog(ctx context.Context, repoID uint, slu
 			Slug:       p.Slug,
 			Title:      wikicatalog.TitleFromSlug(p.Slug),
 			SHA:        p.HeadBlobSHA,
+			Size:       int64(p.BodySize),
 			UpdatedAt:  p.UpdatedAt,
 			LastAuthor: p.LastAuthor,
 			Labels:     labelsBySlug[p.Slug],
@@ -1960,9 +2080,14 @@ func (s *Service) MoveWikiPagePrefix(ctx context.Context, repoFullName, from, to
 	if from == to {
 		return WikiBulkMoveResult{}, fmt.Errorf("%w: from and to must differ", ErrValidation)
 	}
+	if s.WikiCatalog == nil {
+		return WikiBulkMoveResult{}, errors.New("wiki catalog unavailable")
+	}
 	if s.Git == nil {
 		return WikiBulkMoveResult{}, errors.New("git store unavailable")
 	}
+	catalog := s.WikiCatalog
+	git := s.Git
 	rep, err := s.getRepoBase(ctx, repoFullName)
 	if err != nil {
 		return WikiBulkMoveResult{}, err
@@ -2150,17 +2275,23 @@ func (s *Service) MoveWikiPagePrefix(ctx context.Context, repoFullName, from, to
 	}
 
 	var applyResult wikicatalog.ChangeSetResult
-	err = s.withWikiCatalogWriteLock(ctx, repoFullName, func() error {
-		var applyErr error
-		applyResult, applyErr = s.WikiCatalog.ApplyChangeSet(ctx, wikicatalog.ChangeSetRequest{
+	var postCommit *wikiPostCommitWaiter
+	applyResult, postCommit, err = s.applyWikiRESTChangeSetWithLocks(
+		ctx,
+		git,
+		catalog,
+		rep,
+		wikicatalog.ChangeSetRequest{
 			RepositoryID: rep.ID,
 			AuthorID:     s.resolveWikiAuthor(ctx),
 			Source:       wikicatalog.SourceREST,
 			Message:      commitMessage,
 			Changes:      changes,
-		})
-		return applyErr
-	})
+		},
+	)
+	if err == nil {
+		err = postCommit.wait()
+	}
 	if err != nil {
 		return WikiBulkMoveResult{}, s.translateCatalogError(ctx, rep.ID, repoFullName, err, true)
 	}
@@ -2168,7 +2299,8 @@ func (s *Service) MoveWikiPagePrefix(ctx context.Context, repoFullName, from, to
 	for _, mv := range moved {
 		labelRemaps[mv.From] = mv.To
 	}
-	if err := s.moveWikiPageLabels(ctx, rep.ID, labelRemaps); err != nil {
+	labelProjectionCount, err := s.moveWikiPageLabels(ctx, rep.ID, labelRemaps)
+	if err != nil {
 		return WikiBulkMoveResult{}, err
 	}
 
@@ -2179,7 +2311,7 @@ func (s *Service) MoveWikiPagePrefix(ctx context.Context, repoFullName, from, to
 		labelLookupSlugs = append(labelLookupSlugs, mv.To)
 	}
 	labelLookupSlugs = append(labelLookupSlugs, rewriteSlugs...)
-	s.queueWikiSearchRefreshBySlugs(ctx, repoFullName, labelLookupSlugs)
+	s.kickWikiSearchProjection(ctx, labelProjectionCount)
 	labelsBySlug, err := s.wikiLabelsForSlugs(ctx, rep.ID, labelLookupSlugs)
 	if err != nil {
 		return WikiBulkMoveResult{}, err

@@ -474,7 +474,7 @@ func (s *Service) ValidateAndResolveTokenDetailed(ctx context.Context, token str
 	var tok db.Token
 	// Use retry logic for token lookup to handle TiDB PD timeouts
 	if err := tokenQueryWithRetry(ctx, func(qctx context.Context) error {
-		return s.DBForCtx(qctx).Preload("User").Take(&tok, "value = ?", token).Error
+		return s.DBForCtx(qctx).Joins("User").Take(&tok, "value = ?", token).Error
 	}); err == nil {
 		if tok.ExpiresAt != nil && !tok.ExpiresAt.After(time.Now().UTC()) {
 			return db.User{}, TokenValidationFailureExpiredToken, nil

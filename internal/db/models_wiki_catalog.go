@@ -93,24 +93,31 @@ type WikiRepoHead struct {
 	RepositoryID    uint       `gorm:"primaryKey;autoIncrement:false"`
 	Repository      Repository `gorm:"foreignKey:RepositoryID"`
 	HeadChangesetID uint64     `gorm:"not null"`
-	UpdatedAt       time.Time
+	// ReferenceEffectsThroughChangesetID coalesces crash-recoverable wiki
+	// issue-reference work into the same row already updated by every head CAS.
+	ReferenceEffectsThroughChangesetID *uint64 `gorm:"index:idx_wiki_repo_heads_reference_pending"`
+	UpdatedAt                          time.Time
 }
 
 func (WikiRepoHead) TableName() string { return "wiki_repo_heads" }
 
-// WikiDirIndex is the directory view of the catalog maintained by
-// ApplyChangeSet on every mutation. It powers ListWikiPages(path,
-// recursive=false), prefix-collision detection, and future tree
-// synthesis without ever scanning the page table. See §6.4.
-type WikiDirIndex struct {
-	RepositoryID uint    `gorm:"primaryKey;autoIncrement:false;index:idx_wiki_dir_repo_parent_kind_name,priority:1"`
-	ParentDir    string  `gorm:"primaryKey;type:varbinary(1024);index:idx_wiki_dir_repo_parent_kind_name,priority:2"` // "" = root
-	ChildName    string  `gorm:"primaryKey;type:varbinary(255);index:idx_wiki_dir_repo_parent_kind_name,priority:4"`
-	ChildKind    string  `gorm:"type:char(8);not null;index:idx_wiki_dir_repo_parent_kind_name,priority:3,sort:desc"` // blob|tree
-	PageID       *uint64 // present iff ChildKind == blob
+// WikiGitRepairObligation records an in-progress or failed receive-pack after
+// Git may have accepted a wiki content-branch update. The next serialized wiki
+// writer must honor the Git state before treating catalog-ahead state as a REST
+// publication to replay.
+type WikiGitRepairObligation struct {
+	RepositoryID   uint       `gorm:"primaryKey;autoIncrement:false"`
+	Repository     Repository `gorm:"foreignKey:RepositoryID"`
+	HeadSHA        string     `gorm:"type:char(40)"`
+	BranchMissing  bool       `gorm:"not null"`
+	InProgress     bool       `gorm:"not null;default:false"`
+	OwnerToken     string     `gorm:"size:128"`
+	OwnerExpiresAt *time.Time `gorm:"index"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
-func (WikiDirIndex) TableName() string { return "wiki_dir_index" }
+func (WikiGitRepairObligation) TableName() string { return "wiki_git_repair_obligations" }
 
 // WikiPageLink is one outbound markdown link from src_page_id to
 // either a resolved page_id (intra-wiki link) or a still-textual slug

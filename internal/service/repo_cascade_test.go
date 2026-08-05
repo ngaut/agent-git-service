@@ -26,6 +26,13 @@ func TestDeleteRepoCascade_TiDB(t *testing.T) {
 	otherRepo := createRepo(t, svc, ctx, other.Login, "other")
 	forkRepo := createRepo(t, svc, ctx, forkOwner.Login, "fork")
 
+	if err := svc.DB.Create(&db.WikiGitRepairObligation{
+		RepositoryID: repo.ID,
+		HeadSHA:      "0123456789abcdef0123456789abcdef01234567",
+	}).Error; err != nil {
+		t.Fatalf("create wiki git repair obligation: %v", err)
+	}
+
 	if err := svc.DB.Model(&db.Repository{}).Where("id = ?", forkRepo.ID).
 		Updates(map[string]any{"parent_id": repo.ID, "fork": true}).Error; err != nil {
 		t.Fatalf("attach fork: %v", err)
@@ -238,6 +245,7 @@ func TestDeleteRepoCascade_TiDB(t *testing.T) {
 
 	assertCount(t, svc, &db.ReleaseAsset{}, 0, "release_id = ?", release.ID)
 	assertCount(t, svc, &db.Release{}, 0, "repository_id = ?", repo.ID)
+	assertCount(t, svc, &db.WikiGitRepairObligation{}, 0, "repository_id = ?", repo.ID)
 	var joinCount int64
 	if err := svc.DB.Table("issue_labels").Where("issue_id = ?", issue.ID).Count(&joinCount).Error; err != nil {
 		t.Fatalf("count issue_labels: %v", err)

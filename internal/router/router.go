@@ -4,6 +4,7 @@
 package router
 
 import (
+	"compress/gzip"
 	"fmt"
 	"net"
 	"net/http"
@@ -41,6 +42,7 @@ func RegisterRoutes(r chi.Router, handlers *rest.Deps, gitHandler *githttp.Handl
 		return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-receive-pack")
 	}))
 	r.Use(corsMiddleware(consoleBaseURL))
+	r.Use(srvmiddleware.CompressJSON(gzip.BestSpeed))
 	r.Use(srvmiddleware.ConditionalETag())
 
 	rateLimitMw := srvmiddleware.APIRateLimitHeaders()

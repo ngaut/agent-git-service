@@ -3,6 +3,7 @@ package wikicatalog
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -70,6 +71,27 @@ func applyTestEnv(t *testing.T) (*Catalog, uint, *gorm.DB) {
 	return cat, repo.ID, gdb
 }
 
+func TestBodyMayContainReferenceEffect(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "plain body", body: "no references here", want: false},
+		{name: "markdown heading", body: "# Home", want: false},
+		{name: "local reference", body: "see #42", want: true},
+		{name: "cross repository reference", body: "see owner/repo#42", want: true},
+		{name: "issue URL", body: "https://example.test/owner/repo/issues/42", want: true},
+		{name: "pull URL", body: "https://example.test/owner/repo/pull/42", want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := bodyMayContainReferenceEffect([]byte(test.body)); got != test.want {
+				t.Fatalf("bodyMayContainReferenceEffect() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestApplyChangeSet_CreateSinglePage(t *testing.T) {
 	cat, repoID, gdb := applyTestEnv(t)
 	ctx := context.Background()
@@ -100,6 +122,9 @@ func TestApplyChangeSet_CreateSinglePage(t *testing.T) {
 	if got.PageID == 0 {
 		t.Fatalf("page id not populated")
 	}
+	if got.UpsertDisposition != UpsertDispositionCreate {
+		t.Fatalf("upsert disposition = %v, want create", got.UpsertDisposition)
+	}
 
 	// Verify catalog state:
 	var page db.WikiPage
@@ -124,21 +149,12 @@ func TestApplyChangeSet_CreateSinglePage(t *testing.T) {
 		t.Fatalf("head changeset = %d, want %d", head.HeadChangesetID, res.ChangesetID)
 	}
 
-	var dir db.WikiDirIndex
-	if err := gdb.Where("repository_id = ? AND parent_dir = ? AND child_name = ?",
-		repoID, "", "home").Take(&dir).Error; err != nil {
-		t.Fatalf("read dir leaf: %v", err)
+	var refCount int64
+	if err := gdb.Model(&db.WikiBlobRef{}).Where("blob_sha = ?", wantSHA).Count(&refCount).Error; err != nil {
+		t.Fatalf("count blob refs: %v", err)
 	}
-	if dir.ChildKind != "blob" || dir.PageID == nil || *dir.PageID != got.PageID {
-		t.Fatalf("dir leaf wrong: %+v", dir)
-	}
-
-	var ref db.WikiBlobRef
-	if err := gdb.First(&ref, "blob_sha = ?", wantSHA).Error; err != nil {
-		t.Fatalf("read blob ref: %v", err)
-	}
-	if ref.Refcount != 1 {
-		t.Fatalf("refcount = %d, want 1", ref.Refcount)
+	if refCount != 0 {
+		t.Fatalf("inline body created %d blob refs, want 0", refCount)
 	}
 
 	// This body is small (well under MaxBodyInlineBytes), so the
@@ -179,6 +195,13 @@ func TestApplyChangeSet_LargeBodyGoesToCAS(t *testing.T) {
 	if pending != 0 {
 		t.Fatalf("pending row not cleared in txn: count=%d", pending)
 	}
+	var ref db.WikiBlobRef
+	if err := gdb.First(&ref, "blob_sha = ?", sha).Error; err != nil {
+		t.Fatalf("read blob ref: %v", err)
+	}
+	if ref.Refcount != 1 {
+		t.Fatalf("refcount = %d, want 1", ref.Refcount)
+	}
 	// Page row body_inline should be nil for large body.
 	var page db.WikiPage
 	gdb.First(&page, "repository_id = ? AND slug = ?", repoID, "big")
@@ -191,16 +214,22 @@ func TestApplyChangeSet_UpdateExistingPage(t *testing.T) {
 	cat, repoID, gdb := applyTestEnv(t)
 	ctx := context.Background()
 
+	bodyV1 := make([]byte, MaxBodyInlineBytes+1)
+	bodyV2 := make([]byte, MaxBodyInlineBytes+1)
+	for i := range bodyV1 {
+		bodyV1[i] = 'a'
+		bodyV2[i] = 'b'
+	}
 	_, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
-		Changes: []Change{{Op: OpUpsert, Slug: "home", Body: []byte("v1")}},
+		Changes: []Change{{Op: OpUpsert, Slug: "home", Body: bodyV1}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	res2, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
-		Changes: []Change{{Op: OpUpsert, Slug: "home", Body: []byte("v2")}},
+		Changes: []Change{{Op: OpUpsert, Slug: "home", Body: bodyV2}},
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
@@ -208,12 +237,15 @@ func TestApplyChangeSet_UpdateExistingPage(t *testing.T) {
 	if res2.Changes[0].RevisionID != 2 {
 		t.Fatalf("expected revision 2, got %d", res2.Changes[0].RevisionID)
 	}
-	wantSHA := HashContent([]byte("v2"))
+	if res2.Changes[0].UpsertDisposition != UpsertDispositionUpdate {
+		t.Fatalf("upsert disposition = %v, want update", res2.Changes[0].UpsertDisposition)
+	}
+	wantSHA := HashContent(bodyV2)
 	if res2.Changes[0].BlobSHA != wantSHA {
 		t.Fatalf("blob sha mismatch")
 	}
 	// Verify old blob's refcount dropped, new blob's is 1.
-	oldSHA := HashContent([]byte("v1"))
+	oldSHA := HashContent(bodyV1)
 	var oldRef, newRef db.WikiBlobRef
 	if err := gdb.First(&oldRef, "blob_sha = ?", oldSHA).Error; err != nil {
 		t.Fatalf("read old ref: %v", err)
@@ -322,13 +354,194 @@ func TestApplyChangeSet_PrefixCollision(t *testing.T) {
 	}
 }
 
+func TestPreparedChangeSet_SingleUpsertPrefixCollision(t *testing.T) {
+	tests := []struct {
+		name         string
+		setup        []ChangeSetRequest
+		slug         string
+		collidesWith string
+	}{
+		{
+			name: "ancestor is page",
+			setup: []ChangeSetRequest{{
+				Source:  SourceREST,
+				Changes: []Change{{Op: OpUpsert, Slug: "guides", Body: []byte("guides")}},
+			}},
+			slug:         "guides/intro",
+			collidesWith: "guides",
+		},
+		{
+			name: "destination has child",
+			setup: []ChangeSetRequest{{
+				Source:  SourceREST,
+				Changes: []Change{{Op: OpUpsert, Slug: "guides/intro", Body: []byte("intro")}},
+			}},
+			slug:         "guides",
+			collidesWith: "guides/intro",
+		},
+		{
+			name: "restore would shadow child",
+			setup: []ChangeSetRequest{
+				{
+					Source:  SourceREST,
+					Changes: []Change{{Op: OpUpsert, Slug: "guides", Body: []byte("guides")}},
+				},
+				{
+					Source:  SourceREST,
+					Changes: []Change{{Op: OpDelete, Slug: "guides"}},
+				},
+				{
+					Source:  SourceREST,
+					Changes: []Change{{Op: OpUpsert, Slug: "guides/intro", Body: []byte("intro")}},
+				},
+			},
+			slug:         "guides",
+			collidesWith: "guides/intro",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cat, repoID, _ := applyTestEnv(t)
+			ctx := context.Background()
+			for _, req := range tc.setup {
+				req.RepositoryID = repoID
+				if _, err := cat.ApplyChangeSet(ctx, req); err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+			}
+
+			_, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
+				RepositoryID: repoID,
+				Source:       SourceREST,
+				Changes:      []Change{{Op: OpUpsert, Slug: tc.slug, Body: []byte("new")}},
+			})
+			var conflict *ConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("PrepareChangeSet error = %v, want *ConflictError", err)
+			}
+			if conflict.Code != ConflictCodePrefix {
+				t.Fatalf("conflict code = %q, want %q", conflict.Code, ConflictCodePrefix)
+			}
+			if conflict.CollidesWith != tc.collidesWith {
+				t.Fatalf("collides_with = %q, want %q", conflict.CollidesWith, tc.collidesWith)
+			}
+		})
+	}
+}
+
+func TestPrefixCollisionUsesLivePagesWithoutDirectoryIndex(t *testing.T) {
+	tests := []struct {
+		name         string
+		existingSlug string
+		candidate    string
+		prepared     bool
+	}{
+		{
+			name:         "prepared ancestor page",
+			existingSlug: "_sidebar",
+			candidate:    "_sidebar/child",
+			prepared:     true,
+		},
+		{
+			name:         "prepared nested page",
+			existingSlug: "_sidebar/child",
+			candidate:    "_sidebar",
+			prepared:     true,
+		},
+		{
+			name:         "transaction ancestor page",
+			existingSlug: "guides",
+			candidate:    "guides/intro",
+		},
+		{
+			name:         "transaction nested page",
+			existingSlug: "guides/intro",
+			candidate:    "guides",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cat, repoID, _ := applyTestEnv(t)
+			ctx := context.Background()
+			if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+				RepositoryID: repoID,
+				Source:       SourceREST,
+				Changes: []Change{{
+					Op:   OpUpsert,
+					Slug: tc.existingSlug,
+					Body: []byte("existing"),
+				}},
+			}); err != nil {
+				t.Fatalf("create existing page: %v", err)
+			}
+			request := ChangeSetRequest{
+				RepositoryID: repoID,
+				Source:       SourceREST,
+				Changes: []Change{{
+					Op:   OpUpsert,
+					Slug: tc.candidate,
+					Body: []byte("candidate"),
+				}},
+			}
+			var err error
+			if tc.prepared {
+				_, err = cat.PrepareChangeSet(ctx, request)
+			} else {
+				_, err = cat.ApplyChangeSet(ctx, request)
+			}
+			var conflict *ConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("write error = %v, want *ConflictError", err)
+			}
+			if conflict.Code != ConflictCodePrefix {
+				t.Fatalf("conflict code = %q, want %q", conflict.Code, ConflictCodePrefix)
+			}
+			if conflict.CollidesWith != tc.existingSlug {
+				t.Fatalf("collides_with = %q, want %q", conflict.CollidesWith, tc.existingSlug)
+			}
+		})
+	}
+}
+
+func TestPrefixCollisionIgnoresTombstoneWithoutDirectoryIndex(t *testing.T) {
+	cat, repoID, _ := applyTestEnv(t)
+	ctx := context.Background()
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceREST,
+		Changes:      []Change{{Op: OpUpsert, Slug: "guides", Body: []byte("existing")}},
+	}); err != nil {
+		t.Fatalf("create existing page: %v", err)
+	}
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceREST,
+		Changes:      []Change{{Op: OpDelete, Slug: "guides"}},
+	}); err != nil {
+		t.Fatalf("delete existing page: %v", err)
+	}
+	if _, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceREST,
+		Changes:      []Change{{Op: OpUpsert, Slug: "guides/intro", Body: []byte("candidate")}},
+	}); err != nil {
+		t.Fatalf("prepare below tombstoned ancestor: %v", err)
+	}
+}
+
 func TestApplyChangeSet_DeletePage(t *testing.T) {
 	cat, repoID, gdb := applyTestEnv(t)
 	ctx := context.Background()
 
+	body := make([]byte, MaxBodyInlineBytes+1)
+	for i := range body {
+		body[i] = 'd'
+	}
 	res, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
-		Changes: []Change{{Op: OpUpsert, Slug: "home", Body: []byte("body")}},
+		Changes: []Change{{Op: OpUpsert, Slug: "home", Body: body}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -352,15 +565,6 @@ func TestApplyChangeSet_DeletePage(t *testing.T) {
 		t.Fatalf("page not soft-deleted")
 	}
 
-	// dir_index leaf removed.
-	var dirCount int64
-	gdb.Model(&db.WikiDirIndex{}).
-		Where("repository_id = ? AND child_name = ?", repoID, "home").
-		Count(&dirCount)
-	if dirCount != 0 {
-		t.Fatalf("dir leaf remained: count=%d", dirCount)
-	}
-
 	// Blob refcount dropped to 0.
 	var ref db.WikiBlobRef
 	if err := gdb.First(&ref, "blob_sha = ?", oldSHA).Error; err != nil {
@@ -379,7 +583,6 @@ func TestApplyChangeSet_DeletePage(t *testing.T) {
 	if lastRev.Op != "delete" || lastRev.BlobSHA != "" {
 		t.Fatalf("delete revision wrong: %+v", lastRev)
 	}
-
 	// Deleting again returns ErrPageNotFound.
 	_, err = cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
@@ -423,21 +626,6 @@ func TestApplyChangeSet_RenamePage(t *testing.T) {
 	if page.HeadBlobSHA != originalSHA {
 		t.Fatalf("rename should preserve blob SHA")
 	}
-
-	// dir_index reanchored.
-	var oldDir int64
-	gdb.Model(&db.WikiDirIndex{}).
-		Where("repository_id = ? AND child_name = ?", repoID, "old-name").
-		Count(&oldDir)
-	if oldDir != 0 {
-		t.Fatalf("old dir leaf survived")
-	}
-	var newDir db.WikiDirIndex
-	if err := gdb.Where("repository_id = ? AND child_name = ?", repoID, "new-name").
-		Take(&newDir).Error; err != nil {
-		t.Fatalf("read new dir leaf: %v", err)
-	}
-
 	// Renaming back to occupied destination fails.
 	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
@@ -677,6 +865,9 @@ func TestApplyChangeSet_RecreateAfterDelete(t *testing.T) {
 		t.Fatalf("recreate page_id = %d, want preserved %d",
 			recreateRes.Changes[0].PageID, originalPageID)
 	}
+	if recreateRes.Changes[0].UpsertDisposition != UpsertDispositionRestore {
+		t.Fatalf("upsert disposition = %v, want restore", recreateRes.Changes[0].UpsertDisposition)
+	}
 
 	// The page row must be live again, with the new body.
 	var page db.WikiPage
@@ -707,12 +898,6 @@ func TestApplyChangeSet_RecreateAfterDelete(t *testing.T) {
 		}
 	}
 
-	// Dir leaf is back; pruneEmptyParents must not have orphaned it.
-	var dir db.WikiDirIndex
-	if err := gdb.Where("repository_id = ? AND parent_dir = ? AND child_name = ?",
-		repoID, "", "home").Take(&dir).Error; err != nil {
-		t.Fatalf("dir leaf missing after restore: %v", err)
-	}
 }
 
 // TestApplyChangeSet_DeleteNullsInboundLinks: when page B is deleted,
@@ -785,12 +970,16 @@ func TestApplyChangeSet_CreateResolvesPendingInboundLinks(t *testing.T) {
 		t.Fatalf("link should be unresolved before B exists, got dst_page_id=%d", *unresolved.DstPageID)
 	}
 
-	bRes, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+	prepared, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
 		RepositoryID: repoID, Source: SourceREST,
 		Changes: []Change{{Op: OpUpsert, Slug: "b", Body: []byte("b body")}},
 	})
 	if err != nil {
-		t.Fatalf("create b: %v", err)
+		t.Fatalf("prepare b: %v", err)
+	}
+	bRes, err := cat.ApplyPreparedChangeSet(ctx, prepared, strings.Repeat("b", 40))
+	if err != nil {
+		t.Fatalf("apply prepared b: %v", err)
 	}
 
 	var resolved db.WikiPageLink
@@ -799,6 +988,201 @@ func TestApplyChangeSet_CreateResolvesPendingInboundLinks(t *testing.T) {
 	}
 	if resolved.DstPageID == nil || *resolved.DstPageID != bRes.Changes[0].PageID {
 		t.Fatalf("link should resolve to B's page_id after B is created, got %v", resolved.DstPageID)
+	}
+}
+
+func TestApplyPreparedChangeSetWithCommitBarrierRollsBackOnBarrierFailure(t *testing.T) {
+	cat, repoID, gdb := applyTestEnv(t)
+	ctx := context.Background()
+	prepared, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceREST,
+		Message:      "create home",
+		Changes:      []Change{{Op: OpUpsert, Slug: "home", Body: []byte("# Home\n")}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareChangeSet: %v", err)
+	}
+
+	barrierErr := errors.New("object persistence failed")
+	barrierCalls := 0
+	hookCalls := 0
+	cat.OnChangeSetCommitted = func(context.Context, uint, ChangeSetResult) error {
+		hookCalls++
+		return nil
+	}
+	_, err = cat.ApplyPreparedChangeSetWithCommitBarrier(
+		ctx,
+		prepared,
+		strings.Repeat("a", 40),
+		func() error {
+			barrierCalls++
+			return barrierErr
+		},
+	)
+	if !errors.Is(err, barrierErr) {
+		t.Fatalf("ApplyPreparedChangeSetWithCommitBarrier error = %v, want %v", err, barrierErr)
+	}
+	if barrierCalls != 1 {
+		t.Fatalf("commit barrier calls = %d, want 1", barrierCalls)
+	}
+	if hookCalls != 0 {
+		t.Fatalf("post-commit hook calls = %d, want 0", hookCalls)
+	}
+
+	for name, model := range map[string]any{
+		"changesets": &db.WikiChangeset{},
+		"heads":      &db.WikiRepoHead{},
+		"pages":      &db.WikiPage{},
+		"revisions":  &db.WikiPageRevision{},
+	} {
+		var count int64
+		if err := gdb.Model(model).Count(&count).Error; err != nil {
+			t.Fatalf("count %s: %v", name, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s after barrier rollback = %d, want 0", name, count)
+		}
+	}
+}
+
+func TestPreparedChangeSet_ResolvesIntraChangeSetInboundLinks(t *testing.T) {
+	cat, repoID, gdb := applyTestEnv(t)
+	ctx := context.Background()
+
+	prepared, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceBatch,
+		Changes: []Change{
+			{Op: OpUpsert, Slug: "a", Body: []byte("see [[b]]")},
+			{Op: OpUpsert, Slug: "b", Body: []byte("b body")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepare changeset: %v", err)
+	}
+	result, err := cat.ApplyPreparedChangeSet(ctx, prepared, strings.Repeat("c", 40))
+	if err != nil {
+		t.Fatalf("apply prepared changeset: %v", err)
+	}
+
+	var link db.WikiPageLink
+	if err := gdb.Where("repository_id = ? AND dst_slug = ?", repoID, "b").Take(&link).Error; err != nil {
+		t.Fatalf("read link: %v", err)
+	}
+	if link.DstPageID == nil || *link.DstPageID != result.Changes[1].PageID {
+		t.Fatalf("intra-changeset link resolved to %v, want page %d",
+			link.DstPageID, result.Changes[1].PageID)
+	}
+}
+
+func TestPreparedChangeSet_SingleUpsertOutlinkSnapshotSemantics(t *testing.T) {
+	t.Run("self link resolves to new page", func(t *testing.T) {
+		cat, repoID, gdb := applyTestEnv(t)
+		ctx := context.Background()
+		prepared, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
+			RepositoryID: repoID,
+			Source:       SourceREST,
+			Changes:      []Change{{Op: OpUpsert, Slug: "self", Body: []byte("[[self]]")}},
+		})
+		if err != nil {
+			t.Fatalf("PrepareChangeSet: %v", err)
+		}
+		result, err := cat.ApplyPreparedChangeSet(ctx, prepared, strings.Repeat("e", 40))
+		if err != nil {
+			t.Fatalf("ApplyPreparedChangeSet: %v", err)
+		}
+
+		var link db.WikiPageLink
+		if err := gdb.Where("src_page_id = ?", result.Changes[0].PageID).Take(&link).Error; err != nil {
+			t.Fatalf("read self link: %v", err)
+		}
+		if link.DstPageID == nil || *link.DstPageID != result.Changes[0].PageID {
+			t.Fatalf("self link resolved to %v, want page %d",
+				link.DstPageID, result.Changes[0].PageID)
+		}
+	})
+
+	t.Run("soft-deleted target stays unresolved", func(t *testing.T) {
+		cat, repoID, gdb := applyTestEnv(t)
+		ctx := context.Background()
+		if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+			RepositoryID: repoID,
+			Source:       SourceREST,
+			Changes:      []Change{{Op: OpUpsert, Slug: "target", Body: []byte("target")}},
+		}); err != nil {
+			t.Fatalf("create target: %v", err)
+		}
+		if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+			RepositoryID: repoID,
+			Source:       SourceREST,
+			Changes:      []Change{{Op: OpDelete, Slug: "target"}},
+		}); err != nil {
+			t.Fatalf("delete target: %v", err)
+		}
+
+		prepared, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
+			RepositoryID: repoID,
+			Source:       SourceREST,
+			Changes:      []Change{{Op: OpUpsert, Slug: "source", Body: []byte("[[target]]")}},
+		})
+		if err != nil {
+			t.Fatalf("PrepareChangeSet: %v", err)
+		}
+		result, err := cat.ApplyPreparedChangeSet(ctx, prepared, strings.Repeat("f", 40))
+		if err != nil {
+			t.Fatalf("ApplyPreparedChangeSet: %v", err)
+		}
+
+		var link db.WikiPageLink
+		if err := gdb.Where("src_page_id = ?", result.Changes[0].PageID).Take(&link).Error; err != nil {
+			t.Fatalf("read target link: %v", err)
+		}
+		if link.DstPageID != nil {
+			t.Fatalf("soft-deleted target resolved to page %d", *link.DstPageID)
+		}
+	})
+}
+
+func TestPreparedChangeSet_RenameResolvesPendingInboundLinks(t *testing.T) {
+	cat, repoID, gdb := applyTestEnv(t)
+	ctx := context.Background()
+
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceREST,
+		Changes:      []Change{{Op: OpUpsert, Slug: "source", Body: []byte("see [[target]]")}},
+	}); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceREST,
+		Changes:      []Change{{Op: OpUpsert, Slug: "old-target", Body: []byte("body")}},
+	}); err != nil {
+		t.Fatalf("create rename source: %v", err)
+	}
+
+	prepared, err := cat.PrepareChangeSet(ctx, ChangeSetRequest{
+		RepositoryID: repoID,
+		Source:       SourceREST,
+		Changes:      []Change{{Op: OpRename, Slug: "old-target", NewSlug: "target"}},
+	})
+	if err != nil {
+		t.Fatalf("prepare rename: %v", err)
+	}
+	result, err := cat.ApplyPreparedChangeSet(ctx, prepared, strings.Repeat("d", 40))
+	if err != nil {
+		t.Fatalf("apply prepared rename: %v", err)
+	}
+
+	var link db.WikiPageLink
+	if err := gdb.Where("repository_id = ? AND dst_slug = ?", repoID, "target").Take(&link).Error; err != nil {
+		t.Fatalf("read link: %v", err)
+	}
+	if link.DstPageID == nil || *link.DstPageID != result.Changes[0].PageID {
+		t.Fatalf("renamed target link resolved to %v, want page %d",
+			link.DstPageID, result.Changes[0].PageID)
 	}
 }
 
@@ -867,7 +1251,7 @@ func TestApplyChangeSet_RenameWithIfMatchMismatch(t *testing.T) {
 
 // TestApplyChangeSet_PrefixMoveAsBatch: simulate the prefix-move
 // service-level operation as a multi-rename changeset and verify
-// dir_index updates and revision rows land consistently within one
+// page, alias, label, and revision rows land consistently within one
 // transaction.
 func TestApplyChangeSet_PrefixMoveAsBatch(t *testing.T) {
 	cat, repoID, gdb := applyTestEnv(t)
@@ -906,39 +1290,12 @@ func TestApplyChangeSet_PrefixMoveAsBatch(t *testing.T) {
 		}
 	}
 
-	// Old parent directory pruned.
-	var oldFooChildren int64
-	gdb.Model(&db.WikiDirIndex{}).
-		Where("repository_id = ? AND parent_dir = ?", repoID, "foo").
-		Count(&oldFooChildren)
-	if oldFooChildren != 0 {
-		t.Fatalf("expected old parent 'foo' to be empty, got %d children", oldFooChildren)
-	}
-	var oldFooTree int64
-	gdb.Model(&db.WikiDirIndex{}).
-		Where("repository_id = ? AND parent_dir = ? AND child_name = ? AND child_kind = ?",
-			repoID, "", "foo", "tree").
-		Count(&oldFooTree)
-	if oldFooTree != 0 {
-		t.Fatalf("expected 'foo' tree row to be pruned, got %d", oldFooTree)
-	}
-
-	// New parent directory materialized.
-	var newBarTree int64
-	gdb.Model(&db.WikiDirIndex{}).
-		Where("repository_id = ? AND parent_dir = ? AND child_name = ? AND child_kind = ?",
-			repoID, "", "bar", "tree").
-		Count(&newBarTree)
-	if newBarTree != 1 {
-		t.Fatalf("expected 'bar' tree row, got %d", newBarTree)
-	}
-
 }
 
 // TestApplyChangeSet_PrefixCollisionDetectsNestedPage: creating a
 // blob whose slug shadows an existing nested page must fail with the
 // PREFIX_COLLISION conflict, regardless of whether the existing
-// nested page lives behind a tree row in dir_index.
+// nested page was created before the candidate.
 func TestApplyChangeSet_PrefixCollisionDetectsNestedPage(t *testing.T) {
 	cat, repoID, _ := applyTestEnv(t)
 	ctx := context.Background()
@@ -970,7 +1327,10 @@ func TestApplyChangeSet_BlobRefcountDedupAcrossSlugs(t *testing.T) {
 	cat, repoID, gdb := applyTestEnv(t)
 	ctx := context.Background()
 
-	body := []byte("identical")
+	body := make([]byte, MaxBodyInlineBytes+1)
+	for i := range body {
+		body[i] = 'i'
+	}
 	for _, slug := range []string{"a", "b"} {
 		if _, err := cat.ApplyChangeSet(ctx, ChangeSetRequest{
 			RepositoryID: repoID, Source: SourceREST,
@@ -1200,6 +1560,13 @@ func TestApplyChangeSet_BodyAtInlineBoundary(t *testing.T) {
 	if len(page.BodyInline) != MaxBodyInlineBytes {
 		t.Fatalf("body_inline at boundary len=%d, want %d", len(page.BodyInline), MaxBodyInlineBytes)
 	}
+	var refs int64
+	if err := gdb.Model(&db.WikiBlobRef{}).Where("blob_sha = ?", sha).Count(&refs).Error; err != nil {
+		t.Fatalf("count inline refs: %v", err)
+	}
+	if refs != 0 {
+		t.Fatalf("body == MaxBodyInlineBytes created %d blob refs, want 0", refs)
+	}
 }
 
 func TestApplyChangeSet_BodyJustOverInlineBoundary(t *testing.T) {
@@ -1226,6 +1593,13 @@ func TestApplyChangeSet_BodyJustOverInlineBoundary(t *testing.T) {
 	}
 	if page.BodyInline != nil {
 		t.Fatalf("body > inline boundary must NOT be inlined; got %d bytes", len(page.BodyInline))
+	}
+	var ref db.WikiBlobRef
+	if err := gdb.First(&ref, "blob_sha = ?", sha).Error; err != nil {
+		t.Fatalf("read over-limit blob ref: %v", err)
+	}
+	if ref.Refcount != 1 {
+		t.Fatalf("over-limit refcount = %d, want 1", ref.Refcount)
 	}
 }
 

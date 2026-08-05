@@ -200,28 +200,6 @@ func TestPlanChangeSet_TouchedCISetIsSortedUnion(t *testing.T) {
 	}
 }
 
-func TestSplitParentLeaf(t *testing.T) {
-	cases := []struct {
-		in     string
-		parent string
-		leaf   string
-	}{
-		{"home", "", "home"},
-		{"a/b", "a", "b"},
-		{"a/b/c", "a/b", "c"},
-		{"_sidebar", "", "_sidebar"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			p, l := splitParentLeaf(tc.in)
-			if p != tc.parent || l != tc.leaf {
-				t.Fatalf("splitParentLeaf(%q) = (%q, %q), want (%q, %q)",
-					tc.in, p, l, tc.parent, tc.leaf)
-			}
-		})
-	}
-}
-
 func TestParentChain(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -38,6 +38,7 @@ Does not own:
 | `refs.go` | `HeadSHA`, `CreateBranch`, `CreateBranchFromOid`, `CreatePRRef`, `UpdateRef`, `DeleteRef`, `ListBranches` |
 | `merge.go` | `Merge`, `SquashMerge`, `Rebase`, `RevertMerge`, `UpdatePRBranch`, `SimulateMerge`, `CanMerge`, `IsEmpty`, `DiskUsageKB` |
 | `content.go` | `ReadFile`, `WriteFile`, `DeleteFileFromRepo`, `ListTreeFiles`, `ListTags`, `DiffNameStatus`, `DiffNumStat`, `DiffRaw`, `GetDiffHunk` |
+| `commit_files.go` | direct blob/tree/commit object writes, prepared-commit CAS publication, and the bounded published-tree cache used by Wiki writes |
 | `compare.go` | `Compare` (concurrent 4-goroutine diff), `Contributors`, `LogBetweenTags`, `PRCommitsLog` |
 | `search.go` | `SearchCommits`, `ListCommits`, `SearchCode` |
 | `archive.go` | `Archive` (stream zip/tar.gz to `io.Writer`) |
@@ -97,9 +98,38 @@ WriteFile(fullName, branch, path, content, message, author)
   → git update-ref refs/heads/branch sha (advance branch)
 ```
 
+Wiki catalog writes use a two-phase object/ref flow without spawning Git
+subprocesses:
+
+```
+BuildCommitFilesAt(fullName, branch, mutations)
+  -> read the current branch parent
+  -> encode blob, tree, and commit objects in memory
+  -> return PreparedCommit(SHA, ParentSHA) without changing the branch
+
+PersistPreparedCommit(prepared)
+  -> write the prepared objects through go-git
+
+PublishPreparedCommit(fullName, branch, prepared)
+  -> verify the commit object and parent
+  -> CheckAndSetReference(parent -> prepared SHA)
+  -> retain the published mutable tree in a bounded cache
+```
+
+`PrepareCommitFilesAt` remains the synchronous build-plus-persist wrapper. The
+three-stage API lets the Wiki service overlap object persistence with its
+catalog transaction after the commit SHA is known. The catalog transaction
+uses a pre-commit durability barrier, and the ref remains invisible until both
+durable operations succeed. The cache is keyed by repository and branch,
+contains at most 16 published trees, transfers ownership to one preparer, and
+is discarded whenever the observed branch parent differs. External pushes
+therefore invalidate cached state instead of being overwritten.
+
 ## Invariants and Design Constraints
 
 - **Per-repository write serialization.** Write-heavy operations (`Merge`, `SquashMerge`, `Rebase`, `RevertMerge`, `UpdatePRBranch`) acquire a per-repo `sync.Mutex` from a `sync.Map` in `Store`. This prevents concurrent modifications to the same bare repository.
+- **Prepared refs publish with CAS.** Object creation does not make a commit visible. `PublishPreparedCommit` advances a branch only when it still points at the prepared parent and returns `ErrRefChanged` otherwise.
+- **Tree reuse is bounded and parent-validated.** The direct multi-file writer keeps only a small process-local set of published trees. Taking an entry removes it from the cache, so concurrent prepares cannot mutate the same tree; a ref changed by another process or Git push forces a disk reload.
 - **Temporary clones for merge safety.** Merge and rebase operations clone to a temp directory, operate there, and push results back. This keeps the bare repo in a consistent state even if the operation fails midway.
 - **Hybrid go-git and CLI git usage.** go-git is used for initialization, repo opening, config, and some ref operations. CLI git (via `os/exec`) handles merge, rebase, diff, log, content, archive, and search. The split exists because go-git lacks some plumbing operations.
 - **Revision validation.** `IsValidRev` rejects empty strings, leading dashes, and whitespace to prevent command injection in git CLI calls.
@@ -113,7 +143,7 @@ For the full dependency-boundary rules see [module-contracts.md § gitstore](../
 
 1. Add a method to `Store` in the appropriate file (content ops in `content.go`, ref ops in `refs.go`, etc.).
 2. If the operation writes to the repository, acquire the per-repo lock via `s.repoLock(fullName)`.
-3. For operations that modify branches, use the clone-to-tmp pattern from `merge.go`.
+3. For worktree-style merges and rebases, use the clone-to-tmp pattern from `merge.go`. For plumbing-style file commits, use the prepared object/ref flow from `commit_files.go`.
 4. Validate any user-supplied revision strings with `IsValidRev` before passing to CLI commands.
 5. If the operation is called from `service`, add it to the corresponding service method; gitstore should not call service.
 
