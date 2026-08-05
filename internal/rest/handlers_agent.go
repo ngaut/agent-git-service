@@ -167,6 +167,25 @@ func (d *Deps) ResetAgentToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// UnbindAgent handles DELETE /api/ext/v1/agent-bindings/{agent_login}.
+func (d *Deps) UnbindAgent(w http.ResponseWriter, r *http.Request) {
+	u, err := d.Svc.GetCurrentUser(r.Context())
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	agentLogin := pathParam(r, "agent_login")
+	result, err := d.Svc.UnbindAgent(r.Context(), u.ID, agentLogin)
+	if err != nil {
+		respond.ServiceErrorRequest(r, w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"agent_login":             result.AgentLogin,
+		"revoked_switch_sessions": result.RevokedSwitchSessions,
+	})
+}
+
 // SwitchAgentSession handles POST /api/ext/v1/agent-bindings/{agent_login}/switch-session.
 func (d *Deps) SwitchAgentSession(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())

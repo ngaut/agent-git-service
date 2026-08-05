@@ -308,6 +308,7 @@ func registerAgentBindingRoutes(r chi.Router, handlers *rest.Deps) {
 		r.Post(prefix+"/agent-invites", handlers.CreateAgentInvite)
 		r.Post(prefix+"/agent-bindings/confirm", handlers.ConfirmAgentBinding)
 		r.Patch(prefix+"/agent-bindings/{agent_login}", handlers.RenameBoundAgent)
+		r.Delete(prefix+"/agent-bindings/{agent_login}", handlers.UnbindAgent)
 		r.Post(prefix+"/agent-bindings/{agent_login}/reset-token", handlers.ResetAgentToken)
 		r.Post(prefix+"/agent-bindings/{agent_login}/switch-session", handlers.SwitchAgentSession)
 		r.Post(prefix+"/agent-bindings/{agent_login}/refresh-session", handlers.RefreshAgentSwitchSession)
