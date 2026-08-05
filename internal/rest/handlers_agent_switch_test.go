@@ -25,7 +25,7 @@ func TestSwitchAgentSessionReturnsFreshTemporaryTokenWithoutRevokingExistingToke
 		t.Fatalf("create original token: %v", err)
 	}
 
-	w := h.DoRESTJSON(t, http.MethodPost, "/api/v3/agent-bindings/"+agent.Login+"/switch-session", map[string]any{})
+	w := h.DoRESTJSON(t, http.MethodPost, "/api/ext/v1/agent-bindings/"+agent.Login+"/switch-session", map[string]any{})
 	assertStatusCode(t, w, http.StatusOK)
 	body := testharness.DecodeJSON(t, w)
 
@@ -77,7 +77,7 @@ func TestRefreshAgentSwitchSessionRotatesSessionTokenAndPreservesLongLivedToken(
 		t.Fatalf("create original token: %v", err)
 	}
 
-	w := h.DoRESTJSON(t, http.MethodPost, "/api/v3/agent-bindings/"+agent.Login+"/switch-session", map[string]any{})
+	w := h.DoRESTJSON(t, http.MethodPost, "/api/ext/v1/agent-bindings/"+agent.Login+"/switch-session", map[string]any{})
 	assertStatusCode(t, w, http.StatusOK)
 	issued := testharness.DecodeJSON(t, w)
 	issuedPayload, ok := issued["token"].(map[string]any)
@@ -89,7 +89,7 @@ func TestRefreshAgentSwitchSessionRotatesSessionTokenAndPreservesLongLivedToken(
 		t.Fatal("expected issued switch token")
 	}
 
-	w = h.DoRESTJSONWithToken(t, http.MethodPost, "/api/v3/agent-bindings/"+agent.Login+"/refresh-session", issuedToken, map[string]any{})
+	w = h.DoRESTJSONWithToken(t, http.MethodPost, "/api/ext/v1/agent-bindings/"+agent.Login+"/refresh-session", issuedToken, map[string]any{})
 	assertStatusCode(t, w, http.StatusOK)
 	refreshed := testharness.DecodeJSON(t, w)
 	refreshedPayload, ok := refreshed["token"].(map[string]any)
@@ -129,7 +129,7 @@ func TestRefreshAgentSwitchSessionAcceptsBasicAuth(t *testing.T) {
 		t.Fatalf("create original token: %v", err)
 	}
 
-	switchResp := h.DoRESTJSON(t, http.MethodPost, "/api/v3/agent-bindings/"+agent.Login+"/switch-session", map[string]any{})
+	switchResp := h.DoRESTJSON(t, http.MethodPost, "/api/ext/v1/agent-bindings/"+agent.Login+"/switch-session", map[string]any{})
 	assertStatusCode(t, switchResp, http.StatusOK)
 	issued := testharness.DecodeJSON(t, switchResp)
 	issuedPayload, ok := issued["token"].(map[string]any)
@@ -141,7 +141,7 @@ func TestRefreshAgentSwitchSessionAcceptsBasicAuth(t *testing.T) {
 		t.Fatal("expected issued switch token")
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v3/agent-bindings/"+agent.Login+"/refresh-session", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/ext/v1/agent-bindings/"+agent.Login+"/refresh-session", nil)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("x-access-token:"+issuedToken)))
 	resp := httptest.NewRecorder()

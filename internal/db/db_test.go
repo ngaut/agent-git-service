@@ -59,7 +59,7 @@ func TestMigrate(t *testing.T) {
 	}
 
 	// Verify key tables were created
-	tables := []string{"users", "repositories", "issues", "attachments", "pull_requests", "labels", "milestones", "wiki_compaction_jobs"}
+	tables := []string{"users", "repositories", "issues", "pull_requests", "labels", "milestones", "wiki_compaction_jobs"}
 	for _, table := range tables {
 		if !gdb.Migrator().HasTable(table) {
 			t.Errorf("expected table %q to exist after migration", table)

@@ -441,7 +441,7 @@ func TestOAuth_DeviceApproveAPIThroughRouter(t *testing.T) {
 	userCode := codeResp["user_code"].(string)
 
 	approveBody, _ := json.Marshal(map[string]string{"user_code": userCode})
-	approveReq := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/approve", bytes.NewReader(approveBody))
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/ext/v1/oauth/device/approve", bytes.NewReader(approveBody))
 	approveReq.Header.Set("Authorization", "token test-token")
 	approveReq.Header.Set("Content-Type", "application/json")
 	approveW := httptest.NewRecorder()
@@ -470,7 +470,7 @@ func TestOAuth_DeviceApproveAPIThroughRouter(t *testing.T) {
 func TestOAuth_DeviceApproveAPIThroughRouter_InvalidJSON(t *testing.T) {
 	_, mux := setupRouterTest(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/approve", strings.NewReader(`{"user_code"`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ext/v1/oauth/device/approve", strings.NewReader(`{"user_code"`))
 	req.Header.Set("Authorization", "token test-token")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -498,7 +498,7 @@ func TestOAuth_DeviceRejectAPIThroughRouter(t *testing.T) {
 	userCode := codeResp["user_code"].(string)
 
 	rejectBody, _ := json.Marshal(map[string]string{"user_code": userCode, "reason": "user declined"})
-	rejectReq := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/reject", bytes.NewReader(rejectBody))
+	rejectReq := httptest.NewRequest(http.MethodPost, "/api/ext/v1/oauth/device/reject", bytes.NewReader(rejectBody))
 	rejectReq.Header.Set("Authorization", "token test-token")
 	rejectReq.Header.Set("Content-Type", "application/json")
 	rejectW := httptest.NewRecorder()
@@ -534,7 +534,7 @@ func TestOAuth_DeviceRejectAPIThroughRouter(t *testing.T) {
 func TestOAuth_DeviceRejectAPIThroughRouter_InvalidJSON(t *testing.T) {
 	_, mux := setupRouterTest(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v3/oauth/device/reject", strings.NewReader(`{"user_code"`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ext/v1/oauth/device/reject", strings.NewReader(`{"user_code"`))
 	req.Header.Set("Authorization", "token test-token")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -590,7 +590,7 @@ func TestRegisterRoutes_DoesNotExposeCustomRESTPrefix(t *testing.T) {
 	}
 }
 
-func TestAPIRoot_IncludesOpenAPIURL(t *testing.T) {
+func TestAPIRoot_StaysGitHubCompatibleDiscovery(t *testing.T) {
 	_, mux := setupRouterTest(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v3/", nil)
@@ -606,14 +606,46 @@ func TestAPIRoot_IncludesOpenAPIURL(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if got := body["openapi_url"]; got != "http://localhost:8080/api/v3/openapi.json" {
-		t.Fatalf("expected openapi_url to point at published spec, got %v", got)
+		t.Fatalf("expected v3 OpenAPI URL to point at /api/v3/openapi.json, got %v", got)
+	}
+	if _, ok := body["extension_openapi_url"]; ok {
+		t.Fatalf("expected extension OpenAPI URL to be omitted from /api/v3 discovery, got %v", body["extension_openapi_url"])
+	}
+	if got := body["current_user_url"]; got != "http://localhost:8080/api/v3/user" {
+		t.Fatalf("expected v3 discovery URLs to stay on /api/v3, got %v", got)
+	}
+}
+
+func TestExtensionAPIRoot_IncludesExtensionOpenAPIURL(t *testing.T) {
+	_, mux := setupRouterTest(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ext/v1/", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := body["api_url"]; got != "http://localhost:8080/api/ext/v1" {
+		t.Fatalf("expected extension API URL to point at /api/ext/v1, got %v", got)
+	}
+	if got := body["openapi_url"]; got != "http://localhost:8080/api/ext/v1/openapi.json" {
+		t.Fatalf("expected extension OpenAPI URL to point at extension spec, got %v", got)
+	}
+	if got := body["github_compatible_api_url"]; got != "http://localhost:8080/api/v3" {
+		t.Fatalf("expected GitHub-compatible API URL to point at /api/v3, got %v", got)
 	}
 }
 
 func TestOpenAPIEndpoint_ServesPublishedSpec(t *testing.T) {
 	_, mux := setupRouterTest(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v3/openapi.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/ext/v1/openapi.json", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -635,8 +667,74 @@ func TestOpenAPIEndpoint_ServesPublishedSpec(t *testing.T) {
 	if !ok {
 		t.Fatal("expected paths object in spec")
 	}
-	if _, ok := paths["/api/v3/agent-bindings/confirm"]; !ok {
+	if _, ok := paths["/api/ext/v1/agent-bindings/confirm"]; !ok {
 		t.Fatal("expected agent binding extension route in spec")
+	}
+	if _, ok := paths["/api/v3/agent-bindings/confirm"]; ok {
+		t.Fatal("did not expect legacy /api/v3 agent binding route in spec")
+	}
+	removedPaths := []string{
+		"/api/ext/v1/presence/heartbeat",
+		"/api/ext/v1/issues/{id}/typing",
+		"/api/ext/v1/issues/{id}/attachments",
+		"/api/ext/v1/repos/{owner}/{repo}/attachments",
+		"/api/ext/v1/repositories/{repo_id}/attachments",
+		"/api/ext/v1/issues/{issue_id}/presence",
+		"/api/ext/v1/attachments/{uuid}",
+		"/api/ext/v1/users/{user_id}/last-seen",
+		"/api/ext/v1/user/presence/privacy",
+		"/api/ext/v1/repos/{owner}/{repo}/issues/{number}/read",
+		"/api/ext/v1/repos/{owner}/{repo}/issues/{number}/read-state",
+		"/api/ext/v1/repos/{owner}/{repo}/issues/{number}/participants/read-state",
+		"/api/ext/v1/repos/{owner}/{repo}/issues/{number}/unread-count",
+	}
+	for _, path := range removedPaths {
+		if _, ok := paths[path]; ok {
+			t.Fatalf("did not expect removed extension route %s in spec", path)
+		}
+	}
+}
+
+func TestGitHubCompatibleOpenAPIEndpoint_ServesV3Spec(t *testing.T) {
+	_, mux := setupRouterTest(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v3/openapi.json", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("expected application/json, got %q", got)
+	}
+
+	var spec map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&spec); err != nil {
+		t.Fatalf("decode spec: %v", err)
+	}
+	info, ok := spec["info"].(map[string]any)
+	if !ok {
+		t.Fatal("expected info object in spec")
+	}
+	if got := info["title"]; got != "agent-git-service GitHub-Compatible REST API" {
+		t.Fatalf("expected GitHub-compatible title, got %v", got)
+	}
+	paths, ok := spec["paths"].(map[string]any)
+	if !ok {
+		t.Fatal("expected paths object in spec")
+	}
+	if _, ok := paths["/api/v3/openapi.json"]; !ok {
+		t.Fatal("expected v3 OpenAPI route in v3 spec")
+	}
+	if _, ok := paths["/api/v3/repos/{owner}/{repo}/issues"]; !ok {
+		t.Fatal("expected GitHub-compatible issues route in v3 spec")
+	}
+	if _, ok := paths["/api/v3/repos/{owner}/{repo}/pulls/{number}/ready_for_review"]; ok {
+		t.Fatal("did not expect removed ready_for_review REST shim route in v3 spec")
+	}
+	if _, ok := paths["/api/ext/v1/agent-bindings/confirm"]; ok {
+		t.Fatal("did not expect extension route in v3 spec")
 	}
 }
 
@@ -665,7 +763,7 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 	rawRouter := chi.NewRouter()
 	mux := router.RegisterRoutes(rawRouter, restDeps, gitHandler, gqlSrv, oauthHandler, "http://console.localhost")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v3/openapi.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/ext/v1/openapi.json", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -697,7 +795,7 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 	requiredDeltas := map[string]bool{
 		"issues-list-omits-body":       false,
 		"branch-protection-monolithic": false,
-		"api-root-advertises-openapi":  false,
+		"extension-canonical-prefix":   false,
 	}
 	for _, delta := range spec.XAgentGitService.CompatibilityDeltas {
 		if _, ok := requiredDeltas[delta.ID]; ok {
@@ -754,7 +852,7 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 
 	protected := map[string]map[string]bool{}
 	walkErr := chi.Walk(rawRouter, func(method string, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if !requiresOpenAPIDoc(route) {
+		if !requiresOpenAPIDoc(method, route) {
 			return nil
 		}
 		if protected[route] == nil {
@@ -780,15 +878,13 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 	}
 
 	protectedAuthChecks := map[string][]string{
-		"/api/v3/agent-invites":                            {http.MethodPost},
-		"/api/v3/agent-bindings/confirm":                   {http.MethodPost},
-		"/api/v3/oauth/device/approve":                     {http.MethodPost},
-		"/api/v3/oauth/device/reject":                      {http.MethodPost},
-		"/api/v3/presence/heartbeat":                       {http.MethodPost},
-		"/api/v3/issues/{issue_id}/presence":               {http.MethodGet},
-		"/api/v3/user/tokens":                              {http.MethodGet, http.MethodPost, http.MethodDelete},
-		"/api/v3/user/presence/privacy":                    {http.MethodGet, http.MethodPut},
-		"/api/v3/repos/{owner}/{repo}/team-sharing/enable": {http.MethodPost},
+		"/api/ext/v1/agent-invites":                            {http.MethodPost},
+		"/api/ext/v1/agent-bindings/confirm":                   {http.MethodPost},
+		"/api/ext/v1/oauth/device/approve":                     {http.MethodPost},
+		"/api/ext/v1/oauth/device/reject":                      {http.MethodPost},
+		"/api/ext/v1/user/orgs":                                {http.MethodPost},
+		"/api/ext/v1/user/tokens":                              {http.MethodGet, http.MethodPost, http.MethodDelete},
+		"/api/ext/v1/repos/{owner}/{repo}/team-sharing/enable": {http.MethodPost},
 	}
 	for route, methods := range protectedAuthChecks {
 		for _, method := range methods {
@@ -805,23 +901,21 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 		required       bool
 		requiredFields []string
 	}{
-		{route: "/api/v3/agent-bindings/confirm", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"invite_token"}},
-		{route: "/api/v3/oidc/session", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"device_code"}},
-		{route: "/api/v3/oidc/callback", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"id_token"}},
-		{route: "/api/v3/oauth/device/approve", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"user_code"}},
-		{route: "/api/v3/oauth/device/approve", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", required: true, requiredFields: []string{"user_code"}},
-		{route: "/api/v3/oauth/device/reject", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"user_code"}},
-		{route: "/api/v3/oauth/device/reject", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", required: true, requiredFields: []string{"user_code"}},
-		{route: "/api/v3/presence/heartbeat", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"issue_id"}},
-		{route: "/api/v3/user/presence/privacy", method: http.MethodPut, contentType: "application/json", required: true, requiredFields: []string{"hide"}},
-		{route: "/api/v3/user/tokens", method: http.MethodPost, contentType: "application/json", required: true},
-		{route: "/api/v3/user/tokens", method: http.MethodDelete, contentType: "application/json", required: true},
-		{route: "/api/v3/issues/{id}/attachments", method: http.MethodPost, contentType: "multipart/form-data", required: true, requiredFields: []string{"file"}},
-		{route: "/api/v3/repos/{owner}/{repo}/wiki/move", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"from", "to", "if_match"}},
-		{route: "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}", method: http.MethodPut, contentType: "application/json", required: true, requiredFields: []string{"body"}},
-		{route: "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"new_slug", "if_match"}},
-		{route: "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"labels"}},
-		{route: "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", method: http.MethodPut, contentType: "application/json", required: true, requiredFields: []string{"labels"}},
+		{route: "/api/ext/v1/agent-bindings/confirm", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"invite_token"}},
+		{route: "/api/ext/v1/oidc/session", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"device_code"}},
+		{route: "/api/ext/v1/oidc/callback", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"id_token"}},
+		{route: "/api/ext/v1/oauth/device/approve", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"user_code"}},
+		{route: "/api/ext/v1/oauth/device/approve", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", required: true, requiredFields: []string{"user_code"}},
+		{route: "/api/ext/v1/oauth/device/reject", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"user_code"}},
+		{route: "/api/ext/v1/oauth/device/reject", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", required: true, requiredFields: []string{"user_code"}},
+		{route: "/api/ext/v1/user/orgs", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"login"}},
+		{route: "/api/ext/v1/user/tokens", method: http.MethodPost, contentType: "application/json", required: true},
+		{route: "/api/ext/v1/user/tokens", method: http.MethodDelete, contentType: "application/json", required: true},
+		{route: "/api/ext/v1/repos/{owner}/{repo}/wiki/move", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"from", "to", "if_match"}},
+		{route: "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}", method: http.MethodPut, contentType: "application/json", required: true, requiredFields: []string{"body"}},
+		{route: "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/move", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"new_slug", "if_match"}},
+		{route: "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/labels", method: http.MethodPost, contentType: "application/json", required: true, requiredFields: []string{"labels"}},
+		{route: "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/labels", method: http.MethodPut, contentType: "application/json", required: true, requiredFields: []string{"labels"}},
 	}
 	for _, check := range bodyChecks {
 		op, ok := documented[check.route][check.method]
@@ -845,57 +939,75 @@ func TestOpenAPISpec_CoversProtectedExtensionRoutes(t *testing.T) {
 	}
 }
 
-func requiresOpenAPIDoc(route string) bool {
+func requiresOpenAPIDoc(method, route string) bool {
 	switch {
-	case route == "/api/v3/openapi.json":
+	case route == "/api/ext/v1" || route == "/api/ext/v1/":
 		return true
-	case strings.HasPrefix(route, "/api/v3/agents"):
+	case route == "/api/ext/v1/openapi.json":
 		return true
-	case strings.HasPrefix(route, "/api/v3/agent-invites"):
+	case strings.HasPrefix(route, "/api/ext/v1/agents"):
 		return true
-	case strings.HasPrefix(route, "/api/v3/agent-bindings/"):
+	case strings.HasPrefix(route, "/api/ext/v1/agent-invites"):
 		return true
-	case strings.HasPrefix(route, "/api/v3/oidc/"):
+	case strings.HasPrefix(route, "/api/ext/v1/agent-bindings/"):
 		return true
-	case strings.HasPrefix(route, "/api/v3/oauth/"):
+	case strings.HasPrefix(route, "/api/ext/v1/oidc/"):
 		return true
-	case route == "/api/v3/presence/heartbeat":
+	case strings.HasPrefix(route, "/api/ext/v1/oauth/"):
 		return true
-	case route == "/api/v3/issues/{id}/typing":
+	case route == "/api/ext/v1/viewer/summary":
 		return true
-	case route == "/api/v3/issues/{id}/attachments":
+	case route == "/api/ext/v1/user/orgs":
+		return method == http.MethodPost
+	case route == "/api/ext/v1/user/agents":
 		return true
-	case route == "/api/v3/issues/{issue_id}/presence":
+	case route == "/api/ext/v1/user/tokens":
 		return true
-	case route == "/api/v3/attachments/{uuid}":
+	case route == "/api/ext/v1/notifications/summary":
 		return true
-	case route == "/api/v3/users/{user_id}/last-seen":
+	case route == "/api/ext/v1/orgs/{org}/management-summary":
 		return true
-	case route == "/api/v3/user/agents":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/summary":
 		return true
-	case route == "/api/v3/user/presence/privacy":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/issues/{number}/thread":
 		return true
-	case route == "/api/v3/user/tokens":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/team-sharing/enable":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/team-sharing/enable":
+	case route == "/api/ext/v1/admin/wiki/repos/{owner}/{repo}/repair-locks":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/pages":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/state":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/search":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/tree":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/move":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/batch":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/catalog":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels/{name}":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/reconcile/request":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/history":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/reconcile":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/search":
 		return true
-	case route == "/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks":
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/move":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/compact":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/compact/{jobID}":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/labels":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/labels/{name}":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/history":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/move":
+		return true
+	case route == "/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks":
 		return true
 	default:
 		return false
@@ -1146,7 +1258,7 @@ func TestHostRewrite_REST(t *testing.T) {
 	}
 }
 
-func TestHostRewrite_WikiNestedSlugPreservesEncodedSlash(t *testing.T) {
+func TestExtensionWikiNestedSlugPreservesEncodedSlashOnAPIHost(t *testing.T) {
 	svc, mux := setupRouterTest(t)
 	ctx := context.Background()
 
@@ -1162,7 +1274,7 @@ func TestHostRewrite_WikiNestedSlugPreservesEncodedSlash(t *testing.T) {
 	}
 	svc.Wg.Wait()
 
-	req := httptest.NewRequest("GET", "/repos/admin/host-wiki/wiki/pages/guides%2Fsetup", nil)
+	req := httptest.NewRequest("GET", "/api/ext/v1/repos/admin/host-wiki/wiki/pages/guides%2Fsetup", nil)
 	req.Host = "api.github.localhost"
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)

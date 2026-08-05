@@ -281,7 +281,7 @@ func hasCrossReferenceFromWikiPage(t *testing.T, events []map[string]any, slug, 
 			continue
 		}
 		pageURL, _ := page["url"].(string)
-		if strings.Contains(pageURL, "/api/v3/repos/"+repoFullName+"/wiki/pages/") {
+		if strings.Contains(pageURL, "/api/ext/v1/repos/"+repoFullName+"/wiki/pages/") {
 			return true
 		}
 	}

@@ -30,9 +30,8 @@ var ErrBlobNotFound = errors.New("wiki blob not found")
 // here matches what the legacy git-backed code returned through
 // If-Match / ETag, preserving the REST contract.
 //
-// The store is the wiki equivalent of internal/service/attachment.go's
-// on-disk storage. It writes atomically via tmp+rename, skips writes
-// for objects that already exist, and refuses path escape attempts.
+// The store writes atomically via tmp+rename, skips writes for objects
+// that already exist, and refuses path escape attempts.
 type BlobStore struct {
 	root string
 }

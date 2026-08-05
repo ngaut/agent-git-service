@@ -21,9 +21,11 @@ surfaces are:
 - Git Smart HTTP
 - OAuth device flow
 
-The service also exposes repo-specific helper endpoints such as OIDC-backed
-human login under `/api/v3/oidc/*`, connected-login browser helpers under
-`/auth/connected/*`, and admin-only wiki maintenance endpoints.
+The service also exposes extension helper endpoints such as OIDC-backed human
+login under `/api/ext/v1/oidc/*`, connected-login browser helpers under
+`/auth/connected/*`, and admin-only wiki maintenance endpoints. Historical
+`/api/v3` extension helper routes have been removed; extension-aware clients should
+use `/api/ext/v1`.
 
 The key architectural invariant is that `agent-git-service` is Git-backed:
 
@@ -148,20 +150,25 @@ timeout.
 ## Routing Model
 
 Route wiring lives in `internal/router/router.go`; that file is the executable
-truth for concrete endpoints. The REST prefix is fixed at `/api/v3` to remain
-compatible with GitHub-compatible clients.
+truth for concrete endpoints. GitHub-compatible REST endpoints live under
+`/api/v3`; extension platform APIs live under `/api/ext/v1`. Historical
+extension routes under `/api/v3` have been removed so the two API surfaces
+stay separate.
 
 Request families:
 
 - OAuth endpoints are unauthenticated.
-- OIDC helper endpoints under `/api/v3/oidc/*` are unauthenticated but
+- OIDC helper endpoints under `/api/ext/v1/oidc/*` are unauthenticated but
   service-backed.
 - Connected login helper endpoints under `/auth/connected/*` are
   unauthenticated but service-backed.
 - Git Smart HTTP endpoints are routed separately from the REST/GraphQL API
   tree, but still use the same auth middleware.
 - Discovery endpoints under `/api/v3`, `/api/v3/meta`, and
-  `/api/v3/rate_limit` use optional auth.
+  `/api/v3/rate_limit` use optional auth for GitHub-compatible discovery.
+  `/api/v3` advertises `/api/v3/openapi.json` for the GitHub-compatible local
+  contract. Extension discovery lives under `/api/ext/v1` and advertises
+  `/api/ext/v1/openapi.json`.
 - The authenticated API contains REST and GraphQL endpoints, including
   organization-governance surfaces for explicit org creation, org invitations,
   teams, and outside-collaborator inspection.
@@ -258,10 +265,10 @@ is not treated as the authorization decision.
 When generic OIDC is configured, REST exposes these unauthenticated helper
 endpoints:
 
-- `POST /api/v3/oidc/device/code`
-- `POST /api/v3/oidc/session`
-- `POST /api/v3/oidc/callback`
-- `POST /api/v3/oidc/lookup`
+- `POST /api/ext/v1/oidc/device/code`
+- `POST /api/ext/v1/oidc/session`
+- `POST /api/ext/v1/oidc/callback`
+- `POST /api/ext/v1/oidc/lookup`
 
 These endpoints stay transport-thin: `internal/oidc` owns discovery, optional
 device-authorization exchange, and ID token verification, while `service` owns
@@ -328,9 +335,10 @@ These flows should stay central in future work:
 
 - server discovery and auth bootstrap through `/api/v3/`, `/api/v3/meta`,
   `/api/v3/rate_limit`, token login, and Git credential setup
-- explicit organization creation and governance through `/api/v3/user/orgs`,
+- explicit organization creation through `/api/ext/v1/user/orgs`, with
+  GitHub-compatible governance through `/api/v3/orgs/...`,
   org invitations, team membership, and outside-collaborator inspection
-- OIDC-backed human login and identity lookup through `/api/v3/oidc/*`
+- OIDC-backed human login and identity lookup through `/api/ext/v1/oidc/*`
 - repository creation, fork, transfer, delete
 - repository sharing and effective permission resolution across org base
   permission, direct collaborators, and team grants

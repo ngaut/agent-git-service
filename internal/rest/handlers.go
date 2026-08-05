@@ -123,7 +123,6 @@ func repoFullName(r *http.Request) string {
 type Deps struct {
 	Svc            *service.Service
 	ConsoleBaseURL string
-	Presence       *PresenceHandlers
 }
 
 // --- Meta ---
@@ -139,6 +138,18 @@ func (d *Deps) GetMeta(w http.ResponseWriter, r *http.Request) {
 		"organization_url":                   b + apiBase + "/orgs/{org}",
 		"openapi_url":                        b + apiBase + "/openapi.json",
 		"verifiable_password_authentication": true,
+	})
+}
+
+// GetExtensionMeta handles GET /api/ext/v1.
+func (d *Deps) GetExtensionMeta(w http.ResponseWriter, r *http.Request) {
+	b := d.Svc.BaseURL
+	apiBase := transform.ExtensionAPIPrefix()
+	respond.JSON(w, 200, map[string]any{
+		"api_url":                   b + apiBase,
+		"openapi_url":               b + apiBase + "/openapi.json",
+		"github_compatible_api_url": b + transform.APIPrefix(),
+		"github_graphql_url":        b + "/api/graphql",
 	})
 }
 

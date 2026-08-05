@@ -757,9 +757,6 @@ func TestInitServiceDeps_UsesConfiguredDataRootForWikiStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initServiceDeps: %v", err)
 	}
-	if deps.svc.AttachmentRoot != dataRoot {
-		t.Fatalf("AttachmentRoot = %q, want %q", deps.svc.AttachmentRoot, dataRoot)
-	}
 	if deps.svc.WikiBlob == nil {
 		t.Fatal("WikiBlob should be configured")
 	}

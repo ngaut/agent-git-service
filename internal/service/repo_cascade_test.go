@@ -3,9 +3,6 @@ package service_test
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
-	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -75,8 +72,6 @@ func TestDeleteRepoCascade_TiDB(t *testing.T) {
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("create issue: %v", err)
 	}
-	attachment := writeAttachmentFixture(t, svc, issue.ID, owner, "repo-notes.txt", "repo attachment")
-	attachmentPath := attachmentAbsPath(svc, attachment.StoredPath)
 	if err := svc.DB.Create(&db.IssueComment{RepositoryID: repo.ID, IssueNumber: issue.Number, Body: "comment", AuthorID: owner.ID}).Error; err != nil {
 		t.Fatalf("create issue comment: %v", err)
 	}
@@ -231,7 +226,6 @@ func TestDeleteRepoCascade_TiDB(t *testing.T) {
 	assertCount(t, svc, &db.ActionCache{}, 0, "repository_id = ?", repo.ID)
 
 	assertCount(t, svc, &db.IssueComment{}, 0, "repository_id = ?", repo.ID)
-	assertCount(t, svc, &db.Attachment{}, 0, "repository_id = ?", repo.ID)
 	assertCount(t, svc, &db.IssueEvent{}, 0, "issue_id = ?", issue.ID)
 	assertCount(t, svc, &db.Issue{}, 0, "repository_id = ?", repo.ID)
 	assertCount(t, svc, &db.LinkedBranch{}, 0, "repository_id = ?", repo.ID)
@@ -244,10 +238,6 @@ func TestDeleteRepoCascade_TiDB(t *testing.T) {
 
 	assertCount(t, svc, &db.ReleaseAsset{}, 0, "release_id = ?", release.ID)
 	assertCount(t, svc, &db.Release{}, 0, "repository_id = ?", repo.ID)
-	if _, err := os.Stat(attachmentPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected repo attachment file to be removed, got %v", err)
-	}
-
 	var joinCount int64
 	if err := svc.DB.Table("issue_labels").Where("issue_id = ?", issue.ID).Count(&joinCount).Error; err != nil {
 		t.Fatalf("count issue_labels: %v", err)
@@ -387,51 +377,4 @@ func TestDeleteRepoCascade_TiDBRollback(t *testing.T) {
 	assertCount(t, svc, &db.Issue{}, 1, "repository_id = ?", repo.ID)
 	assertCount(t, svc, &db.PRReviewComment{}, 1, "pull_request_id = ?", pr.ID)
 	assertCount(t, svc, &db.ReleaseAsset{}, 1, "release_id = ?", release.ID)
-}
-
-func TestDeleteRepoRemovesLegacyIssueScopedAttachmentFiles(t *testing.T) {
-	svc, cleanup := setupTestServiceWithRealDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	owner := createUser(t, svc, "legacy-owner-fk")
-	repo := createRepo(t, svc, ctx, owner.Login, "legacy-repo")
-
-	issue := db.Issue{RepositoryID: repo.ID, Number: 1, Title: "legacy issue", AuthorID: owner.ID}
-	if err := svc.DB.Create(&issue).Error; err != nil {
-		t.Fatalf("create issue: %v", err)
-	}
-
-	legacyStoredPath := filepath.Join(".attachments", strconv.FormatUint(uint64(issue.ID), 10), "legacy.txt")
-	legacyAbsPath := attachmentAbsPath(svc, legacyStoredPath)
-	if err := os.MkdirAll(filepath.Dir(legacyAbsPath), 0o755); err != nil {
-		t.Fatalf("mkdir legacy attachment dir: %v", err)
-	}
-	if err := os.WriteFile(legacyAbsPath, []byte("legacy attachment"), 0o644); err != nil {
-		t.Fatalf("write legacy attachment: %v", err)
-	}
-
-	legacyAttachment := db.Attachment{
-		UUID:         "11111111-1111-4111-8111-111111111111",
-		IssueID:      &issue.ID,
-		RepositoryID: repo.ID,
-		UploaderID:   owner.ID,
-		OriginalName: "legacy.txt",
-		StoredPath:   legacyStoredPath,
-		ContentType:  "text/plain",
-		Extension:    ".txt",
-		Size:         int64(len("legacy attachment")),
-	}
-	if err := svc.DB.Create(&legacyAttachment).Error; err != nil {
-		t.Fatalf("create legacy attachment row: %v", err)
-	}
-
-	ownerCtx := service.ContextWithUser(ctx, owner)
-	if err := svc.DeleteRepo(ownerCtx, repo.FullName); err != nil {
-		t.Fatalf("DeleteRepo: %v", err)
-	}
-
-	if _, err := os.Stat(legacyAbsPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected legacy attachment file to be removed, got %v", err)
-	}
 }

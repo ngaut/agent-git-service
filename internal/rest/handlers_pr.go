@@ -811,31 +811,6 @@ func (d *Deps) CreatePRReviewComment(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, 201, transform.PRReviewComment(c, full, num))
 }
 
-// MarkPRReadyForReview handles PUT /api/v3/repos/{owner}/{repo}/pulls/{number}/ready_for_review
-func (d *Deps) MarkPRReadyForReview(w http.ResponseWriter, r *http.Request) {
-	full := repoFullName(r)
-	num, ok := mustIntParam(w, r, "number")
-	if !ok {
-		return
-	}
-	pr, err := d.Svc.GetPR(r.Context(), full, num)
-	if err != nil {
-		respond.ServiceErrorRequest(r, w, err)
-		return
-	}
-	if err := d.Svc.MarkPRReadyForReview(r.Context(), pr.ID); err != nil {
-		respond.ServiceErrorRequest(r, w, err)
-		return
-	}
-	// Reload to get updated state
-	pr, err = d.Svc.GetPR(r.Context(), full, num)
-	if err != nil {
-		respond.ServiceErrorRequest(r, w, err)
-		return
-	}
-	respond.JSON(w, 200, d.prWithExtras(r, pr))
-}
-
 // ReplyToPRReviewComment handles POST /api/v3/repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies
 func (d *Deps) ReplyToPRReviewComment(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)

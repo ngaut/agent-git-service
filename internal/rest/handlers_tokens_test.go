@@ -11,7 +11,7 @@ func TestTokenAPI_CRUD(t *testing.T) {
 	h := testharness.New(t)
 
 	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
-	w := h.DoRESTJSON(t, "POST", "/api/v3/user/tokens", map[string]any{
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/tokens", map[string]any{
 		"name":       "ci-token",
 		"expires_at": expiresAt,
 	})
@@ -32,19 +32,19 @@ func TestTokenAPI_CRUD(t *testing.T) {
 	}
 	createdID := int(idFloat)
 
-	w = h.DoREST(t, "GET", "/api/v3/user/tokens", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/user/tokens", nil)
 	assertStatusCode(t, w, 200)
 	tokens := testharness.DecodeJSONArray(t, w)
 	if _, found := findTokenByID(tokens, createdID); !found {
 		t.Fatalf("expected token id %d in list", createdID)
 	}
 
-	w = h.DoRESTJSON(t, "DELETE", "/api/v3/user/tokens", map[string]any{
+	w = h.DoRESTJSON(t, "DELETE", "/api/ext/v1/user/tokens", map[string]any{
 		"id": createdID,
 	})
 	assertStatusCode(t, w, 204)
 
-	w = h.DoREST(t, "GET", "/api/v3/user/tokens", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/user/tokens", nil)
 	assertStatusCode(t, w, 200)
 	tokens = testharness.DecodeJSONArray(t, w)
 	if _, found := findTokenByID(tokens, createdID); found {

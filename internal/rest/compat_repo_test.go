@@ -261,7 +261,7 @@ func TestCompat_RepoCREATE_ModeledOptionsRoundTrip(t *testing.T) {
 func TestCompat_OrgRepoCREATE_VisibilityRoundTrip(t *testing.T) {
 	h := testharness.New(t)
 
-	w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "compat-create-org"})
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "compat-create-org"})
 	assertStatusCode(t, w, http.StatusCreated)
 
 	w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/compat-create-org/repos", map[string]any{
@@ -288,7 +288,7 @@ func TestCompat_OrgRepoCREATE_VisibilityRoundTrip(t *testing.T) {
 func TestCompat_OrgRepoCREATE_InternalVisibilityRoundTrip(t *testing.T) {
 	h := testharness.New(t)
 
-	w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "compat-internal-org"})
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "compat-internal-org"})
 	assertStatusCode(t, w, http.StatusCreated)
 
 	w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/compat-internal-org/repos", map[string]any{

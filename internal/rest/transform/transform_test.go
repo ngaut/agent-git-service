@@ -570,7 +570,7 @@ func TestWikiTreeEntryCarriesRefInPageURLs(t *testing.T) {
 		Size:  42,
 	}, "1111111111111111111111111111111111111111")
 
-	if got, want := result["url"], "http://test.local/api/v3/repos/alice/myrepo/wiki/pages/docs%2Fold?ref=1111111111111111111111111111111111111111"; got != want {
+	if got, want := result["url"], "http://test.local/api/ext/v1/repos/alice/myrepo/wiki/pages/docs%2Fold?ref=1111111111111111111111111111111111111111"; got != want {
 		t.Fatalf("url = %q, want %q", got, want)
 	}
 	if got, want := result["html_url"], "https://test.local/alice/myrepo/wiki/docs/old?ref=1111111111111111111111111111111111111111"; got != want {

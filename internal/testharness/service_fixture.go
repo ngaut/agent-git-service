@@ -77,13 +77,12 @@ func NewService(tb testing.TB, cfg ServiceConfig) (*service.Service, func()) {
 	// ContextWithDB) reach the catalog, not just the static gdb.
 
 	svc := &service.Service{
-		DB:             gdb,
-		Git:            store,
-		WikiCatalog:    wikiCat,
-		WikiBlob:       wikiBlob,
-		BaseURL:        "http://localhost:8080",
-		AttachmentRoot: tmpDir,
-		Embedder:       embedder,
+		DB:          gdb,
+		Git:         store,
+		WikiCatalog: wikiCat,
+		WikiBlob:    wikiBlob,
+		BaseURL:     "http://localhost:8080",
+		Embedder:    embedder,
 	}
 	wikiCat.DBFor = svc.DBForCtx
 	// Mirror the production hook so writes through ApplyChangeSet

@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/ngaut/agent-git-service/internal/db"
+	"github.com/ngaut/agent-git-service/internal/service"
 	"github.com/ngaut/agent-git-service/internal/testharness"
 )
 
 func TestCreateIssueCommentRejectsRepliesBeyondMaxDepth(t *testing.T) {
 	h := testharness.New(t)
-	issue := seedTypingIssue(t, h, "comment-depth-limit")
+	issue := seedCommentIssue(t, h, "comment-depth-limit")
 	ctx := context.Background()
 
 	root, err := h.Svc.CreateIssueComment(ctx, issue.Repository.FullName, issue.Number, "Root", h.User.Login, nil)
@@ -61,7 +63,7 @@ func TestCreateIssueCommentRejectsRepliesBeyondMaxDepth(t *testing.T) {
 
 func TestListRepoIssueComments(t *testing.T) {
 	h := testharness.New(t)
-	issue := seedTypingIssue(t, h, "repo-comments")
+	issue := seedCommentIssue(t, h, "repo-comments")
 	ctx := context.Background()
 
 	first, err := h.Svc.CreateIssueComment(ctx, issue.Repository.FullName, issue.Number, "first", h.User.Login, nil)
@@ -87,4 +89,32 @@ func TestListRepoIssueComments(t *testing.T) {
 	if got := uint(items[1]["id"].(float64)); got != first.ID {
 		t.Fatalf("second listed id: got %d, want first comment %d", got, first.ID)
 	}
+}
+
+func seedCommentIssue(t *testing.T, h *testharness.Harness, repoName string) db.Issue {
+	t.Helper()
+
+	ctx := context.Background()
+	repo, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
+		OwnerLogin: h.User.Login,
+		Name:       repoName,
+		AutoInit:   true,
+	})
+	if err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	created, err := h.Svc.CreateIssue(ctx, service.CreateIssueInput{
+		RepoFullName: repo.FullName,
+		Title:        "comment conversation",
+		AuthorLogin:  h.User.Login,
+		Labels:       []string{"type:conversation"},
+	})
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issue, err := h.Svc.GetIssueByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("reload issue: %v", err)
+	}
+	return issue
 }

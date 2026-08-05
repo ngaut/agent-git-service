@@ -88,11 +88,10 @@ func newPRBenchmarkDeps(b *testing.B) (*Deps, *service.Service, db.User) {
 	}
 
 	svc := &service.Service{
-		DB:             gdb,
-		Git:            store,
-		BaseURL:        "http://localhost:8080",
-		AttachmentRoot: tmpDir,
-		Embedder:       embedding.NopEmbedder{},
+		DB:       gdb,
+		Git:      store,
+		BaseURL:  "http://localhost:8080",
+		Embedder: embedding.NopEmbedder{},
 	}
 	user := db.User{Login: "benchuser", Name: "benchuser", Type: db.TypeUser, SiteAdmin: true}
 	if err := gdb.Create(&user).Error; err != nil {

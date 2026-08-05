@@ -655,7 +655,7 @@ func (d *Deps) RemoveTeamRepo(w http.ResponseWriter, r *http.Request) {
 	respond.NoContent(w)
 }
 
-// EnableRepoTeamSharing handles POST /api/v3/repos/{owner}/{repo}/team-sharing/enable
+// EnableRepoTeamSharing handles POST /api/ext/v1/repos/{owner}/{repo}/team-sharing/enable
 func (d *Deps) EnableRepoTeamSharing(w http.ResponseWriter, r *http.Request) {
 	repo := d.mustGetRepo(w, r)
 	if repo == nil {

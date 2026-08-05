@@ -17,7 +17,7 @@ func TestRepoHandlers(t *testing.T) {
 	t.Run("CreateUserOrg_Success", func(t *testing.T) {
 		h := testharness.New(t)
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{
 			"login":                         "acme",
 			"name":                          "Acme",
 			"default_repository_permission": "triage",
@@ -44,7 +44,7 @@ func TestRepoHandlers(t *testing.T) {
 
 	t.Run("CreateOrgRepo_MissingName", func(t *testing.T) {
 		h := testharness.New(t)
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "acme"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "acme"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/acme/repos", map[string]any{})
@@ -58,7 +58,7 @@ func TestRepoHandlers(t *testing.T) {
 
 	t.Run("CreateOrgRepo_DefaultFlags", func(t *testing.T) {
 		h := testharness.New(t)
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "acme"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "acme"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/acme/repos", map[string]any{
@@ -134,7 +134,7 @@ func TestRepoHandlers(t *testing.T) {
 		h := testharness.New(t)
 		ctx := context.Background()
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "secureorg"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "secureorg"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		org, err := h.Svc.GetUser(ctx, "secureorg")
@@ -177,7 +177,7 @@ func TestRepoHandlers(t *testing.T) {
 	t.Run("GetOrg_ExistingOrg_Returns200", func(t *testing.T) {
 		h := testharness.New(t)
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{
 			"login": "testorg",
 		})
 		assertStatusCode(t, w, http.StatusCreated)
@@ -269,9 +269,9 @@ func TestRepoHandlers(t *testing.T) {
 	t.Run("ForkRepo_UserAndOrgTargets", func(t *testing.T) {
 		h := testharness.New(t)
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "sourceorg"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "sourceorg"})
 		assertStatusCode(t, w, http.StatusCreated)
-		w = h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "targetorg"})
+		w = h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "targetorg"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/sourceorg/repos", map[string]any{
@@ -304,7 +304,7 @@ func TestRepoHandlers(t *testing.T) {
 		h := testharness.New(t)
 		ctx := context.Background()
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "fork-secure-org"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "fork-secure-org"})
 		assertStatusCode(t, w, http.StatusCreated)
 		w = h.DoRESTJSON(t, "POST", "/api/v3/user/repos", map[string]any{
 			"name":      "public-fork-source",
@@ -353,9 +353,9 @@ func TestRepoHandlers(t *testing.T) {
 		h := testharness.New(t)
 		ctx := context.Background()
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "sourceorg"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "sourceorg"})
 		assertStatusCode(t, w, http.StatusCreated)
-		w = h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "targetorg"})
+		w = h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "targetorg"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/sourceorg/repos", map[string]any{
@@ -428,7 +428,7 @@ func TestRepoHandlers(t *testing.T) {
 
 	t.Run("TransferRepo_ToOrgKeepsCreatorVisible", func(t *testing.T) {
 		h := testharness.New(t)
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "memory-org"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "memory-org"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		w = h.DoRESTJSON(t, "POST", "/api/v3/user/repos", map[string]any{
@@ -471,7 +471,7 @@ func TestRepoHandlers(t *testing.T) {
 	t.Run("TransferRepo_ToOrgWithExistingRepo_ReturnsConflict", func(t *testing.T) {
 		h := testharness.New(t)
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "memory-org"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "memory-org"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		w = h.DoRESTJSON(t, "POST", "/api/v3/user/repos", map[string]any{
@@ -500,7 +500,7 @@ func TestRepoHandlers(t *testing.T) {
 		h := testharness.New(t)
 		ctx := context.Background()
 
-		w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "transfer-secure-org"})
+		w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "transfer-secure-org"})
 		assertStatusCode(t, w, http.StatusCreated)
 
 		org, err := h.Svc.GetUser(ctx, "transfer-secure-org")
@@ -555,7 +555,7 @@ func TestRepoHandlers(t *testing.T) {
 	t.Run("TransferRepo_ToExistingOrgLetsCreatorCreateTeam", func(t *testing.T) {
 		h := testharness.New(t)
 		_, token := seedHarnessUser(t, h, "transfer-bootstrap", false)
-		w := h.DoRESTJSONWithToken(t, "POST", "/api/v3/user/orgs", token, map[string]any{
+		w := h.DoRESTJSONWithToken(t, "POST", "/api/ext/v1/user/orgs", token, map[string]any{
 			"login": "transfer-bootstrap-org",
 		})
 		assertStatusCode(t, w, http.StatusCreated)

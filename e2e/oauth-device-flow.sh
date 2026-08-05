@@ -123,7 +123,7 @@ test_poll_pending_code() {
   # Approve the device code via the headless console API
   local approve_code
   approve_code="$(curl -ksS -w "%{http_code}" -o /dev/null \
-    -X POST "$BASE_URL/api/v3/oauth/device/approve" \
+    -X POST "$BASE_URL/api/ext/v1/oauth/device/approve" \
     -H "Authorization: token $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"user_code\":\"$user_code\"}")"

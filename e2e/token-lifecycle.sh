@@ -34,7 +34,7 @@ note "=== Test 1: Initial Token Provisioning ==="
 name="e2e-lifecycle-$(date +%s)"
 note "Creating token without expires_at"
 created="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name\"}")"
@@ -59,7 +59,7 @@ future_time="$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)"
 name2="e2e-lifecycle-exp-$(date +%s)"
 note "Creating token with valid future expires_at: $future_time"
 created2="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name2\",\"expires_at\":\"$future_time\"}")"
@@ -85,7 +85,7 @@ note "Attempting to create token with past expires_at: $past_time"
 
 tmp_file="$(mktemp)"
 code="$(curl -ksS -o "$tmp_file" -w "%{http_code}" \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name3\",\"expires_at\":\"$past_time\"}")"
@@ -111,7 +111,7 @@ note "Attempting to create token with malformed expires_at"
 
 tmp_file="$(mktemp)"
 code="$(curl -ksS -o "$tmp_file" -w "%{http_code}" \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name4\",\"expires_at\":\"not-a-date\"}")"
@@ -133,7 +133,7 @@ note "=== Test 5: Delete Token by ID ==="
 
 name5="e2e-lifecycle-del-id-$(date +%s)"
 created5="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name5\"}")"
@@ -149,7 +149,7 @@ ok "Token works before deletion"
 
 # Delete by ID
 code="$(http_code \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"id\":$id5}")"
@@ -168,7 +168,7 @@ note "=== Test 6: Delete Token by Value ==="
 
 name6="e2e-lifecycle-del-val-$(date +%s)"
 created6="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name6\"}")"
@@ -184,7 +184,7 @@ ok "Token works before deletion"
 
 # Delete by value
 code="$(http_code \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"token\":\"$token6\"}")"
@@ -203,7 +203,7 @@ note "=== Test 7: Token Revocation and Immediate Invalidation ==="
 
 name7="e2e-lifecycle-revoke-$(date +%s)"
 created7="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name7\"}")"
@@ -219,7 +219,7 @@ ok "Token works before revocation"
 
 # Revoke the token
 code="$(http_code \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"id\":$id7}")"
@@ -232,7 +232,7 @@ assert_eq "$code" "401"
 ok "Revoked token immediately invalid"
 
 # Verify token is removed from list
-list="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/v3/user/tokens")"
+list="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/ext/v1/user/tokens")"
 remaining="$(jq -r --arg name "$name7" '[.[] | select(.name==$name)] | length' <<<"$list")"
 assert_eq "$remaining" "0"
 ok "Revoked token removed from list"
@@ -252,7 +252,7 @@ note "Creating 21 tokens to test LRU cap eviction"
 for i in $(seq 1 21); do
   name_lru="e2e-lru-token-$(date +%s)-$i"
   created_lru="$(curl_json 201 \
-    -X POST "$BASE_URL/api/v3/user/tokens" \
+    -X POST "$BASE_URL/api/ext/v1/user/tokens" \
     -H "Authorization: token $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"$name_lru\"}")"
@@ -283,7 +283,7 @@ code="$(http_code -H "Authorization: token $first_token" "$BASE_URL/api/v3/user"
 # This should be 401 as the token was evicted by LRU cap
 if [ "$code" != "401" ]; then
   # Token might still exist if cap hasn't kicked in yet, check the list
-  list_check="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/v3/user/tokens")"
+  list_check="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/ext/v1/user/tokens")"
   count="$(jq 'length' <<<"$list_check")"
   if [ "$count" -gt 20 ]; then
     echo "Warning: Token cap not enforced yet, count=$count" >&2
@@ -304,7 +304,7 @@ ok "Recently used tokens preserved by LRU"
 note "Cleaning up LRU test tokens"
 for t in "${cleanup_tokens[@]}"; do
   curl -ksS -o /dev/null \
-    -X DELETE "$BASE_URL/api/v3/user/tokens" \
+    -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
     -H "Authorization: token $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"token\":\"$t\"}" || true
@@ -327,7 +327,7 @@ for i in $(seq 1 $concurrent_count); do
   name_concurrent="e2e-concurrent-$(date +%s)-$i"
   (
     curl -ksS -o "/tmp/token_$i.json" \
-      -X POST "$BASE_URL/api/v3/user/tokens" \
+      -X POST "$BASE_URL/api/ext/v1/user/tokens" \
       -H "Authorization: token $ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
       -d "{\"name\":\"$name_concurrent\"}"
@@ -361,7 +361,7 @@ done
 ok "Created $concurrent_count tokens concurrently"
 
 # Verify all concurrent tokens are unique and usable
-list_concurrent="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/v3/user/tokens")"
+list_concurrent="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/ext/v1/user/tokens")"
 created_ids="$(jq -r '.[] | select(.name | startswith("e2e-concurrent")) | .id' <<<"$list_concurrent")"
 created_count="$(echo "$created_ids" | wc -l)"
 assert_eq "$created_count" "$concurrent_count"
@@ -384,7 +384,7 @@ ok "All concurrent tokens are usable for authentication"
 note "Cleaning up concurrent test tokens"
 for tid in "${token_ids[@]}"; do
   curl -ksS -o /dev/null \
-    -X DELETE "$BASE_URL/api/v3/user/tokens" \
+    -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
     -H "Authorization: token $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"id\":$tid}" || true
@@ -400,7 +400,7 @@ note "=== Test 10: Token Refresh Before Expiration ==="
 future_2h="$(date -u -d '+2 hours' +%Y-%m-%dT%H:%M:%SZ)"
 name_refresh="e2e-refresh-before-$(date +%s)"
 created_refresh="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name_refresh\",\"expires_at\":\"$future_2h\"}")"
@@ -431,7 +431,7 @@ ok "Token remains valid after multiple uses"
 
 # Cleanup
 curl -ksS -o /dev/null \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"id\":$id_refresh}" || true
@@ -446,14 +446,14 @@ note "=== Test 11: Token List and Pagination ==="
 for i in $(seq 1 3); do
   name_list="e2e-list-test-$(date +%s)-$i"
   curl_json 201 \
-    -X POST "$BASE_URL/api/v3/user/tokens" \
+    -X POST "$BASE_URL/api/ext/v1/user/tokens" \
     -H "Authorization: token $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"$name_list\"}" > /dev/null
 done
 
 # List tokens
-list_all="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/v3/user/tokens")"
+list_all="$(curl_json 200 -H "Authorization: token $ADMIN_TOKEN" "$BASE_URL/api/ext/v1/user/tokens")"
 count_all="$(jq 'length' <<<"$list_all")"
 assert_re "$count_all" '^[0-9]+$'
 ok "Token list retrieved (count: $count_all)"
@@ -469,7 +469,7 @@ ok "Token list has required fields"
 list_to_delete="$(jq -r '.[] | select(.name | startswith("e2e-list-test")) | .id' <<<"$list_all")"
 for tid in $list_to_delete; do
   curl -ksS -o /dev/null \
-    -X DELETE "$BASE_URL/api/v3/user/tokens" \
+    -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
     -H "Authorization: token $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"id\":$tid}" || true
@@ -483,25 +483,25 @@ note "=== Final Cleanup ==="
 
 # Delete initial test tokens
 curl -ksS -o /dev/null \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"id\":$id1}" || true
 
 curl -ksS -o /dev/null \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"id\":$id2}" || true
 
 curl -ksS -o /dev/null \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"token\":\"$token5\"}" || true
 
 curl -ksS -o /dev/null \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"token\":\"$token6\"}" || true

@@ -60,14 +60,13 @@ func TestWikiBackgroundMigrationStateIsTenantScoped_Issue1448(t *testing.T) {
 	blobStore := wikicatalog.NewBlobStore(t.TempDir())
 	wikiCat := wikicatalog.New(defaultDB, blobStore)
 	svc := &service.Service{
-		Ctx:            context.Background(),
-		DB:             defaultDB,
-		Git:            store,
-		WikiCatalog:    wikiCat,
-		WikiBlob:       blobStore,
-		AttachmentRoot: t.TempDir(),
-		BaseURL:        "http://localhost:8080",
-		Embedder:       embedding.NopEmbedder{},
+		Ctx:         context.Background(),
+		DB:          defaultDB,
+		Git:         store,
+		WikiCatalog: wikiCat,
+		WikiBlob:    blobStore,
+		BaseURL:     "http://localhost:8080",
+		Embedder:    embedding.NopEmbedder{},
 	}
 	wikiCat.DBFor = svc.DBForCtx
 	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit
@@ -213,14 +212,13 @@ func TestKickBackgroundWikiMigration_UsesCallerTenantContext_Issue1448(t *testin
 	blobStore := wikicatalog.NewBlobStore(t.TempDir())
 	wikiCat := wikicatalog.New(defaultDB, blobStore)
 	svc := &service.Service{
-		Ctx:            context.Background(),
-		DB:             defaultDB,
-		Git:            store,
-		WikiCatalog:    wikiCat,
-		WikiBlob:       blobStore,
-		AttachmentRoot: t.TempDir(),
-		BaseURL:        "http://localhost:8080",
-		Embedder:       embedding.NopEmbedder{},
+		Ctx:         context.Background(),
+		DB:          defaultDB,
+		Git:         store,
+		WikiCatalog: wikiCat,
+		WikiBlob:    blobStore,
+		BaseURL:     "http://localhost:8080",
+		Embedder:    embedding.NopEmbedder{},
 	}
 	wikiCat.DBFor = svc.DBForCtx
 	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit

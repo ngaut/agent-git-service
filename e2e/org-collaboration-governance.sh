@@ -73,7 +73,7 @@ ok "org repo creation is gated on explicit org creation"
 
 note "creating organization with default triage alias"
 org_resp="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/orgs" \
+  -X POST "$BASE_URL/api/ext/v1/user/orgs" \
   -H "Authorization: token $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"login\":\"$ORG\",\"default_repository_permission\":\"triage\"}")"

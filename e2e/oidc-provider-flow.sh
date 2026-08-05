@@ -59,7 +59,7 @@ assert_re "$id_token" '^.+$'
 
 note "Create user through OIDC callback"
 first_login="$(curl_json 200 \
-  -X POST "$BASE_URL/api/v3/oidc/callback" \
+  -X POST "$BASE_URL/api/ext/v1/oidc/callback" \
   -H "Content-Type: application/json" \
   -d "{\"id_token\":\"$id_token\"}")"
 first_token="$(json_get token <<<"$first_login")"
@@ -71,7 +71,7 @@ ok "first OIDC callback created user $first_login_name"
 
 note "OIDC lookup returns linked user"
 lookup="$(curl_json 200 \
-  -X POST "$BASE_URL/api/v3/oidc/lookup" \
+  -X POST "$BASE_URL/api/ext/v1/oidc/lookup" \
   -H "Content-Type: application/json" \
   -d "{\"id_token\":\"$id_token\"}")"
 assert_eq "$(json_get linked <<<"$lookup")" "true"
@@ -81,7 +81,7 @@ ok "OIDC lookup resolved linked user"
 
 note "Repeated callback reuses the same identity"
 repeat_login="$(curl_json 200 \
-  -X POST "$BASE_URL/api/v3/oidc/callback" \
+  -X POST "$BASE_URL/api/ext/v1/oidc/callback" \
   -H "Content-Type: application/json" \
   -d "{\"id_token\":\"$id_token\"}")"
 assert_eq "$(json_get user_id <<<"$repeat_login")" "$first_user_id"
@@ -96,12 +96,12 @@ ok "OIDC-issued token authenticates user API"
 note "Invalid token is rejected"
 invalid_id_token="$(mutate_token_payload "$id_token")"
 invalid_callback_code="$(http_code \
-  -X POST "$BASE_URL/api/v3/oidc/callback" \
+  -X POST "$BASE_URL/api/ext/v1/oidc/callback" \
   -H "Content-Type: application/json" \
   -d "{\"id_token\":\"$invalid_id_token\"}")"
 assert_eq "$invalid_callback_code" "401"
 invalid_lookup_code="$(http_code \
-  -X POST "$BASE_URL/api/v3/oidc/lookup" \
+  -X POST "$BASE_URL/api/ext/v1/oidc/lookup" \
   -H "Content-Type: application/json" \
   -d "{\"id_token\":\"$invalid_id_token\"}")"
 assert_eq "$invalid_lookup_code" "401"

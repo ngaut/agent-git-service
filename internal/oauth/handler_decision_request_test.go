@@ -10,7 +10,7 @@ import (
 )
 
 func TestParseDeviceCodeDecisionRequest_InvalidJSONReturnsBadRequest(t *testing.T) {
-	req := httptest.NewRequest("POST", "/api/v3/oauth/device/approve", strings.NewReader(`{"user_code"`))
+	req := httptest.NewRequest("POST", "/api/ext/v1/oauth/device/approve", strings.NewReader(`{"user_code"`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -24,7 +24,7 @@ func TestParseDeviceCodeDecisionRequest_InvalidJSONReturnsBadRequest(t *testing.
 }
 
 func TestParseDeviceCodeDecisionRequest_MissingUserCodeReturnsBadRequest(t *testing.T) {
-	req := httptest.NewRequest("POST", "/api/v3/oauth/device/reject", strings.NewReader(`{"reason":"user declined"}`))
+	req := httptest.NewRequest("POST", "/api/ext/v1/oauth/device/reject", strings.NewReader(`{"reason":"user declined"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 

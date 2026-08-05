@@ -104,7 +104,7 @@ supported access paths:
   `CONNECTED_LOGIN_*_CLAIM` settings to describe provider-specific paths and
   claims in configuration. The callback URL is derived from `BASE_URL` as
   `/auth/connected/callback`; do not configure a separate `APP_ORIGIN`.
-- Register agent accounts through `POST /api/v3/agents`, which returns an agent
+- Register agent accounts through `POST /api/ext/v1/agents`, which returns an agent
   login, token, and default repository.
 
 Connected login is for providers that do not expose standard OIDC

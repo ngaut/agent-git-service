@@ -16,10 +16,8 @@ type User struct {
 	UserKind                    string `gorm:"size:16;not null;default:'human'"`
 	SiteAdmin                   bool   `gorm:"default:false"`
 	DefaultRepositoryPermission string `gorm:"size:20;not null;default:'none'"`
-	// HidePresence allows users to hide their presence from others.
-	HidePresence bool `gorm:"default:false"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
 }
 
 // Token represents an OAuth access token.

@@ -1,12 +1,12 @@
 # GitHub API Compatibility Matrix
 
-Last updated: 2026-06-02
+Last updated: 2026-06-18
 
 This matrix is a top-to-bottom guide for agents and client authors. Read the
 decision guide first, then the agent-native capability map, then the endpoint
 matrix for compatibility details. It compares the local API layer in
 `internal/router/router.go`, `internal/rest`, and `internal/graphql` against
-the official GitHub API surface, plus local extensions that are intentionally
+the official GitHub API surface, plus extension APIs that are intentionally
 not part of GitHub.
 
 This is an implementation snapshot, not a product commitment to full
@@ -25,8 +25,8 @@ Choose `agent-git-service` when the work benefits from:
 - Self-hosted control over data, identity, Git storage, deployment boundaries, and
   rate-limit policy for high-volume agent traffic.
 - Agent-native state that GitHub does not expose as first-class API concepts:
-  human-agent binding, switch sessions, wiki memory, issue presence, read
-  receipts, attachments, connected login, and analytics.
+  human-agent binding, switch sessions, wiki memory, aggregate console views,
+  connected login, and analytics.
 
 Choose GitHub.com when exact hosted GitHub product breadth matters more than
 agent-native state: full GraphQL schema execution, complete branch-protection
@@ -40,9 +40,9 @@ Agent call order:
    through collaborator, org, team, or team-repo routes before falling back to
    human impersonation or external bot flows.
 3. Use GitHub-compatible routes first for common GitHub client workflows.
-4. Switch deliberately to local extension routes when the task needs
-   agent-native behavior such as binding, switch sessions, read state,
-   attachments, wiki memory, connected login, or analytics.
+4. Switch deliberately to extension routes when the task needs
+   agent-native behavior such as binding, switch sessions, aggregate console
+   views, wiki memory, connected login, or analytics.
 5. Treat `OK` rows as safe for common clients, `PARTIAL` rows as usable with
    the documented caveats, `GAP` rows as unavailable, and `Extension` rows as
    local product APIs rather than GitHub-compatible endpoints.
@@ -53,12 +53,12 @@ Agent call order:
 
 | Agent need | Why `agent-git-service` is different from GitHub | What to call / inspect |
 |---|---|---|
-| Identity, ownership, and governance | Agents are first-class accounts (`user_kind=agent`) with their own login, token, and optional default repo. The same user-shaped model is used by collaborators, repo invitations, org members/invitations, team members, and team-repo grants, so an agent can be authorized as a repo/team/org participant instead of as an external App installation. | `POST /api/v3/agents`; `/repos/{owner}/{repo}/collaborators/{username}`; `/orgs/{org}/memberships/{username}`; `/orgs/{org}/teams/{team_slug}/memberships/{username}`; `/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}`; `models_auth.go`, `models_org.go`, `models_team.go`, `models_repo.go`, `repo_access.go` |
-| Human supervision and recovery | Binding is explicit and consent-based. A human can create invites, an agent confirms, and then the human can reset long-lived tokens or issue renewable short-lived switch-session tokens without rotating the canonical agent token. | `/api/v3/agent-invites`; `/agent-bindings/confirm`; `/agent-bindings/{agent_login}/reset-token`; `/switch-session`; `/refresh-session`; `docs/design/agent-auth.md` |
+| Identity, ownership, and governance | Agents are first-class accounts (`user_kind=agent`) with their own login, token, and optional default repo. The same user-shaped model is used by collaborators, repo invitations, org members/invitations, team members, and team-repo grants, so an agent can be authorized as a repo/team/org participant instead of as an external App installation. | `POST /api/ext/v1/agents`; `/api/v3/repos/{owner}/{repo}/collaborators/{username}`; `/api/v3/orgs/{org}/memberships/{username}`; `/api/v3/orgs/{org}/teams/{team_slug}/memberships/{username}`; `/api/v3/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}`; `models_auth.go`, `models_org.go`, `models_team.go`, `models_repo.go`, `repo_access.go` |
+| Human supervision and recovery | Binding is explicit and consent-based. A human can create invites, an agent confirms, and then the human can reset long-lived tokens or issue renewable short-lived switch-session tokens without rotating the canonical agent token. | `/api/ext/v1/agent-invites`; `/api/ext/v1/agent-bindings/confirm`; `/api/ext/v1/agent-bindings/{agent_login}/reset-token`; `/api/ext/v1/agent-bindings/{agent_login}/switch-session`; `/api/ext/v1/agent-bindings/{agent_login}/refresh-session`; `docs/design/agent-auth.md` |
 | Self-hosted operations | AGS runs with local DB/Git/auth boundaries, so high-volume agent workflows can run under operator-owned capacity and rate-limit policy instead of GitHub.com quotas. Current REST/GraphQL headers and `/rate_limit` come from local in-memory GitHub-like buckets; tuning is a deployment/code policy surface. | `docs/architecture.md`; `internal/middleware/rate_limit.go`; `internal/ratelimit/ratelimit.go`; `/api/v3/rate_limit` |
 | GitHub-compatible execution | Core GitHub-style clients can still use `/api/v3`, `/api/graphql`, Git Smart HTTP, REST repo/issue/PR routes, rate-limit/meta probes, and `api.github.localhost` host rewriting while AGS adds agent-native state around those workflows. | `internal/router/router.go`; `/api/v3`; `/api/v3/meta`; `/api/v3/rate_limit`; Git Smart HTTP routes |
-| Agent memory and live collaboration | Wiki pages are API-addressable, git-backed memory/runbooks with tree, history, search, backlinks, labels, moves, reconcile, repair, and compact routes. Issue extensions add typing, presence, read receipts, unread counts, participant read state, and attachments. | `/repos/{owner}/{repo}/wiki/...`; `/issues/{id}/typing`; `/issues/{issue_id}/presence`; `/issues/{number}/read*`; `/attachments/{uuid}`; `handlers_wiki.go`; `service/wiki*.go` |
-| Controlled or embedded identity | The server supports GitHub-like OAuth/device flow, headless device approval for external consoles, generic OIDC, connected-login browser callbacks, and embedded-auth identity injection. Hosts can map upstream identities to local AGS users without depending on GitHub.com identity. | `/login/*`; `/api/v3/oauth/device/*`; `/api/v3/oidc/*`; `/auth/connected/*`; `internal/oauth`; `internal/oidc`; `internal/connectedlogin`; `server.WithAuthenticator(...)` |
+| Agent memory and aggregate views | Wiki pages are API-addressable, git-backed memory/runbooks with tree, history, search, backlinks, labels, moves, reconcile, repair, compact routes, and batch/catalog aggregate routes. Client aggregates expose console-oriented summaries without adding GitHub-shaped issue collaboration APIs. | `/api/ext/v1/repos/{owner}/{repo}/wiki/...`; `/api/ext/v1/repos/{owner}/{repo}/wiki/catalog`; `/api/ext/v1/repos/{owner}/{repo}/wiki/pages/batch`; `/api/ext/v1/viewer/summary`; `/api/ext/v1/notifications/summary`; `/api/ext/v1/orgs/{org}/management-summary`; `/api/ext/v1/repos/{owner}/{repo}/summary`; `/api/ext/v1/repos/{owner}/{repo}/issues/{number}/thread`; `handlers_wiki.go`; `handlers_aggregate.go`; `service/wiki*.go` |
+| Controlled or embedded identity | The server supports GitHub-like OAuth/device flow, headless device approval for external consoles, generic OIDC, connected-login browser callbacks, and embedded-auth identity injection. Hosts can map upstream identities to local AGS users without depending on GitHub.com identity. | `/login/*`; `/api/ext/v1/oauth/device/*`; `/api/ext/v1/oidc/*`; `/auth/connected/*`; `internal/oauth`; `internal/oidc`; `internal/connectedlogin`; `server.WithAuthenticator(...)` |
 | Real Git backing | Repository contents, refs, diffs, merges, rebases, Git HTTP clone/fetch/push, and wiki content remain Git-backed while DB state owns higher-level product metadata. Agents can rely on real Git history instead of an API-only simulation. | `internal/gitstore`; `internal/githttp`; Git Database/contents/compare routes |
 | Know where not to use AGS as a GitHub replacement | Missing or partial areas are intentionally visible: full GraphQL, complete branch protection, broad Actions admin/runtime APIs, security products, community/traffic/stats, and many long-tail GitHub endpoints are not parity targets today. | `Highest Priority Gaps`, `Remaining Gap Summary`, all `PARTIAL`/`GAP` rows |
 
@@ -73,7 +73,9 @@ Sources:
   <https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json>
 - GitHub REST docs: <https://docs.github.com/en/rest>
 - GitHub GraphQL docs: <https://docs.github.com/en/graphql>
-- Local REST extension contract: `GET /api/v3/openapi.json` in this server,
+- Local GitHub-compatible REST contract: `GET /api/v3/openapi.json` in this
+  server, backed by `internal/rest/openapi.go`.
+- Extension REST contract: `GET /api/ext/v1/openapi.json` in this server,
   backed by `internal/rest/openapi.go`.
 
 Per-endpoint documentation links below use GitHub OpenAPI `externalDocs.url`
@@ -83,14 +85,18 @@ GitHub REST or GraphQL docs page.
 Local routing notes:
 - GitHub REST paths are exposed under `/api/v3`. Requests to
   `api.github.localhost` are rewritten to that prefix by `registerHostMux`.
+- Extension platform APIs are exposed only under `/api/ext/v1`; historical
+  `/api/v3` local extension routes have been removed.
 - Public repo reads use optional auth. Writes require auth through middleware.
 - The implementation targets common GitHub-compatible server behavior, not
   strict endpoint-for-endpoint parity with GitHub.com.
-- Analytics, connected login, presence, attachments, read receipts, agent
-  binding, OIDC, wiki, org bootstrap, repo team sharing, and local token routes
-  are local extensions unless explicitly noted below.
-- The API root advertises `openapi_url` so clients can discover the
-  machine-readable local extension contract without source inspection.
+- Analytics, connected login, agent binding, OIDC, wiki, aggregate views,
+  org bootstrap, repo team sharing, and local token routes
+  are extension APIs unless explicitly noted below. Their canonical API paths
+  use `/api/ext/v1`.
+- `/api/v3` discovery advertises GitHub-compatible URLs and its
+  `/api/v3/openapi.json` contract; `/api/ext/v1` discovery advertises the
+  extension `openapi_url`.
 
 ## Highest Priority Gaps
 
@@ -117,7 +123,7 @@ Local routing notes:
 | `GET /repos/{owner}/{repo}/issues/{number}/assignees/{assignee}` ([docs][issues-check-user-can-be-assigned-to-issue]) | Check whether a user can be assigned | Not routed | Missing check endpoint | Low | GAP |
 | Issue dependencies, sub-issues, parent, issue fields ([dependencies][issue-dependencies-docs], [sub-issues][sub-issues-docs], [field values][issue-field-values-docs]) | GitHub exposes issue hierarchy/dependencies/issue-field endpoints | Not routed | Missing modern GitHub issue planning APIs | Low | GAP |
 | Reactions on issues and issue comments ([issues][reactions-list-for-issue], [comments][reactions-list-for-issue-comment]) | List/create/delete reactions, with media-type semantics on GitHub | Supported for issues and issue comments | GraphQL reaction mutations are minimal; REST media-type previews are not enforced | Low | PARTIAL |
-| Local extensions | None on GitHub | `/presence/heartbeat`, `/issues/{id}/typing`, `/issues/{id}/attachments`, `/repos/{owner}/{repo}/attachments`, `/repositories/{repo_id}/attachments`, `/issues/{number}/read*`, `/issues/{issue_id}/presence`, `/users/{user_id}/last-seen`, `/user/presence/privacy` | Additive local product APIs, not GitHub-compatible endpoints | N/A | Extension |
+| Local extensions | None on GitHub | No extension issue presence, typing, read-state, unread-count, or attachment REST APIs are routed | Historical local collaboration and attachment issue APIs have been removed from the published API surface | N/A | Removed |
 
 ## Pull Requests
 
@@ -134,7 +140,7 @@ Local routing notes:
 | PR review lifecycle ([list][pulls-list-reviews], [create][pulls-create-review], [submit][pulls-submit-review], [update][pulls-update-review], [dismiss][pulls-dismiss-review]) | List/create/submit/get/dismiss/delete reviews; update pending review via `PUT` | Most routes exist, including `PUT` review update | No known method mismatch for update; lifecycle edge semantics may still differ | High | OK/PARTIAL: `TestCompat_PRReviewUpdate_UsesPut` |
 | PR review comments ([repo list][pulls-list-review-comments-for-repo], [PR list][pulls-list-review-comments], [create][pulls-create-review-comment], [reply][pulls-create-reply-for-review-comment], [update][pulls-update-review-comment], [reactions][reactions-list-for-pr-review-comment]) | GitHub supports repo-wide list, per-PR list, create/reply/update/delete, and reactions | Local supports per-PR list, create/reply/update/delete, single comment get | Missing repo-wide `GET /pulls/comments`; missing review comment reactions | Medium | PARTIAL |
 | Requested reviewers ([docs][pulls-requested-reviewers]) | Add/remove/list requested reviewers and teams | Supported, including no-prefix compatibility routes | Team/user validation is simpler than GitHub | Medium | OK/PARTIAL |
-| Draft conversion ([ready][graphql-mark-pull-request-ready], [draft][graphql-convert-pull-request-draft]) | GitHub REST has ready-for-review; draft conversion is GraphQL | Local has REST `PUT .../ready_for_review` plus GraphQL ready/draft mutations | REST ready endpoint is local-compatible for CLI; draft conversion remains GraphQL | Low | OK/PARTIAL |
+| Draft conversion ([ready][graphql-mark-pull-request-ready], [draft][graphql-convert-pull-request-draft]) | GitHub exposes ready/draft conversion through GraphQL mutations for this compatibility target | Local exposes GraphQL ready/draft mutations and no REST `ready_for_review` shim | REST clients should not assume a local GitHub-shaped ready-for-review endpoint exists | Low | PARTIAL |
 | PR archive/codespaces ([archive][pulls-archive], [codespaces][codespaces-create-with-pr]) | GitHub has PR archive and PR codespaces routes | Not routed | Missing low-priority modern endpoints | Low | GAP |
 | Local extensions ([GraphQL thread docs][graphql-review-thread]) | None on GitHub REST | REST `resolve`/`unresolve` review comment routes | Thread resolution is a GitHub GraphQL concept; REST routes are local extensions | N/A | Extension |
 
@@ -278,23 +284,22 @@ Local routing notes:
 | Mutations ([docs][graphql-mutations-docs]) | Broad GitHub mutation surface | Supports selected issue, PR, repo, project, milestone, git database, labels, assignees, Dependabot, reaction, and lock mutations | Many GitHub mutations are missing; some reaction mutations are minimal; project team linking explicitly unsupported | High | PARTIAL |
 | Error semantics ([errors][graphql-errors-docs], [validation][graphql-validation-docs]) | GraphQL errors with paths/types and schema validation | Mixed: some `errResp`, some graceful empty payloads | Clients that rely on schema validation or exact error classes may misbehave | Medium | PARTIAL |
 
-## Local Extension Route Index
+## Extension Route Index
 
-This is the route index for the local product APIs summarized in the
-agent-native capability map. Treat these as AGS extensions, not GitHub-compatible
-endpoints:
+This is the canonical route index for the extension product APIs summarized in
+the agent-native capability map. Historical `/api/v3` variants are no longer
+routed; extension-aware callers must use `/api/ext/v1`:
 
 | Area | Routes |
 |---|---|
-| Agents | `/api/v3/agents`, `/agent-invites`, `/agent-bindings/confirm`, `PATCH /agent-bindings/{agent_login}`, `/agent-bindings/{agent_login}/reset-token`, `/agent-bindings/{agent_login}/switch-session`, `/agent-bindings/{agent_login}/refresh-session`, `/user/agents` |
-| OAuth / OIDC / connected login | `/api/v3/oauth/device/approve`, `/api/v3/oauth/device/reject`, `/api/v3/oidc/device/code`, `/session`, `/callback`, `/lookup`, `/auth/connected/login`, `/auth/connected/callback` |
-| Analytics | `/api/v3/analytics/events` |
-| Presence/typing/read state | `/presence/heartbeat`, `/issues/{id}/typing`, `/issues/{issue_id}/presence`, `/users/{user_id}/last-seen`, `/user/presence/privacy`, issue read-state routes |
-| Attachments | `/api/v3/issues/{id}/attachments`, `/api/v3/repos/{owner}/{repo}/attachments`, `/api/v3/repositories/{repo_id}/attachments`, `/api/v3/attachments/{uuid}` |
-| Wiki | `/api/v3/repos/{owner}/{repo}/wiki/state`, `/wiki/tree`, `/wiki/reconcile/request`, `/wiki/reconcile`, `/wiki/compact`, `/wiki/compact/{jobID}`, `/wiki/pages...`, `/wiki/search`, `/wiki/move`, `/wiki/pages/{slug}/move`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/labels...`, `/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks` |
-| Org bootstrap | `POST /api/v3/user/orgs` |
-| Repo team sharing | `/api/v3/repos/{owner}/{repo}/team-sharing/enable` |
-| Local token management | `/api/v3/user/tokens` |
+| Agents | `/api/ext/v1/agents`, `/api/ext/v1/agent-invites`, `/api/ext/v1/agent-bindings/confirm`, `PATCH /api/ext/v1/agent-bindings/{agent_login}`, `/api/ext/v1/agent-bindings/{agent_login}/reset-token`, `/api/ext/v1/agent-bindings/{agent_login}/switch-session`, `/api/ext/v1/agent-bindings/{agent_login}/refresh-session`, `/api/ext/v1/user/agents` |
+| OAuth / OIDC / connected login | `/api/ext/v1/oauth/device/approve`, `/api/ext/v1/oauth/device/reject`, `/api/ext/v1/oidc/device/code`, `/api/ext/v1/oidc/session`, `/api/ext/v1/oidc/callback`, `/api/ext/v1/oidc/lookup`, `/auth/connected/login`, `/auth/connected/callback` |
+| Analytics | `/api/ext/v1/analytics/events` |
+| Wiki | `/api/ext/v1/repos/{owner}/{repo}/wiki/state`, `/api/ext/v1/repos/{owner}/{repo}/wiki/tree`, `/api/ext/v1/repos/{owner}/{repo}/wiki/catalog`, `/api/ext/v1/repos/{owner}/{repo}/wiki/reconcile/request`, `/api/ext/v1/repos/{owner}/{repo}/wiki/reconcile`, `/api/ext/v1/repos/{owner}/{repo}/wiki/compact`, `/api/ext/v1/repos/{owner}/{repo}/wiki/compact/{jobID}`, `/api/ext/v1/repos/{owner}/{repo}/wiki/pages...`, `/api/ext/v1/repos/{owner}/{repo}/wiki/search`, `/api/ext/v1/repos/{owner}/{repo}/wiki/move`, `/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/move`, `/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks`, `/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/history`, `/api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/labels...`, `/api/ext/v1/admin/wiki/repos/{owner}/{repo}/repair-locks` |
+| Aggregates | `/api/ext/v1/viewer/summary`, `/api/ext/v1/orgs/{org}/management-summary`, `/api/ext/v1/repos/{owner}/{repo}/summary`, `/api/ext/v1/repos/{owner}/{repo}/issues/{number}/thread`, `/api/ext/v1/repos/{owner}/{repo}/wiki/pages/batch`, `/api/ext/v1/notifications/summary` |
+| Org bootstrap | `POST /api/ext/v1/user/orgs` |
+| Repo team sharing | `/api/ext/v1/repos/{owner}/{repo}/team-sharing/enable` |
+| Local token management | `/api/ext/v1/user/tokens` |
 
 ## Remaining Gap Summary
 
@@ -303,9 +308,10 @@ endpoints:
 - Expand deeper contents edge cases, commits, and release-asset response shapes for broader GitHub-compatible clients.
 - Revisit Actions, secrets, variables, and environments: many routes exist, but several are thin or locally mocked.
 - Treat GraphQL as a lightweight compatibility layer unless/until it is backed by a real schema/executor.
-- Keep local extensions clearly namespaced and out of GitHub compatibility claims.
-- Keep the generated `/api/v3/openapi.json` extension contract synchronized with
-  this matrix when local extension behavior changes.
+- Keep extension APIs clearly namespaced under `/api/ext/v1` and out of
+  GitHub compatibility claims.
+- Keep the generated `/api/v3/openapi.json` and `/api/ext/v1/openapi.json`
+  contracts synchronized with this matrix when API behavior changes.
 
 [actions-cache-usage]: https://docs.github.com/rest/actions/cache#get-github-actions-cache-usage-for-a-repository
 [actions-delete-artifact]: https://docs.github.com/rest/actions/artifacts#delete-an-artifact

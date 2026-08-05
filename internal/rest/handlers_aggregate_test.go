@@ -11,7 +11,7 @@ import (
 func TestAggregateViewerAndRepoSummary(t *testing.T) {
 	h := testharness.New(t)
 	compatSeedRepo(t, h, "aggregate-summary")
-	w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "aggregate-viewer-org"})
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "aggregate-viewer-org"})
 	assertStatusCode(t, w, http.StatusCreated)
 	w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/aggregate-viewer-org/repos", map[string]any{
 		"name":      "metadata",
@@ -19,7 +19,7 @@ func TestAggregateViewerAndRepoSummary(t *testing.T) {
 	})
 	assertStatusCode(t, w, http.StatusCreated)
 
-	w = h.DoREST(t, "GET", "/api/v3/viewer/summary?include=user,repositories&per_page=1", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/viewer/summary?include=user,repositories&per_page=1", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	viewerSummary := testharness.DecodeJSON(t, w)
 	user := viewerSummary["user"].(map[string]any)
@@ -34,7 +34,7 @@ func TestAggregateViewerAndRepoSummary(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("viewer repositories page size = %d, want 1", len(items))
 	}
-	w = h.DoREST(t, "GET", "/api/v3/viewer/summary?include=repositories&repo_affiliation=organization_member", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/viewer/summary?include=repositories&repo_affiliation=organization_member", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	orgRepoSummary := testharness.DecodeJSON(t, w)
 	orgRepos := orgRepoSummary["repositories"].(map[string]any)
@@ -46,7 +46,7 @@ func TestAggregateViewerAndRepoSummary(t *testing.T) {
 		t.Fatalf("organization_member repo = %v, want aggregate-viewer-org/metadata", orgRepo["full_name"])
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/testuser/aggregate-summary/summary?include=repo,viewer,counts", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/testuser/aggregate-summary/summary?include=repo,viewer,counts", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	repoSummary := testharness.DecodeJSON(t, w)
 	repo := repoSummary["repository"].(map[string]any)
@@ -81,7 +81,7 @@ func TestAggregateIssueThreadAndIssueListFilters(t *testing.T) {
 	})
 	assertStatusCode(t, w, http.StatusCreated)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/testuser/aggregate-issues/issues/1/thread?comments_per_page=10", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/testuser/aggregate-issues/issues/1/thread?comments_per_page=10", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	thread := testharness.DecodeJSON(t, w)
 	issue := thread["issue"].(map[string]any)
@@ -140,7 +140,7 @@ func TestAggregateWikiCatalogAndBatch(t *testing.T) {
 	assertStatusCode(t, w, http.StatusOK)
 	h.Svc.Wg.Wait()
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/catalog?include=pages,tree,labels&path=guides", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/catalog?include=pages,tree,labels&path=guides", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	catalog := testharness.DecodeJSON(t, w)
 	if catalog["total_count"].(float64) != 1 {
@@ -151,7 +151,7 @@ func TestAggregateWikiCatalogAndBatch(t *testing.T) {
 		t.Fatalf("catalog labels = %#v, want [ops]", labels)
 	}
 
-	w = h.DoRESTJSON(t, "POST", "/api/v3/repos/"+full+"/wiki/pages/batch", map[string]any{
+	w = h.DoRESTJSON(t, "POST", "/api/ext/v1/repos/"+full+"/wiki/pages/batch", map[string]any{
 		"slugs":      []string{"guides/setup", "missing"},
 		"include":    []string{"body", "labels"},
 		"body_limit": 8,
@@ -178,7 +178,7 @@ func TestAggregateWikiCatalogAndBatch(t *testing.T) {
 func TestAggregateOrgManagementSummary(t *testing.T) {
 	h := testharness.New(t)
 
-	w := h.DoRESTJSON(t, "POST", "/api/v3/user/orgs", map[string]any{"login": "aggregate-org"})
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/user/orgs", map[string]any{"login": "aggregate-org"})
 	assertStatusCode(t, w, http.StatusCreated)
 	w = h.DoRESTJSON(t, "POST", "/api/v3/orgs/aggregate-org/repos", map[string]any{
 		"name":      "metadata",
@@ -186,7 +186,7 @@ func TestAggregateOrgManagementSummary(t *testing.T) {
 	})
 	assertStatusCode(t, w, http.StatusCreated)
 
-	w = h.DoREST(t, "GET", "/api/v3/orgs/aggregate-org/management-summary?include=org,viewer,repos,members,teams,invitations,outside_collaborators", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/orgs/aggregate-org/management-summary?include=org,viewer,repos,members,teams,invitations,outside_collaborators", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	summary := testharness.DecodeJSON(t, w)
 	org := summary["organization"].(map[string]any)
