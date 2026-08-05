@@ -32,10 +32,10 @@ func TestPlanChangeSet_ValidatesInputs(t *testing.T) {
 			wantErr: "no changes supplied",
 		},
 		{
-			name: "migration-allows-empty-changeset",
+			name: "git-allows-empty-changeset",
 			req: ChangeSetRequest{
 				RepositoryID:      1,
-				Source:            SourceMigration,
+				Source:            SourceGit,
 				OverrideCommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			},
 		},

@@ -1,11 +1,11 @@
 package service
 
-// Wiki migration tool: replay the legacy git-backed wiki repos into
-// the wikicatalog so the cutover can serve all traffic from the
-// catalog. Designed for a single maintenance-window pass over each
-// repo with has_wiki=true; idempotent and resumable per repo, since
-// each commit's original SHA is preserved as wiki_changesets.synth_
-// commit_sha and migration skips commits already in the catalog.
+// Wiki git ingest: replay git-backed wiki repos into the wikicatalog so REST
+// reads can serve from the catalog while direct *.wiki.git pushes remain
+// visible. The bulk MigrateAllWikis entry point is still used for legacy
+// one-time imports; the single-repo path is the steady-state git-push ingest.
+// Each commit's original SHA is preserved as wiki_changesets.synth_commit_sha
+// so ingest is idempotent and resumable.
 
 import (
 	"context"
@@ -24,12 +24,15 @@ import (
 	"github.com/ngaut/agent-git-service/internal/wikicatalog"
 )
 
-// WikiMigrationOptions tunes a migration run.
-type WikiMigrationOptions struct {
+// WikiGitIngestOptions tunes a wiki git ingest run.
+type WikiGitIngestOptions struct {
 	// SkipIncompatibleSlugs, when true, drops pages whose slug cannot
 	// be represented by the catalog's single slug grammar.
 	SkipIncompatibleSlugs bool
 }
+
+// WikiMigrationOptions is kept for the bulk legacy migration entry point.
+type WikiMigrationOptions = WikiGitIngestOptions
 
 // MigrateAllWikis replays every legacy wiki bare repo into the wiki
 // catalog. Run during a maintenance window after AutoMigrate has
@@ -60,7 +63,7 @@ func (s *Service) MigrateAllWikis(ctx context.Context, opts WikiMigrationOptions
 	}
 
 	for _, repo := range repos {
-		stats, err := s.migrateOneWiki(ctx, repo, opts)
+		stats, err := s.ingestOneWikiGit(ctx, repo, opts)
 		report.ByRepo[repo.FullName] = stats
 		if err != nil && report.FirstError == nil {
 			report.FirstError = fmt.Errorf("repo %q: %w", repo.FullName, err)
@@ -75,36 +78,32 @@ type MigrationReport struct {
 	FirstError error
 }
 
-// RepoMigrationStats captures what landed for one repo.
-type RepoMigrationStats struct {
-	GitCommits   int // total commits in the legacy wiki repo
+// WikiGitIngestStats captures what landed for one repo.
+type WikiGitIngestStats struct {
+	GitCommits   int // commits considered in this run
 	NewCommits   int // commits applied during this run
-	SkippedExist int // commits already in the catalog (resume path)
+	SkippedExist int // considered commits already in the catalog (resume path)
 	Pages        int // catalog pages currently visible for the repo
 }
 
-// MigrateWiki replays a single repo by full name. Useful for
-// targeted reruns; MigrateAllWikis is the production entry point.
-func (s *Service) MigrateWiki(ctx context.Context, repoFullName string, opts WikiMigrationOptions) (RepoMigrationStats, error) {
+// RepoMigrationStats is kept for MigrateAllWikis' legacy report shape.
+type RepoMigrationStats = WikiGitIngestStats
+
+// IngestWikiGit replays one wiki git repo into the catalog by full name. It is
+// used for steady-state direct *.wiki.git pushes and for targeted repair runs.
+func (s *Service) IngestWikiGit(ctx context.Context, repoFullName string, opts WikiGitIngestOptions) (WikiGitIngestStats, error) {
 	rep, err := s.GetRepo(ctx, repoFullName)
 	if err != nil {
-		return RepoMigrationStats{}, err
+		return WikiGitIngestStats{}, err
 	}
-	return s.migrateOneWiki(ctx, rep, opts)
+	return s.ingestOneWikiGit(ctx, rep, opts)
 }
 
-// ensureWikiCatalogCurrent is the read-path freshness hook for the
-// wiki catalog. It treats the wikicatalog tables as a materialized
-// view of the legacy git wiki repo: before serving a read, this
-// function compares the wiki repo's visible content branch
-// (`wikiDefaultBranch`, matching GitHub wiki semantics) against the
-// last migrated commit recorded in the catalog and replays only the
-// new commits if they diverge. The fast path is one Git lookup plus
-// one indexed catalog query.
-//
-// This sits in front of catalog-backed read handlers while writes
-// still flow through the legacy git path; M4 (catalog-as-SOT writes)
-// will make this hook redundant.
+// ensureWikiCatalogCurrent is the read-path freshness hook for the wiki
+// catalog. It compares the wiki repo's visible content branch
+// (`wikiDefaultBranch`, matching GitHub wiki semantics) against the latest
+// ingested commit recorded in the catalog. If the catalog lags, it schedules
+// background git ingest instead of blocking the read path.
 func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName string) error {
 	if s.Git == nil || s.WikiCatalog == nil {
 		return nil
@@ -171,15 +170,15 @@ func (s *Service) ensureWikiCatalogCurrent(ctx context.Context, repoFullName str
 	if lastMigratedSHA != "" && !last.allowGitBackfillReset() {
 		return nil
 	}
-	s.kickBackgroundWikiMigration(ctx, rep)
+	s.kickBackgroundWikiGitIngest(ctx, rep)
 	return nil
 }
 
-// KickBackgroundWikiMigration schedules an asynchronous repo-scoped wiki
-// migration using the caller context for repo identity lookup and the server
-// lifecycle context for the background worker. Only one background migration
-// per repo runs at a time.
-func (s *Service) KickBackgroundWikiMigration(ctx context.Context, repoFullName string) {
+// KickBackgroundWikiGitIngest schedules an asynchronous repo-scoped wiki git
+// ingest using the caller context for repo identity lookup and the server
+// lifecycle context for the background worker. Only one background ingest per
+// repo runs at a time.
+func (s *Service) KickBackgroundWikiGitIngest(ctx context.Context, repoFullName string) {
 	if s.Git == nil || s.WikiCatalog == nil {
 		return
 	}
@@ -190,26 +189,26 @@ func (s *Service) KickBackgroundWikiMigration(ctx context.Context, repoFullName 
 	if err != nil || rep.ID == 0 {
 		return
 	}
-	s.kickBackgroundWikiMigration(ctx, rep)
+	s.kickBackgroundWikiGitIngest(ctx, rep)
 }
 
-// IsWikiBackgroundMigrationRunning reports whether a repo currently has a
-// background wiki migration in flight.
-func (s *Service) IsWikiBackgroundMigrationRunning(ctx context.Context, repoFullName string) bool {
+// IsWikiBackgroundGitIngestRunning reports whether a repo currently has a
+// background wiki git ingest in flight.
+func (s *Service) IsWikiBackgroundGitIngestRunning(ctx context.Context, repoFullName string) bool {
 	rep, err := s.LookupRepoIdentity(ctx, repoFullName)
 	if err != nil || rep.ID == 0 {
 		return false
 	}
-	return s.isWikiBackgroundMigrationRunning(s.wikiRepoKey(ctx, rep))
+	return s.isWikiBackgroundGitIngestRunning(s.wikiRepoKey(ctx, rep))
 }
 
-func (s *Service) kickBackgroundWikiMigration(ctx context.Context, repo db.Repository) {
+func (s *Service) kickBackgroundWikiGitIngest(ctx context.Context, repo db.Repository) {
 	key := s.wikiRepoKey(ctx, repo)
-	if !s.claimWikiBackgroundMigration(key) {
+	if !s.claimWikiBackgroundGitIngest(key) {
 		return
 	}
-	if s.testWikiBackgroundMigrationStarted != nil {
-		s.testWikiBackgroundMigrationStarted(repo.FullName)
+	if s.testWikiBackgroundGitIngestStarted != nil {
+		s.testWikiBackgroundGitIngestStarted(repo.FullName)
 	}
 
 	bgCtx := applog.CloneContext(s.ServerCtx(), ctx)
@@ -222,52 +221,92 @@ func (s *Service) kickBackgroundWikiMigration(ctx context.Context, repo db.Repos
 	s.Wg.Add(1)
 	go func() {
 		defer s.Wg.Done()
-		defer s.releaseWikiBackgroundMigration(key)
+		defer s.releaseWikiBackgroundGitIngest(key)
 
-		if _, err := s.migrateOneWiki(bgCtx, repo, WikiMigrationOptions{}); err != nil {
-			slog.ErrorContext(bgCtx, "background wiki migration failed", "repo", repo.FullName, "error", err)
+		if _, err := s.ingestOneWikiGit(bgCtx, repo, WikiGitIngestOptions{}); err != nil {
+			slog.ErrorContext(bgCtx, "background wiki git ingest failed", "repo", repo.FullName, "error", err)
 		}
 	}()
 }
 
-func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts WikiMigrationOptions) (RepoMigrationStats, error) {
-	stats := RepoMigrationStats{}
+func (s *Service) ingestOneWikiGit(ctx context.Context, repo db.Repository, opts WikiGitIngestOptions) (WikiGitIngestStats, error) {
+	stats := WikiGitIngestStats{}
 	full := wikiRepoFullName(repo.FullName)
-	if !s.Git.Exists(ctx, full) {
+	if !s.Git.Exists(ctx, full) || s.Git.IsEmpty(ctx, full) {
 		return stats, nil
 	}
 
-	mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(ctx, repo))
+	mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(ctx, repo))
 	mu.Lock()
 	defer mu.Unlock()
 
-	commits, err := s.Git.ListAllCommits(ctx, full, nil)
-	if err != nil {
-		return stats, fmt.Errorf("list commits: %w", err)
-	}
-	stats.GitCommits = len(commits)
-
 	last, err := s.loadLatestWikiChangesetState(ctx, repo.ID)
 	if err != nil {
-		return stats, fmt.Errorf("load latest migrated SHA: %w", err)
+		return stats, fmt.Errorf("load latest ingested SHA: %w", err)
 	}
-	lastMigratedSHA := last.CommitSHA
-	didReset := false
-	if lastMigratedSHA != "" && last.allowGitBackfillReset() && !wikiCommitInHistory(commits, lastMigratedSHA) {
-		if err := s.resetWikiCatalogRepo(ctx, repo.ID); err != nil {
-			return stats, fmt.Errorf("reset rewritten wiki catalog: %w", err)
-		}
-		didReset = true
+	lastIngestedSHA := last.CommitSHA
+	headSHA, err := s.Git.ResolveContentCommit(ctx, full, wikiDefaultBranch)
+	if err != nil {
+		return stats, fmt.Errorf("resolve wiki content commit for %q: %w", repo.FullName, err)
+	}
+	headSHA = strings.ToLower(strings.TrimSpace(headSHA))
+	if headSHA == "" {
+		return stats, nil
 	}
 
-	// Already-present commit SHAs short-circuit the replay so reruns
-	// after a partial migration only do new work.
-	existing, err := s.loadMigratedCommitSHAs(ctx, repo.ID)
-	if err != nil {
-		return stats, fmt.Errorf("load migrated SHAs: %w", err)
+	if s.testWikiGitIngestAfterSnapshot != nil {
+		s.testWikiGitIngestAfterSnapshot(repo.FullName)
 	}
-	if s.testWikiMigrationAfterSnapshot != nil {
-		s.testWikiMigrationAfterSnapshot(repo.FullName)
+
+	if strings.EqualFold(lastIngestedSHA, headSHA) {
+		stats.Pages = s.countLiveWikiPages(ctx, repo.ID)
+		slog.InfoContext(ctx, "wiki git ingest: repo current",
+			"repo", repo.FullName,
+			"head", headSHA,
+			"pages", stats.Pages,
+		)
+		return stats, nil
+	}
+
+	var commits []gitstore.SearchCommitInfo
+	didReset := false
+	switch {
+	case lastIngestedSHA == "":
+		commits, err = s.Git.ListAllCommits(ctx, full, nil)
+		if err != nil {
+			return stats, fmt.Errorf("list commits: %w", err)
+		}
+		stats.GitCommits = len(commits)
+	case last.allowGitBackfillReset():
+		isAncestor, err := s.Git.IsAncestor(ctx, full, lastIngestedSHA, headSHA)
+		if err != nil {
+			return stats, fmt.Errorf("check wiki git ancestry %s..%s: %w", lastIngestedSHA, headSHA, err)
+		}
+		if isAncestor {
+			commits, err = s.Git.ListCommitsRange(ctx, full, lastIngestedSHA, headSHA, nil)
+			if err != nil {
+				return stats, fmt.Errorf("list commits range %s..%s: %w", lastIngestedSHA, headSHA, err)
+			}
+			stats.GitCommits = len(commits)
+		} else {
+			if err := s.resetWikiCatalogRepo(ctx, repo.ID); err != nil {
+				return stats, fmt.Errorf("reset rewritten wiki catalog: %w", err)
+			}
+			didReset = true
+			commits, err = s.Git.ListAllCommits(ctx, full, nil)
+			if err != nil {
+				return stats, fmt.Errorf("list commits after reset: %w", err)
+			}
+			stats.GitCommits = len(commits)
+		}
+	default:
+		stats.Pages = s.countLiveWikiPages(ctx, repo.ID)
+		return stats, nil
+	}
+
+	existing, err := s.loadIngestedWikiCommitSHAs(ctx, repo.ID)
+	if err != nil {
+		return stats, fmt.Errorf("load ingested SHAs: %w", err)
 	}
 
 	// ListAllCommits returns commits in git log's natural order, which
@@ -304,13 +343,9 @@ func (s *Service) migrateOneWiki(ctx context.Context, repo db.Repository, opts W
 		}
 	}
 
-	pageCount := int64(0)
-	_ = s.DBForCtx(ctx).Model(&db.WikiPage{}).
-		Where("repository_id = ? AND deleted_at IS NULL", repo.ID).
-		Count(&pageCount)
-	stats.Pages = int(pageCount)
+	stats.Pages = s.countLiveWikiPages(ctx, repo.ID)
 
-	slog.InfoContext(ctx, "wiki migration: repo done",
+	slog.InfoContext(ctx, "wiki git ingest: repo done",
 		"repo", repo.FullName,
 		"git_commits", stats.GitCommits,
 		"new", stats.NewCommits,
@@ -352,19 +387,6 @@ func (s wikiChangesetState) allowGitBackfillReset() bool {
 		return false
 	}
 	return s.SynthFormatVer >= synthProjectionMaterialized
-}
-
-func wikiCommitInHistory(commits []gitstore.SearchCommitInfo, sha string) bool {
-	sha = strings.ToLower(strings.TrimSpace(sha))
-	if sha == "" {
-		return false
-	}
-	for _, commit := range commits {
-		if strings.EqualFold(strings.TrimSpace(commit.SHA), sha) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Service) resetWikiCatalogRepo(ctx context.Context, repoID uint) error {
@@ -429,7 +451,15 @@ func (s *Service) pruneWikiPageLabelsForMissingPages(ctx context.Context, repoID
 	).Delete(&db.WikiPageLabel{}).Error
 }
 
-func (s *Service) loadMigratedCommitSHAs(ctx context.Context, repoID uint) (map[string]struct{}, error) {
+func (s *Service) countLiveWikiPages(ctx context.Context, repoID uint) int {
+	pageCount := int64(0)
+	_ = s.DBForCtx(ctx).Model(&db.WikiPage{}).
+		Where("repository_id = ? AND deleted_at IS NULL", repoID).
+		Count(&pageCount)
+	return int(pageCount)
+}
+
+func (s *Service) loadIngestedWikiCommitSHAs(ctx context.Context, repoID uint) (map[string]struct{}, error) {
 	var existing []db.WikiChangeset
 	err := s.DBForCtx(ctx).
 		Select("synth_commit_sha").
@@ -456,7 +486,7 @@ func (s *Service) loadMigratedCommitSHAs(ctx context.Context, repoID uint) (map[
 // rename chains lose page-id continuity — but since page_id is an
 // internal identifier and never exposed by the legacy REST API,
 // nothing observable changes.
-// replayState carries forward per-run caches so migration does
+// replayState carries forward per-run caches so git ingest does
 // O(N) git tree reads instead of O(N) duplicated reads (parent of
 // commit i equals current of commit i-1) and O(unique-authors)
 // user lookups instead of O(N).
@@ -467,16 +497,16 @@ type replayState struct {
 	authors   map[string]*uint
 }
 
-func (s *Service) replayCommitIntoCatalog(ctx context.Context, full string, repo db.Repository, commit gitstore.SearchCommitInfo, opts WikiMigrationOptions, st *replayState) error {
+func (s *Service) replayCommitIntoCatalog(ctx context.Context, full string, repo db.Repository, commit gitstore.SearchCommitInfo, opts WikiGitIngestOptions, st *replayState) error {
 	// Wiki repos should hold linear history — they're written by REST
 	// handlers committing one file change at a time. A merge commit
 	// here means either a manual git push of an unusual workflow or a
 	// gitstore bug. The diff-against-first-parent strategy used below
 	// would silently drop a second-parent branch's content, so refuse
 	// instead. Operators can resolve by squashing in source git
-	// before migration.
+	// before ingest.
 	if len(commit.ParentSHAs) > 1 {
-		return fmt.Errorf("commit %s has %d parents; wiki history must be linear before migration", commit.SHA, len(commit.ParentSHAs))
+		return fmt.Errorf("commit %s has %d parents; wiki history must be linear before ingest", commit.SHA, len(commit.ParentSHAs))
 	}
 	parent := ""
 	if len(commit.ParentSHAs) == 1 {
@@ -524,12 +554,12 @@ func (s *Service) replayCommitIntoCatalog(ctx context.Context, full string, repo
 	if err != nil {
 		return fmt.Errorf("parse commit time for %s: %w", commit.SHA, err)
 	}
-	authorID := s.resolveAuthorForMigrationCached(ctx, commit, st)
+	authorID := s.resolveAuthorForGitIngestCached(ctx, commit, st)
 
 	req := wikicatalog.ChangeSetRequest{
 		RepositoryID:        repo.ID,
 		AuthorID:            authorID,
-		Source:              wikicatalog.SourceMigration,
+		Source:              wikicatalog.SourceGit,
 		Message:             commit.Message,
 		Changes:             changes,
 		OverrideCommitSHA:   strings.ToLower(strings.TrimSpace(commit.SHA)),
@@ -544,12 +574,12 @@ func (s *Service) replayCommitIntoCatalog(ctx context.Context, full string, repo
 	return nil
 }
 
-func (s *Service) resolveAuthorForMigrationCached(ctx context.Context, commit gitstore.SearchCommitInfo, st *replayState) *uint {
+func (s *Service) resolveAuthorForGitIngestCached(ctx context.Context, commit gitstore.SearchCommitInfo, st *replayState) *uint {
 	key := strings.ToLower(strings.TrimSpace(commit.Email)) + "|" + strings.TrimSpace(commit.Author)
 	if cached, ok := st.authors[key]; ok {
 		return cached
 	}
-	out := s.resolveAuthorForMigration(ctx, commit)
+	out := s.resolveAuthorForGitIngest(ctx, commit)
 	st.authors[key] = out
 	return out
 }
@@ -559,7 +589,7 @@ func (s *Service) resolveAuthorForMigrationCached(ctx context.Context, commit gi
 // non-.md files) are skipped without error. A markdown path whose slug cannot
 // be represented by the catalog's single slug grammar produces an error by
 // default.
-func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, curPaths []string, curBlobs, parBlobs map[string]string, opts WikiMigrationOptions) ([]wikicatalog.Change, error) {
+func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, curPaths []string, curBlobs, parBlobs map[string]string, opts WikiGitIngestOptions) ([]wikicatalog.Change, error) {
 	current := make(map[string]struct{}, len(curPaths))
 	for _, p := range curPaths {
 		current[p] = struct{}{}
@@ -571,17 +601,17 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 			return false, nil
 		}
 		if opts.SkipIncompatibleSlugs {
-			slog.WarnContext(ctx, "wiki migration: skipping slug incompatible with catalog slug grammar",
+			slog.WarnContext(ctx, "wiki git ingest: skipping slug incompatible with catalog slug grammar",
 				"sha", commitSHA, "path", path, "slug", slug)
 			return true, nil
 		}
-		return false, fmt.Errorf("commit %s touches path %q whose slug %q cannot be represented by the catalog; rename the page in source git before migrating, or set SkipIncompatibleSlugs=true to drop these pages with a warning",
+		return false, fmt.Errorf("commit %s touches path %q whose slug %q cannot be represented by the catalog; rename the page in source git before ingesting, or set SkipIncompatibleSlugs=true to drop these pages with a warning",
 			commitSHA, path, slug)
 	}
 
 	// Upserts: added or modified pages.
 	for _, p := range curPaths {
-		slug, ok := wikiMigrationPathToSlug(p)
+		slug, ok := wikiGitIngestPathToSlug(p)
 		if !ok {
 			continue
 		}
@@ -609,7 +639,7 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 		if _, ok := current[p]; ok {
 			continue
 		}
-		slug, ok := wikiMigrationPathToSlug(p)
+		slug, ok := wikiGitIngestPathToSlug(p)
 		if !ok {
 			continue
 		}
@@ -635,7 +665,7 @@ func (s *Service) diffToChanges(ctx context.Context, full, commitSHA string, cur
 	return changes, nil
 }
 
-func wikiMigrationPathToSlug(path string) (string, bool) {
+func wikiGitIngestPathToSlug(path string) (string, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" || strings.HasPrefix(path, ".") || !strings.HasSuffix(path, wikiPageExt) {
 		return "", false
@@ -643,7 +673,7 @@ func wikiMigrationPathToSlug(path string) (string, bool) {
 	return strings.TrimSuffix(path, wikiPageExt), true
 }
 
-func (s *Service) resolveAuthorForMigration(ctx context.Context, commit gitstore.SearchCommitInfo) *uint {
+func (s *Service) resolveAuthorForGitIngest(ctx context.Context, commit gitstore.SearchCommitInfo) *uint {
 	email := strings.ToLower(strings.TrimSpace(commit.Email))
 	if email != "" {
 		usersByEmail := s.lookupUsersByEmailCI(ctx, []string{email})
@@ -667,7 +697,7 @@ func (s *Service) resolveAuthorForMigration(ctx context.Context, commit gitstore
 // %cI / %aI and returns the UTC instant. The first non-empty field
 // that parses wins. If neither parses, parseCommitTime returns an
 // error: silently fabricating time.Now() here would publish historical
-// changesets with a present-day committed_at, which migration cannot
+// changesets with a present-day committed_at, which git ingest cannot
 // recover from once the cutover runs.
 func parseCommitTime(primary, fallback string) (time.Time, error) {
 	var lastErr error
@@ -683,7 +713,7 @@ func parseCommitTime(primary, fallback string) (time.Time, error) {
 		lastErr = err
 	}
 	if lastErr != nil {
-		return time.Time{}, fmt.Errorf("wiki migration: unparseable commit timestamps %q / %q: %w", primary, fallback, lastErr)
+		return time.Time{}, fmt.Errorf("wiki git ingest: unparseable commit timestamps %q / %q: %w", primary, fallback, lastErr)
 	}
-	return time.Time{}, fmt.Errorf("wiki migration: no commit timestamp present")
+	return time.Time{}, fmt.Errorf("wiki git ingest: no commit timestamp present")
 }

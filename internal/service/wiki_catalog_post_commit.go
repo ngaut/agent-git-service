@@ -26,12 +26,12 @@ const (
 // operator can see what failed, but they do NOT roll back the
 // catalog state — the catalog is already committed by the time this
 // runs. A failed git materialization leaves catalog ahead of git; the
-// next background migration replay is idempotent and re-materializes.
+// next background git ingest replay is idempotent and re-materializes.
 func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result wikicatalog.ChangeSetResult) error {
-	// Migration replays historical commits in order. If those writes
+	// Git ingest replays historical commits in order. If those writes
 	// fan out into unordered goroutines, the final wiki_search_documents
 	// row can regress to an older body or a false delete. Keep
-	// migration indexing synchronous; runtime REST writes still queue
+	// git ingest indexing synchronous; runtime REST writes still queue
 	// asynchronously to preserve request latency.
 	var repo db.Repository
 	if err := s.DBForCtx(ctx).Select("id", "full_name").
@@ -53,7 +53,7 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 				if err := s.deleteIssueReferencesForWikiPage(ctx, repo.ID, ch.PrevSlug); err != nil {
 					return fmt.Errorf("wiki post-commit: delete prev issue refs for %s: %w", ch.PrevSlug, err)
 				}
-				if result.Source == wikicatalog.SourceMigration {
+				if wikiChangesetAlreadyInGit(result.Source) {
 					if err := s.deleteWikiSearchDocument(ctx, repo.FullName, ch.PrevSlug); err != nil {
 						return fmt.Errorf("wiki post-commit: delete prev search doc for %s: %w", ch.PrevSlug, err)
 					}
@@ -77,7 +77,7 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 					return fmt.Errorf("wiki post-commit: sync issue refs for %s: %w", ch.Slug, err)
 				}
 			}
-			if result.Source == wikicatalog.SourceMigration {
+			if wikiChangesetAlreadyInGit(result.Source) {
 				if err := s.upsertWikiSearchDocument(ctx, repo.FullName, page); err != nil {
 					return fmt.Errorf("wiki post-commit: upsert search doc for %s: %w", ch.Slug, err)
 				}
@@ -88,7 +88,7 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 			if err := s.deleteIssueReferencesForWikiPage(ctx, repo.ID, ch.Slug); err != nil {
 				return fmt.Errorf("wiki post-commit: delete issue refs for %s: %w", ch.Slug, err)
 			}
-			if result.Source == wikicatalog.SourceMigration {
+			if wikiChangesetAlreadyInGit(result.Source) {
 				if err := s.deleteWikiSearchDocument(ctx, repo.FullName, ch.Slug); err != nil {
 					return fmt.Errorf("wiki post-commit: delete search doc for %s: %w", ch.Slug, err)
 				}
@@ -97,16 +97,20 @@ func (s *Service) WikiCatalogPostCommit(ctx context.Context, repoID uint, result
 			s.queueWikiSearchDelete(ctx, repo.FullName, ch.Slug)
 		}
 	}
-	// Migration replays existing git commits into the catalog — the
+	// Git ingest replays existing git commits into the catalog — the
 	// git repo already holds the trees, so re-materializing would
 	// duplicate history. Runtime REST writes (Source = rest/batch)
 	// originate in the catalog and must land in git for clone/pull.
-	if result.Source != wikicatalog.SourceMigration {
+	if !wikiChangesetAlreadyInGit(result.Source) {
 		if err := s.materializeChangesetToGit(ctx, repo.FullName, result); err != nil {
 			return fmt.Errorf("wiki post-commit: materialize git for %s: %w", repo.FullName, err)
 		}
 	}
 	return nil
+}
+
+func wikiChangesetAlreadyInGit(source wikicatalog.Source) bool {
+	return source == wikicatalog.SourceGit || source == wikicatalog.SourcePush
 }
 
 // materializeChangesetToGit projects a catalog changeset onto the
@@ -172,8 +176,8 @@ func (s *Service) materializeChangesetToGit(ctx context.Context, repoFullName st
 	}
 	// Reconcile the catalog's synth_commit_sha (and the per-revision
 	// commit_sha) with the materialized git commit SHA. Two effects:
-	//   1. A subsequent MigrateWiki run sees this changeset as
-	//      already-migrated and skips it; without this MigrateWiki
+	//   1. A subsequent IngestWikiGit run sees this changeset as
+	//      already-ingested and skips it; without this IngestWikiGit
 	//      would double-apply every runtime write.
 	//   2. wiki_page_revisions.commit_sha matches the real git SHA so
 	//      ref-pinned reads (GetWikiPageAtRef) and the history

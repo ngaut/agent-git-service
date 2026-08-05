@@ -49,9 +49,9 @@ func NewBlobStore(root string) *BlobStore {
 //
 //	sha1("blob " + decimal(len) + "\0" + content)
 //
-// Because this is the same hash git computes, blobs uploaded by the
-// migration tool match the SHAs the legacy code published via
-// If-Match — clients sending stale ETags still see the expected 409s.
+// Because this is the same hash git computes, blobs uploaded by git ingest
+// match the SHAs the legacy code published via If-Match — clients sending
+// stale ETags still see the expected 409s.
 func HashContent(content []byte) string {
 	h := sha1.New()
 	header := "blob " + strconv.Itoa(len(content)) + "\x00"

@@ -15,8 +15,8 @@ import (
 
 // Catalog is the wiki storage catalog. It owns the SQL access for all
 // wiki_* tables, owns the blob CAS, and exposes ApplyChangeSet as the
-// single write entry point. Callers (REST handlers, the migration
-// tool, future push ingestion) all funnel through this struct.
+// single write entry point. Callers (REST handlers, git ingest, future
+// push ingestion) all funnel through this struct.
 type Catalog struct {
 	DB   *gorm.DB
 	Blob *BlobStore
@@ -109,9 +109,9 @@ type changesetPlan struct {
 	// loads exactly these pages in one query.
 	touchedSlugs []string
 	// overrideCommitSHA, when non-empty, is used as the changeset's
-	// synth_commit_sha instead of computing a fresh one. Migration
-	// sets this to the historical git commit SHA so REST clients see
-	// the same identity post-cutover.
+	// synth_commit_sha instead of computing a fresh one. Git ingest sets
+	// this to the historical git commit SHA so REST clients see the same
+	// identity post-cutover.
 	overrideCommitSHA string
 }
 
@@ -140,7 +140,7 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 	if req.Source == "" {
 		return changesetPlan{}, fmt.Errorf("wiki catalog: source required")
 	}
-	if len(req.Changes) == 0 && req.Source != SourceMigration {
+	if len(req.Changes) == 0 && req.Source != SourceGit {
 		return changesetPlan{}, fmt.Errorf("wiki catalog: no changes supplied")
 	}
 	if len(req.Changes) > MaxChangesPerChangeset {
@@ -263,8 +263,8 @@ func (c *Catalog) planChangeSet(req ChangeSetRequest) (changesetPlan, error) {
 // for a new changeset. The hash covers the parent identity, the
 // committer, the wall clock, the message, and the sorted
 // content of every change, so two equivalent changesets produce the
-// same SHA — important for the migration replay path which may retry
-// after partial progress.
+// same SHA — important for replay paths which may retry after partial
+// progress.
 //
 // This SHA is opaque to clients; they treat it as a stable handle
 // referenced by GetWikiPage?ref=<sha> and surfaced on history rows.

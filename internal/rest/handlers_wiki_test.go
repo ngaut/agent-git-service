@@ -357,18 +357,18 @@ func TestWikiPageLabelsREST(t *testing.T) {
 	}
 }
 
-func TestWiki_ListPagesSetsMigrationInProgressHeader(t *testing.T) {
+func TestWiki_ListPagesSetsSyncInProgressHeader(t *testing.T) {
 	h := testharness.New(t)
 	ctx := context.Background()
 
 	if _, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: h.User.Login,
-		Name:       "wiki-migration-header",
+		Name:       "wiki-git-ingest-header",
 		AutoInit:   true,
 	}); err != nil {
 		t.Fatalf("seed repo: %v", err)
 	}
-	full := "testuser/wiki-migration-header"
+	full := "testuser/wiki-git-ingest-header"
 
 	w := h.DoRESTJSON(t, "PUT", wikiPagePath(full, "home"), map[string]any{"body": "# Home\n"})
 	assertStatusCode(t, w, http.StatusOK)
@@ -381,19 +381,19 @@ func TestWiki_ListPagesSetsMigrationInProgressHeader(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var released int32
-	h.Svc.SetWikiBackgroundMigrationStartedHookForTest(func(repo string) {
+	h.Svc.SetWikiBackgroundGitIngestStartedHookForTest(func(repo string) {
 		if repo == full {
 			started <- struct{}{}
 		}
 	})
-	h.Svc.SetWikiMigrationAfterSnapshotHookForTest(func(repo string) {
+	h.Svc.SetWikiGitIngestAfterSnapshotHookForTest(func(repo string) {
 		if repo == full {
 			<-release
 		}
 	})
 	defer func() {
-		h.Svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
-		h.Svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		h.Svc.SetWikiBackgroundGitIngestStartedHookForTest(nil)
+		h.Svc.SetWikiGitIngestAfterSnapshotHookForTest(nil)
 		if atomic.CompareAndSwapInt32(&released, 0, 1) {
 			close(release)
 		}
@@ -401,14 +401,14 @@ func TestWiki_ListPagesSetsMigrationInProgressHeader(t *testing.T) {
 
 	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages", nil)
 	assertStatusCode(t, w, http.StatusOK)
-	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "true" {
-		t.Fatalf("X-Wiki-Migration-In-Progress = %q, want true", got)
+	if got := w.Header().Get("X-Wiki-Sync-In-Progress"); got != "true" {
+		t.Fatalf("X-Wiki-Sync-In-Progress = %q, want true", got)
 	}
 
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for background migration to start")
+		t.Fatal("timed out waiting for background git ingest to start")
 	}
 
 	if atomic.CompareAndSwapInt32(&released, 0, 1) {
@@ -418,23 +418,23 @@ func TestWiki_ListPagesSetsMigrationInProgressHeader(t *testing.T) {
 
 	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages", nil)
 	assertStatusCode(t, w, http.StatusOK)
-	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "" {
-		t.Fatalf("X-Wiki-Migration-In-Progress after rebuild = %q, want empty", got)
+	if got := w.Header().Get("X-Wiki-Sync-In-Progress"); got != "" {
+		t.Fatalf("X-Wiki-Sync-In-Progress after rebuild = %q, want empty", got)
 	}
 }
 
-func TestWiki_GetPageNotFoundStillSetsMigrationInProgressHeader(t *testing.T) {
+func TestWiki_GetPageNotFoundStillSetsSyncInProgressHeader(t *testing.T) {
 	h := testharness.New(t)
 	ctx := context.Background()
 
 	if _, err := h.Svc.CreateRepo(ctx, service.CreateRepoInput{
 		OwnerLogin: h.User.Login,
-		Name:       "wiki-migration-header-404",
+		Name:       "wiki-git-ingest-header-404",
 		AutoInit:   true,
 	}); err != nil {
 		t.Fatalf("seed repo: %v", err)
 	}
-	full := "testuser/wiki-migration-header-404"
+	full := "testuser/wiki-git-ingest-header-404"
 
 	w := h.DoRESTJSON(t, "PUT", wikiPagePath(full, "home"), map[string]any{"body": "# Home\n"})
 	assertStatusCode(t, w, http.StatusOK)
@@ -447,19 +447,19 @@ func TestWiki_GetPageNotFoundStillSetsMigrationInProgressHeader(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var released int32
-	h.Svc.SetWikiBackgroundMigrationStartedHookForTest(func(repo string) {
+	h.Svc.SetWikiBackgroundGitIngestStartedHookForTest(func(repo string) {
 		if repo == full {
 			started <- struct{}{}
 		}
 	})
-	h.Svc.SetWikiMigrationAfterSnapshotHookForTest(func(repo string) {
+	h.Svc.SetWikiGitIngestAfterSnapshotHookForTest(func(repo string) {
 		if repo == full {
 			<-release
 		}
 	})
 	defer func() {
-		h.Svc.SetWikiBackgroundMigrationStartedHookForTest(nil)
-		h.Svc.SetWikiMigrationAfterSnapshotHookForTest(nil)
+		h.Svc.SetWikiBackgroundGitIngestStartedHookForTest(nil)
+		h.Svc.SetWikiGitIngestAfterSnapshotHookForTest(nil)
 		if atomic.CompareAndSwapInt32(&released, 0, 1) {
 			close(release)
 		}
@@ -467,14 +467,14 @@ func TestWiki_GetPageNotFoundStillSetsMigrationInProgressHeader(t *testing.T) {
 
 	w = h.DoREST(t, "GET", wikiPagePath(full, "about"), nil)
 	assertStatusCode(t, w, http.StatusNotFound)
-	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "true" {
-		t.Fatalf("X-Wiki-Migration-In-Progress on not found = %q, want true", got)
+	if got := w.Header().Get("X-Wiki-Sync-In-Progress"); got != "true" {
+		t.Fatalf("X-Wiki-Sync-In-Progress on not found = %q, want true", got)
 	}
 
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for background migration to start")
+		t.Fatal("timed out waiting for background git ingest to start")
 	}
 
 	if atomic.CompareAndSwapInt32(&released, 0, 1) {
@@ -1017,7 +1017,7 @@ func TestWiki_GetPageUsesNullLastAuthorWhenCommitIdentityDoesNotMatch_Issue1372(
 	// Seed via REST to establish a master branch HEAD, then overwrite
 	// with a direct git commit whose author email matches no user
 	// in the DB. After the catalog sync, last_author should be null —
-	// the migration resolver leaves it unresolved for unknown
+	// the git ingest resolver leaves it unresolved for unknown
 	// committers.
 	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nFirst version.",
@@ -1063,11 +1063,11 @@ func writeWikiAuthorCommitREST(t *testing.T, ctx context.Context, h *testharness
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git fast-import: %v, output=%s", err, out)
 	}
-	// After a direct git write, run MigrateWiki to incorporate the
+	// After a direct git write, run IngestWikiGit to incorporate the
 	// new commit into the catalog (catalog is SOT after the runtime
 	// cutover). Production wires the same call behind receive-pack.
-	if _, err := h.Svc.MigrateWiki(ctx, repoFullName, service.WikiMigrationOptions{}); err != nil {
-		t.Fatalf("MigrateWiki after fast-import: %v", err)
+	if _, err := h.Svc.IngestWikiGit(ctx, repoFullName, service.WikiGitIngestOptions{}); err != nil {
+		t.Fatalf("IngestWikiGit after fast-import: %v", err)
 	}
 }
 
@@ -1374,7 +1374,7 @@ func TestWiki_PageHistory_Issue1346(t *testing.T) {
 }
 
 func TestWiki_PageHistory_PaginationBeyondTenThousandRevisions_PR1354(t *testing.T) {
-	t.Skip("10k-revision history pagination is now exercised by catalog-direct unit tests; the end-to-end path through MigrateWiki for 10k legacy commits is too slow to use as a routine acceptance check")
+	t.Skip("10k-revision history pagination is now exercised by catalog-direct unit tests; the end-to-end path through IngestWikiGit for 10k legacy commits is too slow to use as a routine acceptance check")
 	h := testharness.New(t)
 	ctx := context.Background()
 
@@ -1417,8 +1417,8 @@ func TestWiki_PageHistory_PaginationBeyondTenThousandRevisions_PR1354(t *testing
 	}
 	// Sync the fast-imported history into the catalog so the
 	// catalog-backed history endpoint sees every revision.
-	if _, err := h.Svc.MigrateWiki(ctx, full, service.WikiMigrationOptions{}); err != nil {
-		t.Fatalf("MigrateWiki: %v", err)
+	if _, err := h.Svc.IngestWikiGit(ctx, full, service.WikiGitIngestOptions{}); err != nil {
+		t.Fatalf("IngestWikiGit: %v", err)
 	}
 
 	w := h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home/history?page=10002&per_page=1", nil)

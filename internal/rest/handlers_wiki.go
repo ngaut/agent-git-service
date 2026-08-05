@@ -50,7 +50,7 @@ func (d *Deps) ListWikiTree(w http.ResponseWriter, r *http.Request) {
 		d.respondWikiReadError(w, r, full, err)
 		return
 	}
-	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
 	out := make([]any, 0, len(tree))
 	for _, entry := range tree {
 		out = append(out, transform.WikiTreeEntry(full, entry, ref))
@@ -79,18 +79,18 @@ func splitCommaQueryValues(values []string) []string {
 	return out
 }
 
-func (d *Deps) setWikiMigrationInProgressHeaderForRequest(w http.ResponseWriter, r *http.Request, full string) {
+func (d *Deps) setWikiSyncInProgressHeaderForRequest(w http.ResponseWriter, r *http.Request, full string) {
 	ctx := context.Background()
 	if r != nil {
 		ctx = r.Context()
 	}
-	if d.Svc.IsWikiBackgroundMigrationRunning(ctx, full) {
-		w.Header().Set("X-Wiki-Migration-In-Progress", "true")
+	if d.Svc.IsWikiBackgroundGitIngestRunning(ctx, full) {
+		w.Header().Set("X-Wiki-Sync-In-Progress", "true")
 	}
 }
 
 func (d *Deps) respondWikiReadError(w http.ResponseWriter, r *http.Request, full string, err error) {
-	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
 	respond.ServiceErrorRequest(r, w, err)
 }
 
@@ -128,7 +128,7 @@ func (d *Deps) SearchWikiPages(w http.ResponseWriter, r *http.Request) {
 		d.respondWikiReadError(w, r, full, err)
 		return
 	}
-	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
 	respond.JSON(w, http.StatusOK, transform.WikiSearchResponse(full, resp))
 }
 
@@ -159,7 +159,7 @@ func (d *Deps) ListWikiPages(w http.ResponseWriter, r *http.Request) {
 		d.respondWikiReadError(w, r, full, err)
 		return
 	}
-	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
 	pages = paginate(w, r, d.Svc.BaseURL, pages, page, perPage)
 	out := make([]any, 0, len(pages))
 	for _, p := range pages {
@@ -515,7 +515,7 @@ func (d *Deps) GetWikiPage(w http.ResponseWriter, r *http.Request) {
 		d.respondWikiReadError(w, r, full, err)
 		return
 	}
-	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
 	respond.JSON(w, 200, transform.WikiPage(full, page))
 }
 
@@ -536,7 +536,7 @@ func (d *Deps) listWikiPageHistory(w http.ResponseWriter, r *http.Request, full,
 		d.respondWikiReadError(w, r, full, err)
 		return
 	}
-	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
 	setLinkHeader(w, r, d.Svc.BaseURL, total, page, perPage)
 	out := make([]any, 0, len(history))
 	for _, entry := range history {
@@ -678,7 +678,7 @@ func (d *Deps) ListWikiBacklinks(w http.ResponseWriter, r *http.Request) {
 		d.respondWikiReadError(w, r, full, err)
 		return
 	}
-	d.setWikiMigrationInProgressHeaderForRequest(w, r, full)
+	d.setWikiSyncInProgressHeaderForRequest(w, r, full)
 	out := make([]any, 0, len(backlinks))
 	for _, backlink := range backlinks {
 		out = append(out, transform.WikiBacklink(full, backlink))

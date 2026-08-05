@@ -2029,7 +2029,7 @@ func (s *Service) queueWikiSearchUpsert(ctx context.Context, repoFullName string
 			slog.WarnContext(bgCtx, "wiki search index update skipped", "repo", repoFullName, "slug", page.Slug, "error", err)
 			return
 		}
-		mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(bgCtx, repo))
+		mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(bgCtx, repo))
 		mu.Lock()
 		err = s.upsertWikiSearchDocument(bgCtx, repoFullName, page)
 		mu.Unlock()
@@ -2052,7 +2052,7 @@ func (s *Service) queueWikiSearchDelete(ctx context.Context, repoFullName, slug 
 			slog.WarnContext(bgCtx, "wiki search index delete skipped", "repo", repoFullName, "slug", slug, "error", err)
 			return
 		}
-		mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(bgCtx, repo))
+		mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(bgCtx, repo))
 		mu.Lock()
 		err = s.deleteWikiSearchDocument(bgCtx, repoFullName, slug)
 		mu.Unlock()

@@ -79,7 +79,7 @@ type WikiChangeset struct {
 	Author                  *User     `gorm:"foreignKey:AuthorID"`
 	CommittedAt             time.Time `gorm:"not null"`
 	PageCount               int       `gorm:"not null"`
-	Source                  string    `gorm:"type:char(16);not null"` // rest|admin|batch|compact|push|migration
+	Source                  string    `gorm:"type:char(16);not null"` // rest|admin|batch|compact|push|git
 	SynthCommitSHA          string    `gorm:"type:char(40);not null"`
 	SynthFormatVer          int16
 }

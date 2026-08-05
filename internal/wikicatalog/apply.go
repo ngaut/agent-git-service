@@ -19,9 +19,9 @@ import (
 // write latency.
 const uploadBlobConcurrency = 8
 
-// ApplyChangeSet is the single write entry point for the wiki
-// catalog. Every REST mutation, batch operation, migration replay,
-// and future push ingestion calls into this method. The contract:
+// ApplyChangeSet is the single write entry point for the wiki catalog. Every
+// REST mutation, batch operation, git replay, and future push ingestion calls
+// into this method. The contract:
 //
 //   - Validates inputs and rejects malformed slugs / intra-changeset
 //     duplicates before any state touches the database.
@@ -163,8 +163,8 @@ func (c *Catalog) applyOnce(ctx context.Context, plan changesetPlan, blobBySlug 
 
 		// 4. Insert the changeset row. The synth commit SHA is
 		// deterministic from inputs so retries within the OCC loop
-		// don't produce drifting SHAs across attempts. The migration
-		// path may override the SHA with the original git commit SHA.
+		// don't produce drifting SHAs across attempts. Git-originated
+		// changesets may override the SHA with the original git commit SHA.
 		var synthSHA string
 		if plan.overrideCommitSHA != "" {
 			synthSHA = plan.overrideCommitSHA
@@ -261,7 +261,7 @@ func (c *Catalog) uploadBlobs(ctx context.Context, plan changesetPlan, blobBySlu
 	// the CAS file if one exists for that SHA.
 	// Independent per-blob work runs in parallel with bounded
 	// concurrency. The legacy serial loop was the single biggest
-	// constant-factor cost in batch upserts and migration replays.
+	// constant-factor cost in batch upserts and git replays.
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(uploadBlobConcurrency)
 	for _, ch := range plan.changes {

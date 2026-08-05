@@ -620,16 +620,15 @@ func (s *Service) ensureWikiRepo(ctx context.Context, repoFullName string) error
 	return s.Git.Init(ctx, wikiRepoFullName(repoFullName), wikiDefaultBranch, false)
 }
 
-// withWikiCatalogWriteLock serializes catalog writes and migration-based
-// refreshes for one wiki repository. This keeps the read-path freshness hook
-// from racing REST writes through the same catalog tables in tests and
-// production.
+// withWikiCatalogWriteLock serializes catalog writes and git-ingest refreshes
+// for one wiki repository. This keeps the read-path freshness hook from racing
+// REST writes through the same catalog tables in tests and production.
 func (s *Service) withWikiCatalogWriteLock(ctx context.Context, repoFullName string, fn func() error) error {
 	repo, err := s.LookupRepoIdentity(ctx, repoFullName)
 	if err != nil {
 		return err
 	}
-	mu := s.getWikiMigrationSyncMu(s.wikiRepoKey(ctx, repo))
+	mu := s.getWikiGitIngestSyncMu(s.wikiRepoKey(ctx, repo))
 	mu.Lock()
 	defer mu.Unlock()
 

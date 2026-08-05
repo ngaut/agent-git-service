@@ -182,7 +182,7 @@ Wiki path-slug hierarchy rules:
 - wiki page get/list/search responses include `labels`, shaped with the existing repository label JSON contract
 - wiki write endpoints reject `ref` because historical revision edits are out of scope for the current REST contract
 - only the exact single-segment routes `/wiki/pages/{slug}/history`, `/wiki/pages/{slug}/backlinks`, `/wiki/pages/{slug}/move`, and `/wiki/pages/{slug}/labels...` bind the wiki subresources directly
-- catalog-backed wiki read responses set `X-Wiki-Migration-In-Progress: true` while a stale repository is being replayed into the catalog in the background
+- catalog-backed wiki read responses set `X-Wiki-Sync-In-Progress: true` while a stale repository is being replayed into the catalog in the background
 - live tree, search, and backlink responses must not emit page URLs that the current page endpoint would 404; Git, V2, and search-index projections are fallback/ref surfaces for this purpose, not live-link authority while catalog current rows exist
 - wiki search indexing is asynchronous after successful put/move/delete/label writes; the live TiDB full-text path first plucks bounded candidate IDs from `wiki_search_documents`, then hydrates only the narrowed current rows joined to `wiki_pages` by `slug` (`deleted_at IS NULL` and matching head blob SHA), deliberately omitting vector embeddings from lexical hydration; catalog body scans are reserved for missing/stale small-index fallback or missing search-index tables, so large repositories do not scan every wiki page body on ordinary misses; when embeddings are unavailable or semantic ranking fails, the endpoint falls back to substring matching and reports `method: "substring"`
 

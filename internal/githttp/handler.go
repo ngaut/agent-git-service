@@ -267,14 +267,14 @@ func (h *Handler) ReceivePack(w http.ResponseWriter, r *http.Request) {
 		// unknown to the catalog until we replay them. Schedule that replay in
 		// the background so receive-pack is not coupled to the full backfill.
 		if parent, ok := wikiRepoParentName(repoCtx.repoFullName); ok {
-			h.Svc.KickBackgroundWikiMigration(bgCtx, parent)
+			h.Svc.KickBackgroundWikiGitIngest(bgCtx, parent)
 		}
 	}()
 }
 
 // wikiRepoParentName reports whether full names a wiki repo
 // (suffix ".wiki") and returns the parent repository's full name when
-// it does. Used by the post-receive hook to drive MigrateWiki for
+// it does. Used by the post-receive hook to drive IngestWikiGit for
 // wiki pushes.
 func wikiRepoParentName(full string) (string, bool) {
 	const suffix = ".wiki"
