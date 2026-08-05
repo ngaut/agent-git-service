@@ -69,6 +69,15 @@ type AgentSwitchSessionResult struct {
 	Token db.Token
 }
 
+// UnbindAgentResult describes the human console switch sessions invalidated when
+// a human detaches a bound agent. The agent's own long-lived credential,
+// identity, memory repository, and independently managed repository/team grants
+// are intentionally retained.
+type UnbindAgentResult struct {
+	AgentLogin            string
+	RevokedSwitchSessions int64
+}
+
 // RegisterAgent creates a new agent account, issues a token, and creates a default repo.
 func (s *Service) RegisterAgent(ctx context.Context, prefixLogin, defaultRepoName string) (AgentRegistrationResult, error) {
 	prefix := strings.ToLower(strings.TrimSpace(prefixLogin))
@@ -606,7 +615,7 @@ func (s *Service) RenameBoundAgent(ctx context.Context, humanID uint, agentLogin
 			return wrapErr(err)
 		}
 		var binding db.AgentBinding
-		if err := tx.First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
 			return wrapErr(err)
 		}
 		if err := tx.Model(&db.User{}).Where("id = ?", agent.ID).Update("name", name).Error; err != nil {
@@ -628,18 +637,16 @@ func (s *Service) ResetAgentToken(ctx context.Context, humanID uint, agentLogin 
 		return db.Token{}, fmt.Errorf("%w: agent_login is required", ErrValidation)
 	}
 
-	var agent db.User
-	if err := s.DBForCtx(ctx).First(&agent, "login = ?", agentLogin).Error; err != nil {
-		return db.Token{}, wrapErr(err)
-	}
-
-	var binding db.AgentBinding
-	if err := s.DBForCtx(ctx).First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
-		return db.Token{}, wrapErr(err)
-	}
-
 	var tok db.Token
 	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		var agent db.User
+		if err := tx.First(&agent, "login = ?", agentLogin).Error; err != nil {
+			return wrapErr(err)
+		}
+		var binding db.AgentBinding
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
+			return wrapErr(err)
+		}
 		if err := tx.Where("user_id = ?", agent.ID).Delete(&db.Token{}).Error; err != nil {
 			return err
 		}
@@ -655,6 +662,47 @@ func (s *Service) ResetAgentToken(ctx context.Context, humanID uint, agentLogin 
 	return tok, nil
 }
 
+// UnbindAgent removes a human-to-agent recovery/admin binding. It revokes only
+// temporary console switch sessions issued through that binding, leaving the
+// agent's own long-lived credential and durable resources untouched.
+func (s *Service) UnbindAgent(ctx context.Context, humanID uint, agentLogin string) (UnbindAgentResult, error) {
+	agentLogin = strings.TrimSpace(agentLogin)
+	if agentLogin == "" {
+		return UnbindAgentResult{}, fmt.Errorf("%w: agent_login is required", ErrValidation)
+	}
+
+	var result UnbindAgentResult
+	err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		var agent db.User
+		if err := tx.First(&agent, "login = ?", agentLogin).Error; err != nil {
+			return wrapErr(err)
+		}
+
+		var binding db.AgentBinding
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
+			return wrapErr(err)
+		}
+
+		deletedSessions := tx.Where("user_id = ? AND name = ?", agent.ID, "agent-switch-session").Delete(&db.Token{})
+		if deletedSessions.Error != nil {
+			return deletedSessions.Error
+		}
+		if err := tx.Delete(&binding).Error; err != nil {
+			return err
+		}
+
+		result = UnbindAgentResult{
+			AgentLogin:            agent.Login,
+			RevokedSwitchSessions: deletedSessions.RowsAffected,
+		}
+		return nil
+	})
+	if err != nil {
+		return UnbindAgentResult{}, err
+	}
+	return result, nil
+}
+
 // CreateAgentSwitchSession issues a temporary console session token for a bound
 // agent without revoking the agent's existing long-lived tokens.
 func (s *Service) CreateAgentSwitchSession(ctx context.Context, humanID uint, agentLogin string) (AgentSwitchSessionResult, error) {
@@ -663,23 +711,27 @@ func (s *Service) CreateAgentSwitchSession(ctx context.Context, humanID uint, ag
 		return AgentSwitchSessionResult{}, fmt.Errorf("%w: agent_login is required", ErrValidation)
 	}
 
-	var agent db.User
-	if err := s.DBForCtx(ctx).First(&agent, "login = ?", agentLogin).Error; err != nil {
-		return AgentSwitchSessionResult{}, wrapErr(err)
-	}
-
-	var binding db.AgentBinding
-	if err := s.DBForCtx(ctx).First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
-		return AgentSwitchSessionResult{}, wrapErr(err)
-	}
-
-	expiresAt := time.Now().UTC().Add(agentSwitchSessionTTL)
-	tok, err := s.CreateUserToken(ctx, agent.ID, "agent-switch-session", &expiresAt)
-	if err != nil {
+	var result AgentSwitchSessionResult
+	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
+		var agent db.User
+		if err := tx.First(&agent, "login = ?", agentLogin).Error; err != nil {
+			return wrapErr(err)
+		}
+		var binding db.AgentBinding
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&binding, "human_user_id = ? AND agent_user_id = ?", humanID, agent.ID).Error; err != nil {
+			return wrapErr(err)
+		}
+		expiresAt := time.Now().UTC().Add(agentSwitchSessionTTL)
+		tok, err := issueUserTokenTx(tx, agent.ID, time.Now(), "agent-switch-session", &expiresAt)
+		if err != nil {
+			return err
+		}
+		result = AgentSwitchSessionResult{Agent: agent, Token: tok}
+		return nil
+	}); err != nil {
 		return AgentSwitchSessionResult{}, err
 	}
-
-	return AgentSwitchSessionResult{Agent: agent, Token: tok}, nil
+	return result, nil
 }
 
 // RefreshAgentSwitchSession rotates an existing valid switch-session token into a
@@ -701,6 +753,10 @@ func (s *Service) RefreshAgentSwitchSession(ctx context.Context, currentAgentID 
 			return wrapErr(err)
 		}
 
+		var binding db.AgentBinding
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&binding, "agent_user_id = ?", agent.ID).Error; err != nil {
+			return wrapErr(err)
+		}
 		var current db.Token
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "value = ? AND user_id = ?", currentToken, agent.ID).Error; err != nil {
 			return wrapErr(err)
@@ -710,10 +766,6 @@ func (s *Service) RefreshAgentSwitchSession(ctx context.Context, currentAgentID 
 		}
 		if current.ExpiresAt == nil || !current.ExpiresAt.After(time.Now().UTC()) {
 			return fmt.Errorf("%w: switch session expired", ErrUnauthorized)
-		}
-		var binding db.AgentBinding
-		if err := tx.First(&binding, "agent_user_id = ?", agent.ID).Error; err != nil {
-			return wrapErr(err)
 		}
 
 		expiresAt := time.Now().UTC().Add(agentSwitchSessionTTL)
@@ -725,7 +777,6 @@ func (s *Service) RefreshAgentSwitchSession(ctx context.Context, currentAgentID 
 			return err
 		}
 		result = AgentSwitchSessionResult{Agent: agent, Token: next}
-		_ = binding
 		return nil
 	}); err != nil {
 		return AgentSwitchSessionResult{}, err

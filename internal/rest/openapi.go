@@ -228,6 +228,7 @@ func buildRESTOpenAPIPaths() map[string]any {
 			"patch": operation("renameBoundAgent", "Rename a bound agent's display name.", auth(), jsonBody(true, map[string]any{
 				"name": stringSchema("New display name for the bound agent."),
 			}, []string{"name"}), pathParams(param("agent_login", "string")), response(200, "Agent renamed")),
+			"delete": operation("unbindAgent", "Detach a bound agent and revoke only temporary human console switch sessions. The agent's long-lived token, account, memory repository, and independently managed grants are retained.", auth(), nil, pathParams(param("agent_login", "string")), response(200, "Agent unbound")),
 		},
 		"/api/ext/v1/agent-bindings/{agent_login}/reset-token": map[string]any{
 			"post": operation("resetAgentToken", "Rotate the token for a bound agent login.", auth(), nil, pathParams(param("agent_login", "string")), response(200, "Token rotated")),

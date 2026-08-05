@@ -194,6 +194,81 @@ func TestConfirmAgentBindingAppliesRepoAndTeamGrants(t *testing.T) {
 	}
 }
 
+func TestUnbindAgentRevokesSwitchSessionsAndRetainsAgentCredentialsAndResources(t *testing.T) {
+	svc, cleanup := setupTestService(t)
+	defer cleanup()
+
+	human := db.User{Login: "unbind-human", Name: "unbind-human", Type: db.TypeUser, UserKind: db.UserKindHuman}
+	otherHuman := db.User{Login: "unbind-other-human", Name: "unbind-other-human", Type: db.TypeUser, UserKind: db.UserKindHuman}
+	agent := db.User{Login: "unbind-agent", Name: "unbind-agent", Type: db.TypeUser, UserKind: db.UserKindAgent}
+	for _, user := range []*db.User{&human, &otherHuman, &agent} {
+		if err := svc.DB.Create(user).Error; err != nil {
+			t.Fatalf("create user %q: %v", user.Login, err)
+		}
+	}
+
+	repo := db.Repository{Name: "memory", FullName: "unbind-human/memory", OwnerID: human.ID, Private: true, Visibility: "private", DefaultBranch: "main", HasWiki: true, HasIssues: true}
+	if err := svc.DB.Create(&repo).Error; err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	if err := svc.DB.Create(&db.Collaborator{RepositoryID: repo.ID, UserID: agent.ID, Permission: "write"}).Error; err != nil {
+		t.Fatalf("grant repo access: %v", err)
+	}
+	if err := svc.DB.Create(&db.AgentBinding{HumanUserID: human.ID, AgentUserID: agent.ID}).Error; err != nil {
+		t.Fatalf("create binding: %v", err)
+	}
+	if err := svc.DB.Create(&db.Token{UserID: agent.ID, Name: "agent", Value: "unbind-agent-token"}).Error; err != nil {
+		t.Fatalf("create agent token: %v", err)
+	}
+	if err := svc.DB.Create(&db.Token{UserID: agent.ID, Name: "agent-switch-session", Value: "unbind-agent-session"}).Error; err != nil {
+		t.Fatalf("create agent switch session: %v", err)
+	}
+
+	if _, err := svc.UnbindAgent(context.Background(), otherHuman.ID, agent.Login); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("UnbindAgent by another human error = %v, want ErrNotFound", err)
+	}
+
+	result, err := svc.UnbindAgent(context.Background(), human.ID, agent.Login)
+	if err != nil {
+		t.Fatalf("UnbindAgent: %v", err)
+	}
+	if result.AgentLogin != agent.Login || result.RevokedSwitchSessions != 1 {
+		t.Fatalf("UnbindAgent result = %#v, want login %q and 1 revoked switch session", result, agent.Login)
+	}
+
+	var bindingCount int64
+	if err := svc.DB.Model(&db.AgentBinding{}).Where("agent_user_id = ?", agent.ID).Count(&bindingCount).Error; err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if bindingCount != 0 {
+		t.Fatalf("binding count = %d, want 0", bindingCount)
+	}
+	var primaryTokenCount int64
+	if err := svc.DB.Model(&db.Token{}).Where("user_id = ? AND value = ?", agent.ID, "unbind-agent-token").Count(&primaryTokenCount).Error; err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if primaryTokenCount != 1 {
+		t.Fatalf("primary token count = %d, want 1", primaryTokenCount)
+	}
+	var switchSessionCount int64
+	if err := svc.DB.Model(&db.Token{}).Where("user_id = ? AND name = ?", agent.ID, "agent-switch-session").Count(&switchSessionCount).Error; err != nil {
+		t.Fatalf("count switch sessions: %v", err)
+	}
+	if switchSessionCount != 0 {
+		t.Fatalf("switch session count = %d, want 0", switchSessionCount)
+	}
+	if err := svc.DB.First(&db.User{}, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("agent account should be retained: %v", err)
+	}
+	var collaboratorCount int64
+	if err := svc.DB.Model(&db.Collaborator{}).Where("repository_id = ? AND user_id = ?", repo.ID, agent.ID).Count(&collaboratorCount).Error; err != nil {
+		t.Fatalf("count durable repo grant: %v", err)
+	}
+	if collaboratorCount != 1 {
+		t.Fatalf("repo grant count = %d, want 1", collaboratorCount)
+	}
+}
+
 func TestConfirmAgentBindingBackfillsAdminsTeamForExistingAgentAdminOrg(t *testing.T) {
 	svc, cleanup := setupTestService(t)
 	defer cleanup()
