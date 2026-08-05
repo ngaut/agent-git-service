@@ -86,6 +86,9 @@ func shouldApplyConditionalETag(r *http.Request) bool {
 	}
 
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) >= 4 && parts[0] == "api" && parts[1] == "ext" && parts[2] == "v1" {
+		return matchExtensionETagPath(parts[3:])
+	}
 	if len(parts) < 3 || parts[0] != "api" || parts[1] != "v3" {
 		return false
 	}
@@ -103,6 +106,27 @@ func shouldApplyConditionalETag(r *http.Request) bool {
 		return matchRepoETagPath(parts)
 	case "search":
 		return len(parts) == 4 && parts[3] == "repositories"
+	default:
+		return false
+	}
+}
+
+func matchExtensionETagPath(parts []string) bool {
+	switch {
+	case len(parts) == 2 && parts[0] == "viewer" && parts[1] == "summary":
+		return true
+	case len(parts) == 2 && parts[0] == "notifications" && parts[1] == "summary":
+		return true
+	case len(parts) == 2 && parts[0] == "user" && (parts[1] == "agents" || parts[1] == "tokens"):
+		return true
+	case len(parts) == 3 && parts[0] == "orgs" && parts[2] == "management-summary":
+		return true
+	case len(parts) == 4 && parts[0] == "repos" && parts[3] == "summary":
+		return true
+	case len(parts) >= 5 && parts[0] == "repos" && parts[3] == "wiki":
+		return true
+	case len(parts) == 6 && parts[0] == "repos" && parts[3] == "issues" && parts[5] == "thread":
+		return true
 	default:
 		return false
 	}

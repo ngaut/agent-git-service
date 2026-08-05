@@ -181,12 +181,12 @@ func TestTeamShare_EnableRepoSharingRequiresExistingOrgMembership(t *testing.T) 
 		t.Fatalf("AddCollaborator admin: %v", err)
 	}
 
-	w := h.DoRESTWithToken(t, "POST", "/api/v3/repos/team-enable-org/cedar-pebble/team-sharing/enable", outsiderToken)
+	w := h.DoRESTWithToken(t, "POST", "/api/ext/v1/repos/team-enable-org/cedar-pebble/team-sharing/enable", outsiderToken)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("outsider POST expected 404, got %d: %s", w.Code, w.Body.String())
 	}
 
-	w = h.DoRESTWithToken(t, "POST", "/api/v3/repos/team-enable-org/cedar-pebble/team-sharing/enable", adminToken)
+	w = h.DoRESTWithToken(t, "POST", "/api/ext/v1/repos/team-enable-org/cedar-pebble/team-sharing/enable", adminToken)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("repo admin without org membership POST expected 403, got %d: %s", w.Code, w.Body.String())
 	}
@@ -206,7 +206,7 @@ func TestTeamShare_EnableRepoSharingRequiresExistingOrgMembership(t *testing.T) 
 		t.Fatalf("AddOrgMember adminUser: %v", err)
 	}
 
-	w = h.DoRESTWithToken(t, "POST", "/api/v3/repos/team-enable-org/cedar-pebble/team-sharing/enable", adminToken)
+	w = h.DoRESTWithToken(t, "POST", "/api/ext/v1/repos/team-enable-org/cedar-pebble/team-sharing/enable", adminToken)
 	if w.Code != http.StatusOK {
 		t.Fatalf("repo admin with org membership POST expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -243,7 +243,7 @@ func TestTeamShare_EnableRepoSharingRequiresExistingOrgMembership(t *testing.T) 
 		t.Fatalf("team repo permission = %q, want read", teamRepo.Permission)
 	}
 
-	w = h.DoRESTWithToken(t, "POST", "/api/v3/repos/team-enable-org/cedar-pebble/team-sharing/enable", adminToken)
+	w = h.DoRESTWithToken(t, "POST", "/api/ext/v1/repos/team-enable-org/cedar-pebble/team-sharing/enable", adminToken)
 	if w.Code != http.StatusOK {
 		t.Fatalf("second repo admin POST expected 200, got %d: %s", w.Code, w.Body.String())
 	}

@@ -74,11 +74,10 @@ func TestCreatePR_QueryCount(t *testing.T) {
 	t.Cleanup(func() { transform.Init(prevBase) })
 
 	svc := &service.Service{
-		DB:             gdb,
-		Git:            store,
-		BaseURL:        baseURL,
-		AttachmentRoot: tmpDir,
-		Embedder:       embedding.NopEmbedder{},
+		DB:       gdb,
+		Git:      store,
+		BaseURL:  baseURL,
+		Embedder: embedding.NopEmbedder{},
 	}
 	user := db.User{Login: "testuser", Name: "testuser", Type: db.TypeUser, SiteAdmin: true}
 	if err := gdb.Create(&user).Error; err != nil {

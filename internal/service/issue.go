@@ -693,16 +693,9 @@ func (s *Service) DeleteIssueByID(ctx context.Context, id uint) error {
 	if err != nil {
 		return err
 	}
-	var attachmentPaths []string
-	if err := s.DBForCtx(ctx).Model(&db.Attachment{}).Where("issue_id = ?", id).Pluck("stored_path", &attachmentPaths).Error; err != nil {
-		return err
-	}
 	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("repository_id = ? AND issue_number = ?", issue.RepositoryID, issue.Number).
 			Delete(&db.IssueComment{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("issue_id = ?", id).Delete(&db.Attachment{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Exec("DELETE FROM issue_labels WHERE issue_id = ?", id).Error; err != nil {
@@ -731,7 +724,6 @@ func (s *Service) DeleteIssueByID(ctx context.Context, id uint) error {
 	}); err != nil {
 		return err
 	}
-	s.cleanupAttachmentPaths(attachmentPaths)
 	return nil
 }
 

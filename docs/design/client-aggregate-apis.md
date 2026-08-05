@@ -6,7 +6,7 @@ Status: Draft
 
 Console and Agent Team Service currently build product views by composing many GitHub-compatible REST calls in the browser or in the local ATS process. That keeps the API surface familiar, but it pushes fan-out, pagination, role normalization, and N+1 joins into clients. This document proposes a small set of generic read aggregation APIs for AGS. The goal is not to create console-only or ATS-only shortcuts; the goal is to expose reusable snapshots that future products can also use.
 
-The current conclusion is that one aggregate endpoint is not enough. `GET /api/v3/orgs/{org}/management-summary` is useful for the console organization page, but the larger wins are viewer bootstrap, issue thread loading, issue list filtering, and explicit wiki page batch reads.
+The current conclusion is that one aggregate endpoint is not enough. `GET /api/ext/v1/orgs/{org}/management-summary` is useful for the console organization page, but the larger wins are viewer bootstrap, issue thread loading, issue list filtering, and explicit wiki page batch reads.
 
 ## Goals
 
@@ -70,7 +70,7 @@ Each proposed API below lists current and future call chains for console and ATS
 ### 1. Viewer Summary
 
 ```text
-GET /api/v3/viewer/summary
+GET /api/ext/v1/viewer/summary
 ```
 
 This endpoint returns the current viewer and the workspace navigation data needed for first render.
@@ -131,7 +131,7 @@ Call chain:
 ### 2. Repository Summary
 
 ```text
-GET /api/v3/repos/{owner}/{repo}/summary
+GET /api/ext/v1/repos/{owner}/{repo}/summary
 ```
 
 This endpoint returns a bounded snapshot for entering a repository workspace.
@@ -186,7 +186,7 @@ Call chain:
 ### 3. Organization Management Summary
 
 ```text
-GET /api/v3/orgs/{org}/management-summary
+GET /api/ext/v1/orgs/{org}/management-summary
 ```
 
 This endpoint returns the first-render state for organization management: organization profile, viewer role, repositories, members, pending invitations, teams, outside collaborators, and row-level capabilities.
@@ -225,7 +225,7 @@ Call chain:
 ### 4. Issue Thread
 
 ```text
-GET /api/v3/repos/{owner}/{repo}/issues/{issue_number}/thread
+GET /api/ext/v1/repos/{owner}/{repo}/issues/{issue_number}/thread
 ```
 
 This endpoint returns an issue and its comments in one authorization-checked response.
@@ -300,7 +300,7 @@ Call chain:
 ### 6. Wiki Page Batch Read
 
 ```text
-POST /api/v3/repos/{owner}/{repo}/wiki/pages/batch
+POST /api/ext/v1/repos/{owner}/{repo}/wiki/pages/batch
 ```
 
 This endpoint fetches explicitly selected wiki pages. It does not recursively expand a path and it does not mean "return every wiki page body". Callers must first choose a bounded set of slugs from existing list, tree, or search endpoints.
@@ -357,7 +357,7 @@ Call chain:
 ### 7. Wiki Catalog
 
 ```text
-GET /api/v3/repos/{owner}/{repo}/wiki/catalog
+GET /api/ext/v1/repos/{owner}/{repo}/wiki/catalog
 ```
 
 This endpoint returns the wiki navigation catalog for first render: tree, page metadata, labels, backlink counts, and latest update metadata. It should not return full bodies by default.
@@ -380,7 +380,7 @@ Call chain:
 ### 8. Notification Summary
 
 ```text
-GET /api/v3/notifications/summary
+GET /api/ext/v1/notifications/summary
 ```
 
 This endpoint returns notifications with enough subject context to avoid follow-up calls for the common worker case.
@@ -431,17 +431,17 @@ Call chain:
 
 P0 endpoints/extensions:
 
-- `GET /api/v3/viewer/summary`
-- `GET /api/v3/orgs/{org}/management-summary`
-- `GET /api/v3/repos/{owner}/{repo}/issues/{issue_number}/thread`
+- `GET /api/ext/v1/viewer/summary`
+- `GET /api/ext/v1/orgs/{org}/management-summary`
+- `GET /api/ext/v1/repos/{owner}/{repo}/issues/{issue_number}/thread`
 - issue list filters: `kind`, `title_prefix`, `include=body`, and `fields`
-- `POST /api/v3/repos/{owner}/{repo}/wiki/pages/batch`
+- `POST /api/ext/v1/repos/{owner}/{repo}/wiki/pages/batch`
 
 P1 endpoints/extensions:
 
-- `GET /api/v3/repos/{owner}/{repo}/summary`
-- `GET /api/v3/repos/{owner}/{repo}/wiki/catalog`
-- `GET /api/v3/notifications/summary`
+- `GET /api/ext/v1/repos/{owner}/{repo}/summary`
+- `GET /api/ext/v1/repos/{owner}/{repo}/wiki/catalog`
+- `GET /api/ext/v1/notifications/summary`
 
 The org management endpoint is worth implementing, but it should not be the only aggregate API. If only one endpoint can be built first, `viewer/summary` has the broadest product reuse. If the immediate pain is console organization management, build `orgs/{org}/management-summary` first. If the immediate pain is AGS-backed collaboration clients, build issue thread, issue list filters, and wiki page batch read first.
 

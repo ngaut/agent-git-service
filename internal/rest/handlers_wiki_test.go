@@ -21,7 +21,7 @@ import (
 )
 
 func wikiPagePath(full, slug string) string {
-	return "/api/v3/repos/" + full + "/wiki/pages/" + url.PathEscape(slug)
+	return "/api/ext/v1/repos/" + full + "/wiki/pages/" + url.PathEscape(slug)
 }
 
 func wikiPageSubresourcePath(full, slug, subresource string) string {
@@ -41,7 +41,7 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 	}
 	full := "testuser/wiki-1355"
 
-	w := h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages", nil)
+	w := h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	if rows := testharness.DecodeJSONArray(t, w); len(rows) != 0 {
 		t.Fatalf("empty wiki list: got %d rows, want 0", len(rows))
@@ -94,7 +94,7 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 		t.Fatalf("nested page history sha must be populated")
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?per_page=2", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages?per_page=2", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 2 {
@@ -109,7 +109,7 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 		t.Fatal("expected Link header for paginated wiki list, got none")
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?page=2&per_page=2", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages?page=2&per_page=2", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows = testharness.DecodeJSONArray(t, w)
 	if len(rows) != 2 {
@@ -119,7 +119,7 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 		t.Fatalf("page 2 slugs = [%v %v], want [guides/setup home]", rows[0]["slug"], rows[1]["slug"])
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?path=guides", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages?path=guides", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows = testharness.DecodeJSONArray(t, w)
 	if len(rows) != 3 {
@@ -131,7 +131,7 @@ func TestWiki_PathHierarchyCRUD_Issue1355(t *testing.T) {
 		}
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?path=guides&recursive=false", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages?path=guides&recursive=false", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows = testharness.DecodeJSONArray(t, w)
 	if len(rows) != 2 {
@@ -176,7 +176,7 @@ func TestWiki_ListPagesPaginatesAcrossMixedSlugPrefixes_Issue1472(t *testing.T) 
 
 	var seen []string
 	for page := 1; page <= 4; page++ {
-		w := h.DoREST(t, "GET", fmt.Sprintf("/api/v3/repos/%s/wiki/pages?page=%d&per_page=2", full, page), nil)
+		w := h.DoREST(t, "GET", fmt.Sprintf("/api/ext/v1/repos/%s/wiki/pages?page=%d&per_page=2", full, page), nil)
 		assertStatusCode(t, w, http.StatusOK)
 		rows := testharness.DecodeJSONArray(t, w)
 		if page < 4 && len(rows) != 2 {
@@ -190,7 +190,7 @@ func TestWiki_ListPagesPaginatesAcrossMixedSlugPrefixes_Issue1472(t *testing.T) 
 		}
 	}
 
-	w := h.DoREST(t, "GET", fmt.Sprintf("/api/v3/repos/%s/wiki/pages?page=5&per_page=2", full), nil)
+	w := h.DoREST(t, "GET", fmt.Sprintf("/api/ext/v1/repos/%s/wiki/pages?page=5&per_page=2", full), nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 0 {
@@ -236,7 +236,7 @@ func TestWiki_PutNestedPageWithEncodedRepoName(t *testing.T) {
 	}
 
 	fullPath := url.PathEscape(h.User.Login) + "/" + url.PathEscape(repoName)
-	pagePath := "/api/v3/repos/" + fullPath + "/wiki/pages/" + url.PathEscape("xxx/yyy")
+	pagePath := "/api/ext/v1/repos/" + fullPath + "/wiki/pages/" + url.PathEscape("xxx/yyy")
 	w := h.DoRESTJSON(t, "PUT", pagePath, map[string]any{
 		"body": "# Nested\n\nGrand prix notes.\n",
 	})
@@ -268,7 +268,7 @@ func TestWiki_PutNestedPageWithLiteralPercentRepoName(t *testing.T) {
 	}
 
 	fullPath := url.PathEscape(h.User.Login) + "/" + url.PathEscape(repoName)
-	pagePath := "/api/v3/repos/" + fullPath + "/wiki/pages/" + url.PathEscape("xxx/yyy")
+	pagePath := "/api/ext/v1/repos/" + fullPath + "/wiki/pages/" + url.PathEscape("xxx/yyy")
 	w := h.DoRESTJSON(t, "PUT", pagePath, map[string]any{
 		"body": "# Nested\n\nLiteral percent repo name.\n",
 	})
@@ -330,14 +330,14 @@ func TestWikiPageLabelsREST(t *testing.T) {
 		t.Fatalf("page labels = %#v, want 2 labels", page["labels"])
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages?label=auth", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages?label=auth", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 || rows[0]["slug"] != "guides/rotation" {
 		t.Fatalf("label-filtered wiki rows = %#v, want guides/rotation", rows)
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/search?q=token+lifecycle", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/search?q=token+lifecycle", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	searchBody := testharness.DecodeJSON(t, w)
 	results, ok := searchBody["results"].([]any)
@@ -399,7 +399,7 @@ func TestWiki_ListPagesSetsMigrationInProgressHeader(t *testing.T) {
 		}
 	}()
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "true" {
 		t.Fatalf("X-Wiki-Migration-In-Progress = %q, want true", got)
@@ -416,7 +416,7 @@ func TestWiki_ListPagesSetsMigrationInProgressHeader(t *testing.T) {
 	}
 	h.Svc.Wg.Wait()
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	if got := w.Header().Get("X-Wiki-Migration-In-Progress"); got != "" {
 		t.Fatalf("X-Wiki-Migration-In-Progress after rebuild = %q, want empty", got)
@@ -609,7 +609,7 @@ func TestWiki_MoveRewritesInboundReferences_Issue1361(t *testing.T) {
 
 	w := h.DoRESTJSON(t, "PUT", wikiPagePath(full, "guides/setup"), map[string]any{"body": "# Setup\n\nFirst body.\n"})
 	assertStatusCode(t, w, http.StatusOK)
-	w = h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w = h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body": "# Home\n\nSee [[guides/setup]] and [Setup](guides/setup.md?view=1#intro).\n\n[setup-ref]: guides/setup.md#deep \"Guide\"\n\n`[[guides/setup]]`\n\n```md\n[[guides/setup]]\n```\n\n<pre>\n[[guides/setup]]\n</pre>\n\n[[Setup]]\n",
 	})
 	assertStatusCode(t, w, http.StatusOK)
@@ -641,7 +641,7 @@ func TestWiki_MoveRewritesInboundReferences_Issue1361(t *testing.T) {
 		t.Fatalf("skipped payload = %#v, want empty array", moveResult["skipped"])
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	home := testharness.DecodeJSON(t, w)
 	body, _ := home["body"].(string)
@@ -693,7 +693,7 @@ func TestWiki_BulkMovePrefix_Issue1360(t *testing.T) {
 		"tutorial/advanced": wikiPageSHA(t, h, full, "tutorial/advanced"),
 	}
 
-	w := h.DoRESTJSON(t, "POST", "/api/v3/repos/"+full+"/wiki/move", map[string]any{
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/repos/"+full+"/wiki/move", map[string]any{
 		"from":     "tutorial",
 		"to":       "guides",
 		"message":  "bulk wiki move",
@@ -734,7 +734,7 @@ func TestWiki_BulkMovePrefix_Issue1360(t *testing.T) {
 		w = h.DoREST(t, "GET", wikiPagePath(full, slug), nil)
 		assertStatusCode(t, w, http.StatusOK)
 	}
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	home := testharness.DecodeJSON(t, w)
 	homeBody, _ := home["body"].(string)
@@ -760,7 +760,7 @@ func TestWiki_BulkMovePrefix_MissingIfMatchAndSourceNotFound_Issue1360(t *testin
 		assertStatusCode(t, w, http.StatusOK)
 	}
 
-	w := h.DoRESTJSON(t, "POST", "/api/v3/repos/"+full+"/wiki/move", map[string]any{
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/repos/"+full+"/wiki/move", map[string]any{
 		"from": "tutorial",
 		"to":   "guides",
 		"if_match": map[string]any{
@@ -777,7 +777,7 @@ func TestWiki_BulkMovePrefix_MissingIfMatchAndSourceNotFound_Issue1360(t *testin
 		t.Fatalf("missing_slugs = %#v, want [tutorial/advanced]", body["missing_slugs"])
 	}
 
-	w = h.DoRESTJSON(t, "POST", "/api/v3/repos/"+full+"/wiki/move", map[string]any{
+	w = h.DoRESTJSON(t, "POST", "/api/ext/v1/repos/"+full+"/wiki/move", map[string]any{
 		"from":     "missing",
 		"to":       "guides",
 		"if_match": map[string]any{"missing": "deadbeef"},
@@ -818,7 +818,7 @@ func TestWiki_BulkMovePrefix_ConflictsStayAtomic_Issue1360(t *testing.T) {
 	assertStatusCode(t, update, http.StatusOK)
 
 	beforeCount := wikiCommitCount(t, h, ctx, full)
-	w := h.DoRESTJSON(t, "POST", "/api/v3/repos/"+full+"/wiki/move", map[string]any{
+	w := h.DoRESTJSON(t, "POST", "/api/ext/v1/repos/"+full+"/wiki/move", map[string]any{
 		"from": "tutorial",
 		"to":   "guides",
 		"if_match": map[string]any{
@@ -867,15 +867,15 @@ func TestWiki_PrefixCollisionAndCaseValidation_Issue1355(t *testing.T) {
 	}
 	full := "testuser/wiki-1355-conflicts"
 
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/Home", map[string]any{"body": "# Home\n"})
+	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/Home", map[string]any{"body": "# Home\n"})
 	assertStatusCode(t, w, http.StatusUnprocessableEntity)
-	w = h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/tutorial", map[string]any{"body": "# Tutorial\n"})
+	w = h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/tutorial", map[string]any{"body": "# Tutorial\n"})
 	assertStatusCode(t, w, http.StatusOK)
 	w = h.DoRESTJSON(t, "PUT", wikiPagePath(full, "tutorial/getting-started"), map[string]any{"body": "# Getting Started\n"})
 	assertStatusCode(t, w, http.StatusConflict)
 	w = h.DoRESTJSON(t, "PUT", wikiPagePath(full, "guides/setup"), map[string]any{"body": "# Setup\n"})
 	assertStatusCode(t, w, http.StatusOK)
-	w = h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/guides", map[string]any{"body": "# Guides\n"})
+	w = h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/guides", map[string]any{"body": "# Guides\n"})
 	assertStatusCode(t, w, http.StatusConflict)
 }
 
@@ -893,7 +893,7 @@ func TestWiki_WritePermissionRequired_Issue1296(t *testing.T) {
 	}
 	_, strangerToken := seedHarnessUser(t, h, "wiki-stranger", false)
 	full := fmt.Sprintf("%s/wiki-perm", owner.Login)
-	w := h.DoRESTJSONWithToken(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", strangerToken, map[string]any{"body": "drive-by edit"})
+	w := h.DoRESTJSONWithToken(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", strangerToken, map[string]any{"body": "drive-by edit"})
 	if w.Code != http.StatusForbidden && w.Code != http.StatusNotFound {
 		t.Errorf("non-collaborator wiki PUT: got %d, want 403/404", w.Code)
 	}
@@ -919,13 +919,13 @@ func TestWiki_ListPageMetadataResolvesLastAuthor_Issue1345(t *testing.T) {
 	}
 	full := "testuser/wiki-1345"
 
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nWelcome to the wiki.",
 		"message": "create home page",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 {
@@ -987,7 +987,7 @@ func TestWiki_GetPageIncludesLastAuthor_Issue1372(t *testing.T) {
 	}
 	writeWikiAuthorCommitREST(t, ctx, h, full, "home.md", "# Home\n\nSecond version.\n", "update home page", editor.Name, editor.Email)
 
-	get := h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home", nil)
+	get := h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home", nil)
 	assertStatusCode(t, get, http.StatusOK)
 	page := testharness.DecodeJSON(t, get)
 	author, ok := page["last_author"].(map[string]any)
@@ -1019,14 +1019,14 @@ func TestWiki_GetPageUsesNullLastAuthorWhenCommitIdentityDoesNotMatch_Issue1372(
 	// in the DB. After the catalog sync, last_author should be null —
 	// the migration resolver leaves it unresolved for unknown
 	// committers.
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nFirst version.",
 		"message": "create home page",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 	writeWikiAuthorCommitREST(t, ctx, h, full, "home.md", "# Home\n\noverwrite.\n", "overwrite", "anonymous", "no-such-user@example.invalid")
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	page := testharness.DecodeJSON(t, w)
 	if val, exists := page["last_author"]; !exists || val != nil {
@@ -1083,7 +1083,7 @@ func TestWiki_PutPagePreconditions_Issue1347(t *testing.T) {
 	}
 	full := "testuser/wiki-1347"
 
-	create := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	create := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nv1",
 		"message": "create home page",
 	})
@@ -1091,7 +1091,7 @@ func TestWiki_PutPagePreconditions_Issue1347(t *testing.T) {
 	created := testharness.DecodeJSON(t, create)
 	initialSHA, _ := created["sha"].(string)
 
-	update := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	update := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nv2",
 		"message": "update home page",
 		"sha":     initialSHA,
@@ -1100,7 +1100,7 @@ func TestWiki_PutPagePreconditions_Issue1347(t *testing.T) {
 	updated := testharness.DecodeJSON(t, update)
 	currentSHA, _ := updated["sha"].(string)
 
-	conflict := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	conflict := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nstale write",
 		"message": "stale update",
 		"sha":     initialSHA,
@@ -1139,7 +1139,7 @@ func TestWiki_SearchEndpoint_Issue1362(t *testing.T) {
 	assertStatusCode(t, w, http.StatusOK)
 	h.Svc.Wg.Wait()
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/search?q=token%20expires&limit=5&offset=0", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/search?q=token%20expires&limit=5&offset=0", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	body := testharness.DecodeJSON(t, w)
 	if body["method"] != "substring" {
@@ -1247,7 +1247,7 @@ func TestWiki_BacklinksPathResolution_Issue1355(t *testing.T) {
 		t.Fatalf("nested backlinks = %+v, want guide-index only", rows)
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/plain-page/backlinks", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/plain-page/backlinks", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows = testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 || rows[0]["slug"] != "plain-ref" {
@@ -1318,14 +1318,14 @@ func TestWiki_PageHistory_Issue1346(t *testing.T) {
 		"# Home\n\nThird version with extra content.\n\n- item\n",
 	}
 	for i, body := range bodies {
-		w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+		w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 			"body":    body,
 			"message": fmt.Sprintf("revision %d", i+1),
 		})
 		assertStatusCode(t, w, http.StatusOK)
 	}
 
-	w := h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history?per_page=2", nil)
+	w := h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home/history?per_page=2", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	assertPaginationHeaders(t, w, true)
 	rows := testharness.DecodeJSONArray(t, w)
@@ -1355,21 +1355,21 @@ func TestWiki_PageHistory_Issue1346(t *testing.T) {
 		t.Fatalf("history date must be populated")
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history?page=2&per_page=2", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home/history?page=2&per_page=2", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows = testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 || rows[0]["message"] != "revision 1" {
 		t.Fatalf("unexpected page 2 rows: %+v", rows)
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history?page=3&per_page=2", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home/history?page=3&per_page=2", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows = testharness.DecodeJSONArray(t, w)
 	if len(rows) != 0 {
 		t.Fatalf("page 3 history length = %d, want 0", len(rows))
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/missing/history", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/missing/history", nil)
 	assertStatusCode(t, w, http.StatusNotFound)
 }
 
@@ -1421,7 +1421,7 @@ func TestWiki_PageHistory_PaginationBeyondTenThousandRevisions_PR1354(t *testing
 		t.Fatalf("MigrateWiki: %v", err)
 	}
 
-	w := h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history?page=10002&per_page=1", nil)
+	w := h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home/history?page=10002&per_page=1", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 {
@@ -1461,25 +1461,25 @@ func TestWiki_PageHistory_DeleteThenRecreate_Issue1346(t *testing.T) {
 	}
 	full := "testuser/wiki-1346-recreate"
 
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nFirst version.",
 		"message": "create home",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 
-	w = h.DoRESTJSON(t, "DELETE", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w = h.DoRESTJSON(t, "DELETE", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"message": "delete home",
 	})
 	assertStatusCode(t, w, http.StatusNoContent)
 
 	recreatedBody := "# Home\n\nRecreated version."
-	w = h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w = h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    recreatedBody,
 		"message": "recreate home",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home/history", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 3 {
@@ -1522,20 +1522,20 @@ func TestWiki_GetPageAtRef_Issue1368(t *testing.T) {
 
 	firstBody := "# Home\n\nFirst version.\n"
 	secondBody := "# Home\n\nSecond version.\n"
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    firstBody,
 		"message": "create home",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 
-	w = h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w = h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    secondBody,
 		"message": "update home",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 	headPage := testharness.DecodeJSON(t, w)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home/history", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home/history", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 2 {
@@ -1546,7 +1546,7 @@ func TestWiki_GetPageAtRef_Issue1368(t *testing.T) {
 		t.Fatalf("expected older history sha")
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home?ref="+oldRef, nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home?ref="+oldRef, nil)
 	assertStatusCode(t, w, http.StatusOK)
 	page := testharness.DecodeJSON(t, w)
 	if page["body"] != firstBody {
@@ -1556,10 +1556,10 @@ func TestWiki_GetPageAtRef_Issue1368(t *testing.T) {
 		t.Fatalf("ref sha should differ from HEAD sha")
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home?ref=not-a-valid-sha!", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home?ref=not-a-valid-sha!", nil)
 	assertStatusCode(t, w, http.StatusUnprocessableEntity)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/missing?ref="+oldRef, nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/missing?ref="+oldRef, nil)
 	assertStatusCode(t, w, http.StatusNotFound)
 }
 
@@ -1579,7 +1579,7 @@ func TestWiki_GetPageAtRef_BeforePageExists_Issue1368(t *testing.T) {
 		t.Fatalf("seed initial wiki page: %v", err)
 	}
 
-	w := h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/seed/history", nil)
+	w := h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/seed/history", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 {
@@ -1590,13 +1590,13 @@ func TestWiki_GetPageAtRef_BeforePageExists_Issue1368(t *testing.T) {
 		t.Fatalf("expected seed history sha")
 	}
 
-	w = h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w = h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nCreated later.\n",
 		"message": "create home",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home?ref="+beforeRef, nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home?ref="+beforeRef, nil)
 	assertStatusCode(t, w, http.StatusNotFound)
 }
 
@@ -1613,19 +1613,19 @@ func TestWiki_GetPageAtRef_RejectsNonHistoryCommitAndNonSHA_Issue1368(t *testing
 	}
 	full := "testuser/wiki-1368-non-history"
 
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body":    "# Home\n\nFirst version.\n",
 		"message": "create home",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 
-	w = h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/other", map[string]any{
+	w = h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/other", map[string]any{
 		"body":    "# Other\n\nUnrelated page.\n",
 		"message": "create other",
 	})
 	assertStatusCode(t, w, http.StatusOK)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/other/history", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/other/history", nil)
 	assertStatusCode(t, w, http.StatusOK)
 	rows := testharness.DecodeJSONArray(t, w)
 	if len(rows) != 1 {
@@ -1636,10 +1636,10 @@ func TestWiki_GetPageAtRef_RejectsNonHistoryCommitAndNonSHA_Issue1368(t *testing
 		t.Fatalf("expected unrelated page history sha")
 	}
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home?ref="+otherRef, nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home?ref="+otherRef, nil)
 	assertStatusCode(t, w, http.StatusNotFound)
 
-	w = h.DoREST(t, "GET", "/api/v3/repos/"+full+"/wiki/pages/home?ref=master", nil)
+	w = h.DoREST(t, "GET", "/api/ext/v1/repos/"+full+"/wiki/pages/home?ref=master", nil)
 	assertStatusCode(t, w, http.StatusUnprocessableEntity)
 }
 
@@ -1656,7 +1656,7 @@ func TestWiki_WriteEndpointsRejectRefQuery_Issue1368(t *testing.T) {
 	}
 	full := "testuser/wiki-1368-write-ref"
 
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", map[string]any{
+	w := h.DoRESTJSON(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", map[string]any{
 		"body": "# Home\n\nCurrent body.\n",
 	})
 	assertStatusCode(t, w, http.StatusOK)
@@ -1668,14 +1668,14 @@ func TestWiki_WriteEndpointsRejectRefQuery_Issue1368(t *testing.T) {
 		path   string
 		body   any
 	}{
-		{method: "PUT", path: "/api/v3/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"body": "# Home\n\nEdited.\n"}},
-		{method: "DELETE", path: "/api/v3/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"message": "delete"}},
-		{method: "POST", path: "/api/v3/repos/" + full + "/wiki/pages/home/move?ref=" + currentSHA, body: map[string]any{"new_slug": "docs/home", "if_match": currentSHA}},
-		{method: "POST", path: "/api/v3/repos/" + full + "/wiki/move?ref=" + currentSHA, body: map[string]any{"from": "home", "to": "docs", "if_match": map[string]any{"home": currentSHA}}},
-		{method: "POST", path: "/api/v3/repos/" + full + "/wiki/pages/home/labels?ref=" + currentSHA, body: map[string]any{"labels": []string{"docs"}}},
-		{method: "PUT", path: "/api/v3/repos/" + full + "/wiki/pages/home/labels?ref=" + currentSHA, body: map[string]any{"labels": []string{"docs"}}},
-		{method: "DELETE", path: "/api/v3/repos/" + full + "/wiki/pages/home/labels?ref=" + currentSHA, body: map[string]any{"message": "clear labels"}},
-		{method: "DELETE", path: "/api/v3/repos/" + full + "/wiki/pages/home/labels/docs?ref=" + currentSHA, body: map[string]any{"message": "clear label"}},
+		{method: "PUT", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"body": "# Home\n\nEdited.\n"}},
+		{method: "DELETE", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"message": "delete"}},
+		{method: "POST", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home/move?ref=" + currentSHA, body: map[string]any{"new_slug": "docs/home", "if_match": currentSHA}},
+		{method: "POST", path: "/api/ext/v1/repos/" + full + "/wiki/move?ref=" + currentSHA, body: map[string]any{"from": "home", "to": "docs", "if_match": map[string]any{"home": currentSHA}}},
+		{method: "POST", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home/labels?ref=" + currentSHA, body: map[string]any{"labels": []string{"docs"}}},
+		{method: "PUT", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home/labels?ref=" + currentSHA, body: map[string]any{"labels": []string{"docs"}}},
+		{method: "DELETE", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home/labels?ref=" + currentSHA, body: map[string]any{"message": "clear labels"}},
+		{method: "DELETE", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home/labels/docs?ref=" + currentSHA, body: map[string]any{"message": "clear label"}},
 	}
 	for _, tc := range cases {
 		w := h.DoRESTJSON(t, tc.method, tc.path, tc.body)
@@ -1698,7 +1698,7 @@ func TestWiki_WriteEndpointsPreserveRepoAndPermissionChecksBeforeRefValidation_I
 	_, strangerToken := seedHarnessUser(t, h, "wiki-ref-stranger", false)
 	full := fmt.Sprintf("%s/wiki-ref-guard", owner.Login)
 
-	create := h.DoRESTJSONWithToken(t, "PUT", "/api/v3/repos/"+full+"/wiki/pages/home", ownerToken, map[string]any{
+	create := h.DoRESTJSONWithToken(t, "PUT", "/api/ext/v1/repos/"+full+"/wiki/pages/home", ownerToken, map[string]any{
 		"body": "# Home\n\nCurrent body.\n",
 	})
 	assertStatusCode(t, create, http.StatusOK)
@@ -1711,10 +1711,10 @@ func TestWiki_WriteEndpointsPreserveRepoAndPermissionChecksBeforeRefValidation_I
 			path   string
 			body   any
 		}{
-			{method: "PUT", path: "/api/v3/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"body": "# Home\n\nEdited.\n"}},
-			{method: "DELETE", path: "/api/v3/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"message": "delete"}},
-			{method: "POST", path: "/api/v3/repos/" + full + "/wiki/pages/home/move?ref=" + currentSHA, body: map[string]any{"new_slug": "docs/home", "if_match": currentSHA}},
-			{method: "POST", path: "/api/v3/repos/" + full + "/wiki/move?ref=" + currentSHA, body: map[string]any{"from": "home", "to": "docs", "if_match": map[string]any{"home": currentSHA}}},
+			{method: "PUT", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"body": "# Home\n\nEdited.\n"}},
+			{method: "DELETE", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"message": "delete"}},
+			{method: "POST", path: "/api/ext/v1/repos/" + full + "/wiki/pages/home/move?ref=" + currentSHA, body: map[string]any{"new_slug": "docs/home", "if_match": currentSHA}},
+			{method: "POST", path: "/api/ext/v1/repos/" + full + "/wiki/move?ref=" + currentSHA, body: map[string]any{"from": "home", "to": "docs", "if_match": map[string]any{"home": currentSHA}}},
 		}
 		for _, tc := range cases {
 			w := h.DoRESTJSONWithToken(t, tc.method, tc.path, strangerToken, tc.body)
@@ -1730,10 +1730,10 @@ func TestWiki_WriteEndpointsPreserveRepoAndPermissionChecksBeforeRefValidation_I
 			path   string
 			body   any
 		}{
-			{method: "PUT", path: "/api/v3/repos/" + owner.Login + "/missing-repo/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"body": "# Home\n\nEdited.\n"}},
-			{method: "DELETE", path: "/api/v3/repos/" + owner.Login + "/missing-repo/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"message": "delete"}},
-			{method: "POST", path: "/api/v3/repos/" + owner.Login + "/missing-repo/wiki/pages/home/move?ref=" + currentSHA, body: map[string]any{"new_slug": "docs/home", "if_match": currentSHA}},
-			{method: "POST", path: "/api/v3/repos/" + owner.Login + "/missing-repo/wiki/move?ref=" + currentSHA, body: map[string]any{"from": "home", "to": "docs", "if_match": map[string]any{"home": currentSHA}}},
+			{method: "PUT", path: "/api/ext/v1/repos/" + owner.Login + "/missing-repo/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"body": "# Home\n\nEdited.\n"}},
+			{method: "DELETE", path: "/api/ext/v1/repos/" + owner.Login + "/missing-repo/wiki/pages/home?ref=" + currentSHA, body: map[string]any{"message": "delete"}},
+			{method: "POST", path: "/api/ext/v1/repos/" + owner.Login + "/missing-repo/wiki/pages/home/move?ref=" + currentSHA, body: map[string]any{"new_slug": "docs/home", "if_match": currentSHA}},
+			{method: "POST", path: "/api/ext/v1/repos/" + owner.Login + "/missing-repo/wiki/move?ref=" + currentSHA, body: map[string]any{"from": "home", "to": "docs", "if_match": map[string]any{"home": currentSHA}}},
 		}
 		for _, tc := range cases {
 			w := h.DoRESTJSONWithToken(t, tc.method, tc.path, ownerToken, tc.body)

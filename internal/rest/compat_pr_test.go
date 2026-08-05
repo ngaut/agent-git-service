@@ -277,36 +277,6 @@ func TestCompat_PRReviewUpdate_UsesPut(t *testing.T) {
 	}
 }
 
-// ─── PR Ready For Review Response Shape ─────────────────────────────────────
-
-func TestCompat_PRReadyForReview_ResponseShape(t *testing.T) {
-	h := testharness.New(t)
-	compatSeedPR(t, h, "compat-pr-ready", "draft-br", func(in *service.CreatePRInput) {
-		in.Title = "draft PR"
-		in.Draft = true
-	})
-
-	w := h.DoRESTJSON(t, "PUT", "/api/v3/repos/testuser/compat-pr-ready/pulls/1/ready_for_review", nil)
-	assertStatusCode(t, w, 200)
-	resp := testharness.DecodeJSON(t, w)
-
-	// MarkPRReadyForReview should return an enriched PR response, same as GET.
-	assertFieldsPresent(t, resp, map[string]string{
-		"requested_reviewers": "array",
-		"requested_teams":     "array",
-		"comments":            "number",
-		"review_comments":     "number",
-		"commits":             "number",
-		"additions":           "number",
-		"deletions":           "number",
-		"changed_files":       "number",
-	})
-
-	if resp["draft"] != false {
-		t.Errorf("draft: got %v, want false after marking ready", resp["draft"])
-	}
-}
-
 // ─── PR Merge Response Shape ────────────────────────────────────────────────
 
 func TestCompat_PRMerge_ResponseShape(t *testing.T) {

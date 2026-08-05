@@ -210,9 +210,7 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	}
 
 	// Wiki catalog: a content-addressed blob store on the filesystem
-	// plus the catalog primitive backed by the same database. The
-	// blob root sits alongside the attachment root by convention so
-	// operators only need to mount one persistent volume.
+	// plus the catalog primitive backed by the same database.
 	wikiBlob := wikicatalog.NewBlobStore(dataRoot)
 	wikiCat := wikicatalog.New(database, wikiBlob)
 
@@ -223,7 +221,6 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 		WikiCatalog:         wikiCat,
 		WikiBlob:            wikiBlob,
 		BaseURL:             cfg.BaseURL,
-		AttachmentRoot:      dataRoot,
 		Embedder:            embedder,
 		AllowAnyToken:       cfg.AllowAnyToken,
 		WorkflowExecEnabled: cfg.EnableWorkflowExec,
@@ -243,8 +240,6 @@ func initServiceDeps(cfg config.Config, database *gorm.DB, store *gitstore.Store
 	// Route catalog writes through the same context-aware DB accessor the
 	// service layer uses so transactions and request cancellation propagate.
 	wikiCat.DBFor = svcDeps.DBForCtx
-	// Initialize PresenceHub for collaborative conversation presence
-	svcDeps.PresenceHub = service.NewPresenceHub(database)
 	deps.svc = svcDeps
 
 	if cfg.AllowAnyToken {
@@ -346,7 +341,6 @@ func buildHTTPMux(cfg httpMuxConfig) (muxDeps, error) {
 	handlers := &rest.Deps{
 		Svc:            cfg.ServiceDeps,
 		ConsoleBaseURL: cfg.Cfg.ConsoleBaseURL,
-		Presence:       &rest.PresenceHandlers{Svc: cfg.ServiceDeps, Hub: cfg.ServiceDeps.PresenceHub},
 	}
 
 	r := chi.NewRouter()

@@ -40,7 +40,7 @@ Login uniqueness remains the identity anchor.
 
 ### Agent registration
 
-`POST /api/v3/agents`
+`POST /api/ext/v1/agents`
 
 Request:
 
@@ -84,12 +84,12 @@ Binding requires explicit agent consent, and each agent can bind to at most one 
 
 Endpoints:
 
-- `POST /api/v3/agent-invites` (human) → returns `invite_token`
-- `POST /api/v3/agent-bindings/confirm` (agent) with `invite_token` only (agent identity comes from token)
+- `POST /api/ext/v1/agent-invites` (human) → returns `invite_token`
+- `POST /api/ext/v1/agent-bindings/confirm` (agent) with `invite_token` only (agent identity comes from token)
 
 Confirm contract:
 
-- the canonical agent token issued by `POST /api/v3/agents` is the supported credential for `/api/v3/agent-bindings/confirm`
+- the canonical agent token issued by `POST /api/ext/v1/agents` is the supported credential for `/api/ext/v1/agent-bindings/confirm`
 - that token must resolve to a local user with `user_kind=agent`
 - human-authenticated callers must be rejected with `403 Resource not accessible by integration`
 - invalid or expired invite tokens return `422`
@@ -104,7 +104,7 @@ On success:
 
 Humans can reset tokens for bound agents.
 
-- `POST /api/v3/agent-bindings/{agent_login}/reset-token`
+- `POST /api/ext/v1/agent-bindings/{agent_login}/reset-token`
 - Behavior: revoke all existing tokens for that agent, issue a new one
 
 ### Agent switch sessions
@@ -112,8 +112,8 @@ Humans can reset tokens for bound agents.
 Humans can start and refresh short-lived switch sessions for bound agents
 without rotating the agent's long-lived token.
 
-- `POST /api/v3/agent-bindings/{agent_login}/switch-session`
-- `POST /api/v3/agent-bindings/{agent_login}/refresh-session`
+- `POST /api/ext/v1/agent-bindings/{agent_login}/switch-session`
+- `POST /api/ext/v1/agent-bindings/{agent_login}/refresh-session`
 - Behavior:
   - `switch-session` issues a temporary token for the bound agent and keeps the
     existing long-lived agent token valid.
@@ -130,7 +130,7 @@ without rotating the agent's long-lived token.
 
 ## Org Creation and Admin Rule
 
-Organizations are created explicitly through `POST /api/v3/user/orgs`.
+Organizations are created explicitly through `POST /api/ext/v1/user/orgs`.
 `GET /api/v3/orgs/{org}` only resolves existing organizations.
 
 When an agent creates an org and is bound to a human:
@@ -182,5 +182,5 @@ GitHub alignment is preserved for:
 
 Deliberate deviations:
 
-- `POST /api/v3/agents` (custom)
+- `POST /api/ext/v1/agents` (custom)
 - agent binding and token reset endpoints (custom)

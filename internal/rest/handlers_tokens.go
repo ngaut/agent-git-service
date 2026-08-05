@@ -9,7 +9,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
 )
 
-// ListTokens handles GET /api/v3/user/tokens
+// ListTokens handles GET /api/ext/v1/user/tokens
 func (d *Deps) ListTokens(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parsePagination(r)
 	u, err := d.Svc.GetCurrentUser(r.Context())
@@ -29,7 +29,7 @@ func (d *Deps) ListTokens(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, 200, paginate(w, r, d.Svc.BaseURL, out, page, perPage))
 }
 
-// CreateToken handles POST /api/v3/user/tokens
+// CreateToken handles POST /api/ext/v1/user/tokens
 func (d *Deps) CreateToken(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {
@@ -64,7 +64,7 @@ func (d *Deps) CreateToken(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, 201, transform.Token(ok))
 }
 
-// DeleteToken handles DELETE /api/v3/user/tokens
+// DeleteToken handles DELETE /api/ext/v1/user/tokens
 func (d *Deps) DeleteToken(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {

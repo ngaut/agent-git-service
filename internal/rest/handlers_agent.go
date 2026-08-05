@@ -11,7 +11,7 @@ import (
 	"github.com/ngaut/agent-git-service/internal/service"
 )
 
-// CreateAgent handles POST /api/v3/agents (no auth).
+// CreateAgent handles POST /api/ext/v1/agents (no auth).
 func (d *Deps) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PrefixLogin     string `json:"prefix_login"`
@@ -33,7 +33,7 @@ func (d *Deps) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// CreateAgentInvite handles POST /api/v3/agent-invites.
+// CreateAgentInvite handles POST /api/ext/v1/agent-invites.
 func (d *Deps) CreateAgentInvite(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RepoGrants []service.AgentInviteRepoGrant `json:"repo_grants"`
@@ -64,7 +64,7 @@ func (d *Deps) CreateAgentInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ConfirmAgentBinding handles POST /api/v3/agent-bindings/confirm (agent auth).
+// ConfirmAgentBinding handles POST /api/ext/v1/agent-bindings/confirm (agent auth).
 func (d *Deps) ConfirmAgentBinding(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		InviteToken string `json:"invite_token"`
@@ -85,7 +85,7 @@ func (d *Deps) ConfirmAgentBinding(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListBoundAgents handles GET /api/v3/user/agents (human auth).
+// ListBoundAgents handles GET /api/ext/v1/user/agents (human auth).
 func (d *Deps) ListBoundAgents(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {
@@ -125,7 +125,7 @@ func boundAgentJSON(item service.BoundAgent) map[string]any {
 	}
 }
 
-// RenameBoundAgent handles PATCH /api/v3/agent-bindings/{agent_login}.
+// RenameBoundAgent handles PATCH /api/ext/v1/agent-bindings/{agent_login}.
 func (d *Deps) RenameBoundAgent(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {
@@ -148,7 +148,7 @@ func (d *Deps) RenameBoundAgent(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"agent": transform.User(agent)})
 }
 
-// ResetAgentToken handles POST /api/v3/agent-bindings/{agent_login}/reset-token.
+// ResetAgentToken handles POST /api/ext/v1/agent-bindings/{agent_login}/reset-token.
 func (d *Deps) ResetAgentToken(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {
@@ -167,7 +167,7 @@ func (d *Deps) ResetAgentToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SwitchAgentSession handles POST /api/v3/agent-bindings/{agent_login}/switch-session.
+// SwitchAgentSession handles POST /api/ext/v1/agent-bindings/{agent_login}/switch-session.
 func (d *Deps) SwitchAgentSession(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {
@@ -187,7 +187,7 @@ func (d *Deps) SwitchAgentSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RefreshAgentSwitchSession handles POST /api/v3/agent-bindings/{agent_login}/refresh-session.
+// RefreshAgentSwitchSession handles POST /api/ext/v1/agent-bindings/{agent_login}/refresh-session.
 func (d *Deps) RefreshAgentSwitchSession(w http.ResponseWriter, r *http.Request) {
 	u, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {

@@ -76,8 +76,8 @@ POST /login/oauth/access_token
 ### Device Code Approval (Authenticated)
 
 ```
-POST /api/v3/oauth/device/approve (requires authentication)
-POST /api/v3/oauth/device/reject (requires authentication)
+POST /api/ext/v1/oauth/device/approve (requires authentication)
+POST /api/ext/v1/oauth/device/reject (requires authentication)
   → ApproveDeviceCode / RejectDeviceCode handler
   → extract user from request context (TokenAuth middleware)
   → if no authenticated user: return 401 Unauthorized
@@ -132,7 +132,7 @@ GET /login/oauth/authorize?redirect_uri=...&state=...&code_challenge=...&code_ch
 gh auth login
   → POST /login/device/code → receives device_code + user_code + verification_uri
   → user opens verification_uri in browser (external console when configured, built-in fallback otherwise)
-  → authenticated console calls /api/v3/oauth/device/approve or user submits /login/device
+  → authenticated console calls /api/ext/v1/oauth/device/approve or user submits /login/device
   → server validates user is authenticated, approves or rejects device code
   → device code state changes from "pending" to "approved"
   → gh polls POST /login/oauth/access_token with device_code
@@ -143,12 +143,12 @@ gh auth login
 ## Invariants and Design Constraints
 
 - **Authenticated device approval.** The built-in `/login/device` POST endpoint and headless approve/reject APIs require an authenticated user. Device codes are never pre-approved by the request endpoint.
-- **Headless console support.** `OAUTH_DEVICE_VERIFICATION_URL` lets deployments point device prompts at an external console. The console calls `/api/v3/oauth/device/approve` or `/api/v3/oauth/device/reject` with an authenticated human token or embedded identity.
+- **Headless console support.** `OAUTH_DEVICE_VERIFICATION_URL` lets deployments point device prompts at an external console. The console calls `/api/ext/v1/oauth/device/approve` or `/api/ext/v1/oauth/device/reject` with an authenticated human token or embedded identity.
 - **Token bound to approver.** Access tokens generated via device code approval are bound to the approving user's identity (`DeviceCode.ApprovedBy`, `Token.UserID`). Token exchange validates that the approver exists and is of type "User", preventing privilege escalation via hardcoded admin lookup.
 - **PKCE and state required.** The `/login/oauth/authorize` endpoint requires `state` (CSRF protection) and PKCE `code_challenge` with `code_challenge_method=S256`, and `/login/oauth/access_token` validates `code_verifier` against the stored challenge before issuing a token.
 - **State echoed in redirect.** The authorization redirect includes the original `state` parameter, enabling the client to validate the response matches the request.
 - **Same-origin redirect validation.** The `Authorize` endpoint validates that `redirect_uri` points to the same host as the incoming request, with exceptions for `localhost` and `127.0.0.1`. This prevents open-redirect attacks while supporting local client callbacks.
-- **Selective authentication.** `/login/device/code` and `/login/oauth/access_token` remain unauthenticated (they implement the authentication flow itself). `/login/device`, `/api/v3/oauth/device/approve`, `/api/v3/oauth/device/reject`, and `/login/oauth/authorize` require authentication and/or security parameters.
+- **Selective authentication.** `/login/device/code` and `/login/oauth/access_token` remain unauthenticated (they implement the authentication flow itself). `/login/device`, `/api/ext/v1/oauth/device/approve`, `/api/ext/v1/oauth/device/reject`, and `/login/oauth/authorize` require authentication and/or security parameters.
 - **Approval only for active users.** Device-code approval and rejection reject users whose status is `banned`, `suspended`, or `deleted`.
 - **Device verification is throttled.** `/login/device` and the headless device approve/reject APIs are rate-limited to 5 requests per minute per client.
 - **Concrete service dependency.** The handler depends on `*service.Service` directly. This is acceptable because the package is small and the service contract is narrow (`CreateDeviceCode`, `ApproveDeviceCode`, `RejectDeviceCode`, `ExchangeDeviceCode`).

@@ -26,7 +26,7 @@ name="e2e-token-$(date +%s)"
 
 note "Creating token: $name"
 created="$(curl_json 201 \
-  -X POST "$BASE_URL/api/v3/user/tokens" \
+  -X POST "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$name\"}")"
@@ -42,14 +42,14 @@ assert_re "$(json_get login <<<"$me")" '^.+$'
 ok "New token works"
 
 note "Listing tokens"
-list="$(curl_json 200 -H "Authorization: token $TOKEN" "$BASE_URL/api/v3/user/tokens")"
+list="$(curl_json 200 -H "Authorization: token $TOKEN" "$BASE_URL/api/ext/v1/user/tokens")"
 list_id="$(jq -r --arg name "$name" '.[] | select(.name==$name) | .id' <<<"$list" | head -n1)"
 assert_eq "$list_id" "$new_id"
 ok "Token appears in list"
 
 note "Deleting token"
 code="$(http_code \
-  -X DELETE "$BASE_URL/api/v3/user/tokens" \
+  -X DELETE "$BASE_URL/api/ext/v1/user/tokens" \
   -H "Authorization: token $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"id\":$new_id}")"
@@ -62,7 +62,7 @@ assert_eq "$code" "401"
 ok "Deleted token rejected"
 
 note "Token removed from list"
-list="$(curl_json 200 -H "Authorization: token $TOKEN" "$BASE_URL/api/v3/user/tokens")"
+list="$(curl_json 200 -H "Authorization: token $TOKEN" "$BASE_URL/api/ext/v1/user/tokens")"
 remaining="$(jq -r --arg name "$name" '[.[] | select(.name==$name)] | length' <<<"$list")"
 assert_eq "$remaining" "0"
 ok "Token list clean"

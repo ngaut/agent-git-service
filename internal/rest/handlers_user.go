@@ -81,7 +81,7 @@ func (d *Deps) ListUserOrgs(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, 200, out)
 }
 
-// CreateUserOrg handles POST /api/v3/user/orgs
+// CreateUserOrg handles POST /api/ext/v1/user/orgs
 func (d *Deps) CreateUserOrg(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Login                       string `json:"login"`

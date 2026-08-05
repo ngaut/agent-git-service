@@ -97,7 +97,7 @@ Exchanges device code for tokens. Response depends on configured mode:
 
 Returns an OpenID Connect discovery document that points device authorization,
 token exchange, and JWKS verification back to the mock server. This lets the
-same mock server drive the generic `/api/v3/oidc/*` endpoints.
+same mock server drive the generic `/api/ext/v1/oidc/*` endpoints.
 
 ### GET /.well-known/jwks.json
 

@@ -140,7 +140,7 @@ ensure_org_exists() {
       fi
       payload+="}"
       curl_json 201 \
-        -X POST "$base_url/api/v3/user/orgs" \
+        -X POST "$base_url/api/ext/v1/user/orgs" \
         -H "Authorization: token $token" \
         -H "Content-Type: application/json" \
         -d "$payload" >/dev/null

@@ -49,7 +49,7 @@ HTTP integration tests for token endpoints.
 - Token has valid ID and value
 
 **Expected Behavior:**
-- POST `/api/v3/user/tokens` with name returns 201
+- POST `/api/ext/v1/user/tokens` with name returns 201
 - Response includes `id`, `name`, `token`, `created_at`
 - Token can authenticate immediately
 
@@ -200,7 +200,7 @@ LIMIT extra
 - Pagination works correctly
 
 **Expected Behavior:**
-- GET `/api/v3/user/tokens` returns array
+- GET `/api/ext/v1/user/tokens` returns array
 - Each token has `id`, `name`, `token`, `created_at`, `expires_at` (optional)
 - Results ordered by `created_at DESC`
 
@@ -208,9 +208,9 @@ LIMIT extra
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v3/user/tokens` | List user's tokens |
-| POST | `/api/v3/user/tokens` | Create new token |
-| DELETE | `/api/v3/user/tokens` | Delete token (by ID or value) |
+| GET | `/api/ext/v1/user/tokens` | List user's tokens |
+| POST | `/api/ext/v1/user/tokens` | Create new token |
+| DELETE | `/api/ext/v1/user/tokens` | Delete token (by ID or value) |
 
 ## Request/Response Examples
 
@@ -218,7 +218,7 @@ LIMIT extra
 
 **Request:**
 ```json
-POST /api/v3/user/tokens
+POST /api/ext/v1/user/tokens
 Authorization: token <admin_token>
 Content-Type: application/json
 
@@ -243,7 +243,7 @@ Content-Type: application/json
 
 **Request:**
 ```json
-DELETE /api/v3/user/tokens
+DELETE /api/ext/v1/user/tokens
 Authorization: token <admin_token>
 Content-Type: application/json
 
@@ -258,7 +258,7 @@ Content-Type: application/json
 
 **Request:**
 ```json
-DELETE /api/v3/user/tokens
+DELETE /api/ext/v1/user/tokens
 Authorization: token <admin_token>
 Content-Type: application/json
 

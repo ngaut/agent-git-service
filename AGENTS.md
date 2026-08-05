@@ -25,6 +25,14 @@
 - Follow standard Go naming: exported `CamelCase`, unexported `camelCase`, package names lowercase.
 - Place tests beside code as `*_test.go`; prefer table-driven tests for business rules and handlers.
 
+## API Surface Boundary
+- Use `/api/v3` and `/api/graphql` only for GitHub-compatible APIs. These routes primarily serve existing GitHub-speaking clients, including `gh`, GitHub REST/GraphQL SDKs, and Git-compatible automation.
+- A route may stay under `/api/v3` as a GitHub-shaped local shim only when it intentionally uses a GitHub-like path, request/response shape, or client behavior for compatibility. If behavior differs from GitHub.com, document it clearly as partial compatibility, a local shim, or an extension. Do not imply strict GitHub.com parity for local semantics.
+- Use `/api/ext/v1` for extension APIs that are not part of GitHub's API contract. New primitives such as agent runs, run-scoped token management, context packs, leases, agent policies, agent queues, scorecards, local wiki page APIs, aggregate views, and other platform control-plane features belong under `/api/ext/v1`.
+- Do not place extension APIs under `/api/v3` just because the resource is repo-scoped. Repo-scoped extension routes should use `/api/ext/v1/repos/{owner}/{repo}/...`.
+- Do not introduce new `/api/ags/...` routes. The extension namespace is `/api/ext/v1`; keep code constants, OpenAPI output, tests, docs, and compatibility matrices aligned with that path.
+- Discovery and OpenAPI output must keep the boundary explicit: `/api/v3` and `/api/v3/openapi.json` describe GitHub-compatible REST only, while `/api/ext/v1` and `/api/ext/v1/openapi.json` describe extension APIs only.
+
 ## Testing Guidelines
 - Follow the test pyramid in `docs/test-strategy.md`: package/service tests first, then router/integration, then acceptance.
 - Use `internal/testharness` for integration tests with real router wiring.

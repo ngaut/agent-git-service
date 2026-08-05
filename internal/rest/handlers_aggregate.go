@@ -23,7 +23,7 @@ const (
 	maxWikiBatchSlugs         = 50
 )
 
-// GetViewerSummary handles GET /api/v3/viewer/summary.
+// GetViewerSummary handles GET /api/ext/v1/viewer/summary.
 func (d *Deps) GetViewerSummary(w http.ResponseWriter, r *http.Request) {
 	viewer, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {
@@ -138,7 +138,7 @@ func (d *Deps) GetViewerSummary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
-// GetOrgManagementSummary handles GET /api/v3/orgs/{org}/management-summary.
+// GetOrgManagementSummary handles GET /api/ext/v1/orgs/{org}/management-summary.
 func (d *Deps) GetOrgManagementSummary(w http.ResponseWriter, r *http.Request) {
 	org := d.mustGetOrg(w, r)
 	if org == nil {
@@ -250,7 +250,7 @@ func (d *Deps) GetOrgManagementSummary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
-// GetRepoSummary handles GET /api/v3/repos/{owner}/{repo}/summary.
+// GetRepoSummary handles GET /api/ext/v1/repos/{owner}/{repo}/summary.
 func (d *Deps) GetRepoSummary(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	repo, err := d.Svc.GetRepo(r.Context(), full)
@@ -312,7 +312,7 @@ func (d *Deps) GetRepoSummary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
-// GetIssueThread handles GET /api/v3/repos/{owner}/{repo}/issues/{number}/thread.
+// GetIssueThread handles GET /api/ext/v1/repos/{owner}/{repo}/issues/{number}/thread.
 func (d *Deps) GetIssueThread(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	num, ok := mustIntParam(w, r, "number")
@@ -383,7 +383,7 @@ func (d *Deps) GetIssueThread(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
-// BatchGetWikiPages handles POST /api/v3/repos/{owner}/{repo}/wiki/pages/batch.
+// BatchGetWikiPages handles POST /api/ext/v1/repos/{owner}/{repo}/wiki/pages/batch.
 func (d *Deps) BatchGetWikiPages(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	var req struct {
@@ -476,7 +476,7 @@ func (d *Deps) BatchGetWikiPages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetWikiCatalog handles GET /api/v3/repos/{owner}/{repo}/wiki/catalog.
+// GetWikiCatalog handles GET /api/ext/v1/repos/{owner}/{repo}/wiki/catalog.
 func (d *Deps) GetWikiCatalog(w http.ResponseWriter, r *http.Request) {
 	full := repoFullName(r)
 	include := parseIncludeSet(r, []string{"tree", "pages", "labels"})
@@ -520,7 +520,7 @@ func (d *Deps) GetWikiCatalog(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
-// GetNotificationsSummary handles GET /api/v3/notifications/summary.
+// GetNotificationsSummary handles GET /api/ext/v1/notifications/summary.
 func (d *Deps) GetNotificationsSummary(w http.ResponseWriter, r *http.Request) {
 	user, err := d.Svc.GetCurrentUser(r.Context())
 	if err != nil {
@@ -781,7 +781,7 @@ func wikiTreeEntryJSON(repoFullName string, entry service.WikiTreeEntry) map[str
 		out["slug"] = entry.Slug
 		encodedSlug := url.PathEscape(entry.Slug)
 		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s", transform.HTMLBase(), repoFullName, encodedSlug)
-		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s", transform.APIBase(), repoFullName, encodedSlug)
+		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s", transform.ExtensionAPIBase(), repoFullName, encodedSlug)
 	}
 	return out
 }

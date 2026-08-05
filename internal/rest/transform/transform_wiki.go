@@ -24,7 +24,7 @@ func wikiPage(repoFullName, routePrefix string, p service.WikiPage) map[string]a
 		"title":    p.Title,
 		"body":     p.Body,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", extensionAPIBase(), repoFullName, routePrefix, apiSlug),
 		"sha":      p.SHA,
 		"labels":   WikiLabels(p.Labels),
 	}
@@ -50,7 +50,7 @@ func wikiPageSummary(repoFullName, routePrefix string, p service.WikiPageSummary
 		"slug":     p.Slug,
 		"title":    p.Title,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", extensionAPIBase(), repoFullName, routePrefix, apiSlug),
 		"labels":   WikiLabels(p.Labels),
 	}
 	if p.SHA != "" {
@@ -79,7 +79,7 @@ func wikiBacklink(repoFullName, routePrefix string, p service.WikiBacklink) map[
 		"title":    p.Title,
 		"snippet":  p.Snippet,
 		"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, p.Slug),
-		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
+		"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", extensionAPIBase(), repoFullName, routePrefix, apiSlug),
 	}
 }
 
@@ -98,7 +98,7 @@ func wikiSearchResponse(repoFullName, routePrefix string, resp service.WikiSearc
 			"score":    row.Score,
 			"snippet":  row.Snippet,
 			"html_url": fmt.Sprintf("%s/%s/wiki/%s", htmlBase(), repoFullName, row.Slug),
-			"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", apiBase(), repoFullName, routePrefix, apiSlug),
+			"url":      fmt.Sprintf("%s/repos/%s/%s/pages/%s", extensionAPIBase(), repoFullName, routePrefix, apiSlug),
 			"labels":   WikiLabels(row.Labels),
 		})
 	}
@@ -121,7 +121,7 @@ func WikiTreeEntry(repoFullName string, entry service.WikiTreeEntry, ref string)
 		"name": entry.Name,
 		"kind": entry.Kind,
 		"sha":  entry.SHA,
-		"url":  fmt.Sprintf("%s/repos/%s/wiki/tree?%s", apiBase(), repoFullName, treeQuery.Encode()),
+		"url":  fmt.Sprintf("%s/repos/%s/wiki/tree?%s", extensionAPIBase(), repoFullName, treeQuery.Encode()),
 	}
 	if entry.Kind == "page" {
 		apiSlug := url.PathEscape(entry.Slug)
@@ -133,7 +133,7 @@ func WikiTreeEntry(repoFullName string, entry service.WikiTreeEntry, ref string)
 		out["title"] = entry.Title
 		out["size"] = entry.Size
 		out["html_url"] = fmt.Sprintf("%s/%s/wiki/%s%s", htmlBase(), repoFullName, entry.Slug, pageQuery)
-		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s%s", apiBase(), repoFullName, apiSlug, pageQuery)
+		out["url"] = fmt.Sprintf("%s/repos/%s/wiki/pages/%s%s", extensionAPIBase(), repoFullName, apiSlug, pageQuery)
 	}
 	return out
 }

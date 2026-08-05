@@ -36,7 +36,6 @@ type Harness struct {
 	User    db.User          // pre-seeded default user (SiteAdmin: true)
 	Token   string           // pre-seeded auth token value
 	BaseURL string           // e.g. "http://localhost:8080"
-	GitRoot string           // temp dir root for gitstore
 
 	transformBase atomic.Value // string; base URL for per-request transform.Init
 	rootTB        testing.TB   // the testing.TB passed to New(); used for server cleanup
@@ -78,7 +77,6 @@ func New(tb testing.TB) *Harness {
 		User:    user,
 		Token:   tokenValue,
 		BaseURL: svc.BaseURL,
-		GitRoot: svc.AttachmentRoot,
 		rootTB:  tb,
 	}
 	h.transformBase.Store(svc.BaseURL)

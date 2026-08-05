@@ -18,7 +18,7 @@ func TestConditionalETag_PathCoverage(t *testing.T) {
 		{name: "current user", method: http.MethodGet, path: "/api/v3/user", want: true},
 		{name: "user repos", method: http.MethodGet, path: "/api/v3/user/repos", want: true},
 		{name: "user orgs", method: http.MethodGet, path: "/api/v3/user/orgs", want: true},
-		{name: "user agents", method: http.MethodGet, path: "/api/v3/user/agents", want: true},
+		{name: "user agents", method: http.MethodGet, path: "/api/ext/v1/user/agents", want: true},
 		{name: "user repo invitations", method: http.MethodGet, path: "/api/v3/user/repository_invitations", want: true},
 		{name: "user org invitations", method: http.MethodGet, path: "/api/v3/user/organization_invitations", want: true},
 		{name: "user profile", method: http.MethodGet, path: "/api/v3/users/alice", want: true},

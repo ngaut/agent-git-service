@@ -383,11 +383,11 @@ Phase 2 is not complete until each surface has at least one core-path integratio
 7. workflow dispatch and view
 8. search basics
 9. host rewrite behavior for `api.github.localhost`
-10. explicit org creation and listing through `/api/v3/user/orgs`
+10. explicit org creation through `/api/ext/v1/user/orgs` and GitHub-compatible org listing through `/api/v3/user/orgs`
 11. organization invitation create/list/accept/decline/revoke flows, including pending-membership role rendering for `admin` invitations
 12. outside collaborator listing and collaborator annotations on org-owned repos
 13. team-repo permission alias compatibility, including canonical `read`/`write` decisions for `triage` and `maintain`
-14. OIDC helper endpoints under `/api/v3/oidc/*`
+14. OIDC helper endpoints under `/api/ext/v1/oidc/*`
 15. connected login helper endpoints under `/auth/connected/*`
 16. embedded identity routing through middleware into service DB access
 

@@ -36,14 +36,10 @@ type Service struct {
 	WikiCatalog    *wikicatalog.Catalog
 	WikiBlob       *wikicatalog.BlobStore
 	BaseURL        string
-	AttachmentRoot string
 	Embedder       embedding.Embedder
 	AllowAnyToken  bool
 	OIDC           OIDCProvider
 	ConnectedLogin ConnectedLoginProvider
-	// AttachmentScanner is an optional hook for virus scanning or policy checks
-	// before an attachment is written to disk.
-	AttachmentScanner func(ctx context.Context, filename, contentType string, content []byte) error
 
 	WorkflowExecEnabled bool
 	WorkflowExecImage   string
@@ -91,13 +87,6 @@ type Service struct {
 
 	// tokenTouchCache deduplicates TouchToken DB writes in-memory.
 	tokenTouchCache sync.Map
-
-	// PresenceHub manages ephemeral user presence state
-	PresenceHub *PresenceHub
-
-	// typingHub exposes ephemeral issue typing state and subscriptions.
-	typingHubOnce sync.Once
-	typingHub     *TypingHub
 
 	wikiBacklinksMu    sync.RWMutex
 	wikiBacklinksCache map[string]map[string]wikiBacklinkCacheEntry
@@ -752,17 +741,9 @@ func (s *Service) DeleteRepo(ctx context.Context, fullName string) error {
 		return err
 	}
 	fullName = rep.FullName
-	var attachmentPaths []string
-	if err := s.DBForCtx(ctx).Model(&db.Attachment{}).Where("repository_id = ?", rep.ID).Pluck("stored_path", &attachmentPaths).Error; err != nil {
-		return err
-	}
 	if err := s.DBForCtx(ctx).Transaction(func(tx *gorm.DB) error {
 		return s.deleteRepoCascade(tx, rep.ID, fullName)
 	}); err != nil {
-		return err
-	}
-	s.cleanupAttachmentPaths(attachmentPaths)
-	if err := s.removeRepoAttachmentDir(rep.ID); err != nil {
 		return err
 	}
 	RepoCacheInvalidate(ctx, rep.ID)
@@ -868,9 +849,6 @@ func (s *Service) deleteRepoCascade(tx *gorm.DB, repoID uint, fullName string) e
 	// Phase 6: Issue-related records.
 	// Keep milestones last in this phase: issues.milestone_id has an FK to milestones.id.
 	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.IssueComment{})); err != nil {
-		return err
-	}
-	if err := del(tx.Where("repository_id = ?", repoID).Delete(&db.Attachment{})); err != nil {
 		return err
 	}
 	// Issue events reference issues via FK, so remove them before deleting issues.

@@ -150,13 +150,12 @@ func newWikiV2InternalTestService(t *testing.T) (*Service, func()) {
 	wikiBlob := wikicatalog.NewBlobStore(tmpDir)
 	wikiCat := wikicatalog.New(gdb, wikiBlob)
 	svc := &Service{
-		DB:             gdb,
-		Git:            store,
-		WikiCatalog:    wikiCat,
-		WikiBlob:       wikiBlob,
-		BaseURL:        "http://localhost:8080",
-		AttachmentRoot: tmpDir,
-		Embedder:       embedding.NopEmbedder{},
+		DB:          gdb,
+		Git:         store,
+		WikiCatalog: wikiCat,
+		WikiBlob:    wikiBlob,
+		BaseURL:     "http://localhost:8080",
+		Embedder:    embedding.NopEmbedder{},
 	}
 	wikiCat.DBFor = svc.DBForCtx
 	wikiCat.OnChangeSetCommitted = svc.WikiCatalogPostCommit

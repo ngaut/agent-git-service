@@ -65,7 +65,7 @@ register_agent() {
   note "register agent account"
   local resp
   resp="$(curl_json 201 \
-    -X POST "$BASE_URL/api/v3/agents" \
+    -X POST "$BASE_URL/api/ext/v1/agents" \
     -H "Content-Type: application/json" \
     -d "{\"prefix_login\":\"$AGENT_PREFIX\",\"default_repo_name\":\"$DEFAULT_REPO_NAME\"}")"
 
@@ -95,7 +95,7 @@ create_org_as_agent() {
   note "agent creates org $org_login"
   local org
   org="$(curl_json 201 \
-    -X POST "$BASE_URL/api/v3/user/orgs" \
+    -X POST "$BASE_URL/api/ext/v1/user/orgs" \
     -H "Authorization: token $agent_token" \
     -H "Content-Type: application/json" \
     -d "{\"login\":\"$org_login\"}")"
@@ -150,7 +150,7 @@ login_human() {
   note "login human via OIDC id_token"
   local resp
   resp="$(curl_json 200 \
-    -X POST "$BASE_URL/api/v3/oidc/callback" \
+    -X POST "$BASE_URL/api/ext/v1/oidc/callback" \
     -H "Content-Type: application/json" \
     -d "{\"id_token\":\"$id_token\"}")"
   human_token="$(json_get token <<<"$resp")"
@@ -163,7 +163,7 @@ create_invite_and_bind() {
   note "human creates agent invite"
   local invite
   invite="$(curl_json 201 \
-    -X POST "$BASE_URL/api/v3/agent-invites" \
+    -X POST "$BASE_URL/api/ext/v1/agent-invites" \
     -H "Authorization: token $human_token")"
   invite_token="$(json_get invite_token <<<"$invite")"
   assert_re "$invite_token" '^[a-f0-9]{32}$'
@@ -172,7 +172,7 @@ create_invite_and_bind() {
   note "human token is rejected for confirm"
   local human_confirm_code
   human_confirm_code="$(http_code \
-    -X POST "$BASE_URL/api/v3/agent-bindings/confirm" \
+    -X POST "$BASE_URL/api/ext/v1/agent-bindings/confirm" \
     -H "Authorization: token $human_token" \
     -H "Content-Type: application/json" \
     -d "{\"invite_token\":\"$invite_token\"}")"
@@ -182,7 +182,7 @@ create_invite_and_bind() {
   note "invalid invite token is rejected"
   local invalid_invite_code
   invalid_invite_code="$(http_code \
-    -X POST "$BASE_URL/api/v3/agent-bindings/confirm" \
+    -X POST "$BASE_URL/api/ext/v1/agent-bindings/confirm" \
     -H "Authorization: token $agent_token" \
     -H "Content-Type: application/json" \
     -d '{"invite_token":"missing-invite-token"}')"
@@ -192,7 +192,7 @@ create_invite_and_bind() {
   note "agent confirms binding"
   local binding
   binding="$(curl_json 201 \
-    -X POST "$BASE_URL/api/v3/agent-bindings/confirm" \
+    -X POST "$BASE_URL/api/ext/v1/agent-bindings/confirm" \
     -H "Authorization: token $agent_token" \
     -H "Content-Type: application/json" \
     -d "{\"invite_token\":\"$invite_token\"}")"
@@ -202,7 +202,7 @@ create_invite_and_bind() {
   note "consumed invite token returns conflict"
   local consumed_invite_code
   consumed_invite_code="$(http_code \
-    -X POST "$BASE_URL/api/v3/agent-bindings/confirm" \
+    -X POST "$BASE_URL/api/ext/v1/agent-bindings/confirm" \
     -H "Authorization: token $agent_token" \
     -H "Content-Type: application/json" \
     -d "{\"invite_token\":\"$invite_token\"}")"
@@ -215,7 +215,7 @@ verify_bound_agents_list() {
   local list
   list="$(curl_json 200 \
     -H "Authorization: token $human_token" \
-    "$BASE_URL/api/v3/user/agents")"
+    "$BASE_URL/api/ext/v1/user/agents")"
   if ! jq -e --arg login "$agent_login" '.[] | select(.agent.login == $login)' >/dev/null <<<"$list"; then
     echo "expected bound agent $agent_login in list" >&2
     echo "$list" >&2
@@ -252,7 +252,7 @@ reset_agent_token() {
   note "human resets agent token"
   local resp
   resp="$(curl_json 200 \
-    -X POST "$BASE_URL/api/v3/agent-bindings/$agent_login/reset-token" \
+    -X POST "$BASE_URL/api/ext/v1/agent-bindings/$agent_login/reset-token" \
     -H "Authorization: token $human_token")"
   new_agent_token="$(jq -r '.token.token // ""' <<<"$resp")"
   if [[ -z "$new_agent_token" ]]; then

@@ -23,6 +23,9 @@ import (
 
 const defaultNonGitBodyLimitBytes int64 = 50 << 20
 const defaultRESTPrefix = "/api/v3"
+const extensionAPIPrefix = "/api/ext/v1"
+
+var extensionAPIPrefixes = []string{extensionAPIPrefix}
 
 // RegisterRoutes wires all routes onto the router and returns the host-aware
 // mux that handles api.github.localhost path rewriting.
@@ -150,17 +153,21 @@ func registerOAuthRoutes(r chi.Router, oauthHandler *oauth.Handler, embeddedAuth
 	deviceVerificationRateLimit := srvmiddleware.RateLimit(5, time.Minute)
 	r.With(deviceVerificationRateLimit, authMW).Get("/login/device", oauthHandler.DeviceCodeVerification)
 	r.With(deviceVerificationRateLimit, authMW).Post("/login/device", oauthHandler.DeviceCodeVerification)
-	r.With(deviceVerificationRateLimit, authMW).Post("/api/v3/oauth/device/approve", oauthHandler.ApproveDeviceCode)
-	r.With(deviceVerificationRateLimit, authMW).Post("/api/v3/oauth/device/reject", oauthHandler.RejectDeviceCode)
+	for _, prefix := range extensionAPIPrefixes {
+		r.With(deviceVerificationRateLimit, authMW).Post(prefix+"/oauth/device/approve", oauthHandler.ApproveDeviceCode)
+		r.With(deviceVerificationRateLimit, authMW).Post(prefix+"/oauth/device/reject", oauthHandler.RejectDeviceCode)
+	}
 }
 
 func registerPublicAuthRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
 		r.Use(rateLimitMw)
-		r.Post("/api/v3/oidc/device/code", handlers.OIDCDeviceCode)
-		r.Post("/api/v3/oidc/session", handlers.OIDCSession)
-		r.Post("/api/v3/oidc/callback", handlers.OIDCCallback)
-		r.Post("/api/v3/oidc/lookup", handlers.OIDCLookup)
+		for _, prefix := range extensionAPIPrefixes {
+			r.Post(prefix+"/oidc/device/code", handlers.OIDCDeviceCode)
+			r.Post(prefix+"/oidc/session", handlers.OIDCSession)
+			r.Post(prefix+"/oidc/callback", handlers.OIDCCallback)
+			r.Post(prefix+"/oidc/lookup", handlers.OIDCLookup)
+		}
 		r.Get("/auth/connected/login", handlers.ConnectedLogin)
 		r.Get("/auth/connected/callback", handlers.ConnectedCallback)
 	})
@@ -170,7 +177,9 @@ func registerAgentPublicRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw fu
 	r.Group(func(r chi.Router) {
 		r.Use(rateLimitMw)
 		// Agent registration (no auth required)
-		r.Post("/api/v3/agents", handlers.CreateAgent)
+		for _, prefix := range extensionAPIPrefixes {
+			r.Post(prefix+"/agents", handlers.CreateAgent)
+		}
 	})
 }
 
@@ -234,7 +243,10 @@ func registerAPIDiscoveryRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw f
 		r.Use(rateLimitMw)
 		r.Get("/api/v3", handlers.GetMeta)  // without trailing slash
 		r.Get("/api/v3/", handlers.GetMeta) // with trailing slash
-		r.Get("/api/v3/openapi.json", handlers.GetOpenAPI)
+		r.Get("/api/v3/openapi.json", handlers.GetGitHubCompatibleOpenAPI)
+		r.Get(extensionAPIPrefix, handlers.GetExtensionMeta)
+		r.Get(extensionAPIPrefix+"/", handlers.GetExtensionMeta)
+		r.Get(extensionAPIPrefix+"/openapi.json", handlers.GetOpenAPI)
 		r.Get("/api/v3/meta", handlers.GetServerMeta)
 		r.Get("/api/v3/rate_limit", handlers.GetRateLimit)
 	})
@@ -254,7 +266,6 @@ func registerPublicRepoRoutes(r chi.Router, handlers *rest.Deps, rateLimitMw fun
 		r.Use(srvmiddleware.RequireAuthForWrites(handlers.Svc))
 
 		registerRepoRoutes(r, handlers)
-		registerIssueAttachmentRoutes(r, handlers)
 	})
 }
 
@@ -273,8 +284,6 @@ func registerAuthenticatedRoutes(r chi.Router, handlers *rest.Deps, gqlSrv *grap
 		r.Use(rateLimitMw)
 
 		registerGraphQLRoutes(r, gqlSrv)
-		registerRealtimeIssueRoutes(r, handlers)
-		registerPresenceRoutes(r, handlers)
 		registerUserScopedRoutes(r, handlers)
 		registerAgentBindingRoutes(r, handlers)
 		registerUserLookupRoutes(r, handlers)
@@ -294,56 +303,41 @@ func registerGraphQLRoutes(r chi.Router, gqlSrv *graphql.Server) {
 	r.Post("/graphql", gqlSrv.Handler)
 }
 
-func registerRealtimeIssueRoutes(r chi.Router, handlers *rest.Deps) {
-	r.Get("/api/v3/issues/{id}/typing", handlers.SubscribeIssueTyping)
-	r.Post("/api/v3/issues/{id}/typing", handlers.SignalIssueTyping)
-}
-
-func registerIssueAttachmentRoutes(r chi.Router, handlers *rest.Deps) {
-	r.Post("/api/v3/repos/{owner}/{repo}/attachments", handlers.UploadRepoAttachment)
-	r.Post("/api/v3/repositories/{repo_id}/attachments", handlers.UploadRepoAttachmentByID)
-	r.Post("/api/v3/issues/{id}/attachments", handlers.UploadIssueAttachment)
-	r.Get("/api/v3/issues/{id}/attachments", handlers.ListIssueAttachments)
-	r.Get("/api/v3/attachments/{uuid}", handlers.DownloadIssueAttachment)
-	r.Delete("/api/v3/attachments/{uuid}", handlers.DeleteIssueAttachment)
-}
-
-func registerPresenceRoutes(r chi.Router, handlers *rest.Deps) {
-	// Presence API (requires authentication)
-	r.Post("/api/v3/presence/heartbeat", handlers.Presence.PostPresenceHeartbeat)
-	r.Get("/api/v3/issues/{issue_id}/presence", handlers.Presence.GetIssuePresence)
-	r.Get("/api/v3/users/{user_id}/last-seen", handlers.Presence.GetUserLastSeen)
-	r.Get("/api/v3/user/presence/privacy", handlers.Presence.GetPresencePrivacy)
-	r.Put("/api/v3/user/presence/privacy", handlers.Presence.PutPresencePrivacy)
-}
-
 func registerAgentBindingRoutes(r chi.Router, handlers *rest.Deps) {
-	r.Post("/api/v3/agent-invites", handlers.CreateAgentInvite)
-	r.Post("/api/v3/agent-bindings/confirm", handlers.ConfirmAgentBinding)
-	r.Patch("/api/v3/agent-bindings/{agent_login}", handlers.RenameBoundAgent)
-	r.Post("/api/v3/agent-bindings/{agent_login}/reset-token", handlers.ResetAgentToken)
-	r.Post("/api/v3/agent-bindings/{agent_login}/switch-session", handlers.SwitchAgentSession)
-	r.Post("/api/v3/agent-bindings/{agent_login}/refresh-session", handlers.RefreshAgentSwitchSession)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Post(prefix+"/agent-invites", handlers.CreateAgentInvite)
+		r.Post(prefix+"/agent-bindings/confirm", handlers.ConfirmAgentBinding)
+		r.Patch(prefix+"/agent-bindings/{agent_login}", handlers.RenameBoundAgent)
+		r.Post(prefix+"/agent-bindings/{agent_login}/reset-token", handlers.ResetAgentToken)
+		r.Post(prefix+"/agent-bindings/{agent_login}/switch-session", handlers.SwitchAgentSession)
+		r.Post(prefix+"/agent-bindings/{agent_login}/refresh-session", handlers.RefreshAgentSwitchSession)
+	}
 }
 
 func registerUserScopedRoutes(r chi.Router, handlers *rest.Deps) {
 	// Current user
 	r.Get("/api/v3/user", handlers.GetAuthenticatedUser)
-	r.Get("/api/v3/viewer/summary", handlers.GetViewerSummary)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Get(prefix+"/viewer/summary", handlers.GetViewerSummary)
+	}
 	r.Post("/api/v3/user/repos", handlers.CreateUserRepo)
 	r.Get("/api/v3/user/repos", handlers.ListUserRepos)
 	r.Get("/api/v3/user/orgs", handlers.ListUserOrgs)
-	r.Post("/api/v3/user/orgs", handlers.CreateUserOrg)
-	r.Get("/api/v3/user/agents", handlers.ListBoundAgents)
+	r.Post(extensionAPIPrefix+"/user/orgs", handlers.CreateUserOrg)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Get(prefix+"/user/agents", handlers.ListBoundAgents)
+	}
 	r.Get("/api/v3/user/starred", handlers.ListStarredRepos)
 	r.Get("/api/v3/user/starred/{owner}/{repo}", handlers.IsRepoStarred)
 	r.Put("/api/v3/user/starred/{owner}/{repo}", handlers.StarRepo)
 	r.Delete("/api/v3/user/starred/{owner}/{repo}", handlers.UnstarRepo)
 
 	// Tokens
-	r.Get("/api/v3/user/tokens", handlers.ListTokens)
-	r.Post("/api/v3/user/tokens", handlers.CreateToken)
-	r.Delete("/api/v3/user/tokens", handlers.DeleteToken)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Get(prefix+"/user/tokens", handlers.ListTokens)
+		r.Post(prefix+"/user/tokens", handlers.CreateToken)
+		r.Delete(prefix+"/user/tokens", handlers.DeleteToken)
+	}
 
 	// SSH keys
 	r.Get("/api/v3/user/keys", handlers.ListSSHKeys)
@@ -372,7 +366,9 @@ func registerUserScopedRoutes(r chi.Router, handlers *rest.Deps) {
 
 	// Notifications
 	r.Get("/api/v3/notifications", handlers.ListNotifications)
-	r.Get("/api/v3/notifications/summary", handlers.GetNotificationsSummary)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Get(prefix+"/notifications/summary", handlers.GetNotificationsSummary)
+	}
 	r.Put("/api/v3/notifications", handlers.MarkNotificationsRead)
 
 	// Repository Invitations (user-specific)
@@ -398,7 +394,9 @@ func registerUserLookupRoutes(r chi.Router, handlers *rest.Deps) {
 func registerOrgRoutes(r chi.Router, handlers *rest.Deps) {
 	// Orgs
 	r.Get("/api/v3/orgs/{org}", handlers.GetOrg)
-	r.Get("/api/v3/orgs/{org}/management-summary", handlers.GetOrgManagementSummary)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Get(prefix+"/orgs/{org}/management-summary", handlers.GetOrgManagementSummary)
+	}
 	r.Get("/api/v3/orgs/{org}/members", handlers.ListOrgMembers)
 	r.Delete("/api/v3/orgs/{org}/members/{username}", handlers.DeleteOrgMember)
 	r.Put("/api/v3/orgs/{org}/memberships/{username}", handlers.SetOrgMembership)
@@ -457,39 +455,45 @@ func registerRepoPagesRoutes(r chi.Router, handlers *rest.Deps) {
 }
 
 func registerRepoWikiRoutes(r chi.Router, handlers *rest.Deps) {
-	r.Post("/api/v3/admin/wiki/repos/{owner}/{repo}/repair-locks", handlers.RepairWikiLocks)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/state", handlers.GetWikiState)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/tree", handlers.ListWikiTree)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/catalog", handlers.GetWikiCatalog)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/reconcile/request", handlers.RequestWikiReconcile)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/reconcile", handlers.ReconcileWiki)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/compact", handlers.CompactWikiHistory)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/compact/{jobID}", handlers.GetWikiCompactionJob)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/move", handlers.MoveWikiPagePrefix)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages", handlers.ListWikiPages)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/pages/batch", handlers.BatchGetWikiPages)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/search", handlers.SearchWikiPages)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.ListWikiPageLabels)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.AddWikiPageLabels)
-	r.Put("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.SetWikiPageLabels)
-	r.Delete("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels/{name}", handlers.RemoveWikiPageLabel)
-	r.Delete("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.RemoveAllWikiPageLabels)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.GetWikiPage)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/history", handlers.ListWikiPageHistory)
-	r.Get("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks", handlers.ListWikiBacklinks)
-	r.Post("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move", handlers.MoveWikiPage)
-	r.Put("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.PutWikiPage)
-	r.Delete("/api/v3/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.DeleteWikiPage)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Post(prefix+"/admin/wiki/repos/{owner}/{repo}/repair-locks", handlers.RepairWikiLocks)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/state", handlers.GetWikiState)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/tree", handlers.ListWikiTree)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/catalog", handlers.GetWikiCatalog)
+		r.Post(prefix+"/repos/{owner}/{repo}/wiki/reconcile/request", handlers.RequestWikiReconcile)
+		r.Post(prefix+"/repos/{owner}/{repo}/wiki/reconcile", handlers.ReconcileWiki)
+		r.Post(prefix+"/repos/{owner}/{repo}/wiki/compact", handlers.CompactWikiHistory)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/compact/{jobID}", handlers.GetWikiCompactionJob)
+		r.Post(prefix+"/repos/{owner}/{repo}/wiki/move", handlers.MoveWikiPagePrefix)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/pages", handlers.ListWikiPages)
+		r.Post(prefix+"/repos/{owner}/{repo}/wiki/pages/batch", handlers.BatchGetWikiPages)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/search", handlers.SearchWikiPages)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.ListWikiPageLabels)
+		r.Post(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.AddWikiPageLabels)
+		r.Put(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.SetWikiPageLabels)
+		r.Delete(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/labels/{name}", handlers.RemoveWikiPageLabel)
+		r.Delete(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/labels", handlers.RemoveAllWikiPageLabels)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.GetWikiPage)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/history", handlers.ListWikiPageHistory)
+		r.Get(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks", handlers.ListWikiBacklinks)
+		r.Post(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}/move", handlers.MoveWikiPage)
+		r.Put(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.PutWikiPage)
+		r.Delete(prefix+"/repos/{owner}/{repo}/wiki/pages/{slug}", handlers.DeleteWikiPage)
+	}
 }
 
 func registerRepoCoreRoutes(r chi.Router, handlers *rest.Deps) {
 	// Repos
-	r.Get("/api/v3/repos/{owner}/{repo}/summary", handlers.GetRepoSummary)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Get(prefix+"/repos/{owner}/{repo}/summary", handlers.GetRepoSummary)
+	}
 	r.Get("/api/v3/repos/{owner}/{repo}", handlers.GetRepo)
 	r.Patch("/api/v3/repos/{owner}/{repo}", handlers.UpdateRepo)
 	r.Delete("/api/v3/repos/{owner}/{repo}", handlers.DeleteRepo)
 	r.Post("/api/v3/repos/{owner}/{repo}/transfer", handlers.TransferRepo)
-	r.Post("/api/v3/repos/{owner}/{repo}/team-sharing/enable", handlers.EnableRepoTeamSharing)
+	for _, prefix := range extensionAPIPrefixes {
+		r.Post(prefix+"/repos/{owner}/{repo}/team-sharing/enable", handlers.EnableRepoTeamSharing)
+	}
 	r.Post("/api/v3/repos/{owner}/{repo}/forks", handlers.ForkRepo)
 	r.Get("/api/v3/repos/{owner}/{repo}/forks", handlers.ListRepoForks)
 	r.Get("/api/v3/repos/{owner}/{repo}/topics", handlers.GetRepoTopics)
@@ -547,7 +551,7 @@ func registerIssueRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/repos/{owner}/{repo}/issues", handlers.CreateIssue)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/comments", handlers.ListRepoIssueComments)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/comments/{comment_id}", handlers.GetIssueComment)
-	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}/thread", handlers.GetIssueThread)
+	r.Get(extensionAPIPrefix+"/repos/{owner}/{repo}/issues/{number}/thread", handlers.GetIssueThread)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}", handlers.GetIssue)
 	r.Patch("/api/v3/repos/{owner}/{repo}/issues/{number}", handlers.UpdateIssue)
 	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}/comments", handlers.ListIssueComments)
@@ -569,11 +573,6 @@ func registerIssueRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Post("/api/v3/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", handlers.CreateIssueReaction)
 	r.Delete("/api/v3/repos/{owner}/{repo}/issues/{number}/reactions/{reaction_id}", handlers.DeleteIssueReaction)
 	r.Delete("/api/v3/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}", handlers.DeleteIssueReaction)
-	// Read receipts
-	r.Post("/api/v3/repos/{owner}/{repo}/issues/{number}/read", handlers.MarkIssueRead)
-	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}/read-state", handlers.GetIssueReadState)
-	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}/participants/read-state", handlers.GetIssueParticipantsReadState)
-	r.Get("/api/v3/repos/{owner}/{repo}/issues/{number}/unread-count", handlers.GetIssueUnreadCount)
 }
 
 func registerPullRequestRoutes(r chi.Router, handlers *rest.Deps) {
@@ -605,7 +604,6 @@ func registerPullRequestRoutes(r chi.Router, handlers *rest.Deps) {
 	r.Delete("/api/v3/repos/{owner}/{repo}/pulls/comments/{comment_id}", handlers.DeletePRReviewComment)
 	r.Put("/api/v3/repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/resolve", handlers.ResolvePRReviewComment)
 	r.Put("/api/v3/repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/unresolve", handlers.UnresolvePRReviewComment)
-	r.Put("/api/v3/repos/{owner}/{repo}/pulls/{number}/ready_for_review", handlers.MarkPRReadyForReview)
 	r.Get("/api/v3/repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}", handlers.GetPRReview)
 	r.Put("/api/v3/repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}", handlers.UpdatePRReview)
 	r.Get("/api/v3/repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/comments", handlers.ListReviewCommentsForReview)

@@ -9,7 +9,6 @@ import (
 	"github.com/ngaut/agent-git-service/internal/db"
 	"github.com/ngaut/agent-git-service/internal/rest/respond"
 	"github.com/ngaut/agent-git-service/internal/rest/transform"
-	"github.com/ngaut/agent-git-service/internal/service"
 )
 
 const maxIssueCommentThreadDepth = 5
@@ -211,13 +210,6 @@ func (d *Deps) CreateIssueComment(w http.ResponseWriter, r *http.Request) {
 		}
 		respond.ServiceErrorRequest(r, w, err)
 		return
-	}
-	if issue, issueErr := d.Svc.GetIssue(r.Context(), full, num); issueErr == nil {
-		d.Svc.TypingHub().Signal(issue.ID, service.TypingUser{
-			ID:    u.ID,
-			Login: u.Login,
-			Name:  u.Name,
-		}, false)
 	}
 	logErr(r.Context(), "CreateIssueComment: webhook", d.Svc.DispatchWebhookEvent(r.Context(), c.RepositoryID, "issue_comment", "created", d.webhookIssueCommentPayload(r.Context(), c, "created")))
 	reactionCounts, err := d.Svc.CountReactions(r.Context(), 0, c.ID)

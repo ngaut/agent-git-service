@@ -103,9 +103,18 @@ func apiBase() string {
 	return strings.TrimRight(st.baseURL, "/") + APIPrefix()
 }
 
+func extensionAPIBase() string {
+	st := currentState()
+	return strings.TrimRight(st.baseURL, "/") + ExtensionAPIPrefix()
+}
+
 // APIBase returns the absolute API base URL for handlers that build URLs
 // outside the transform package.
 func APIBase() string { return apiBase() }
+
+// ExtensionAPIBase returns the absolute extension API base URL for handlers that
+// build URLs outside the transform package.
+func ExtensionAPIBase() string { return extensionAPIBase() }
 
 // host extracts the hostname from baseURL for ssh/git URL generation.
 func host() string {
@@ -128,6 +137,8 @@ func HTMLBase() string {
 }
 
 func APIPrefix() string { return "/api/v3" }
+
+func ExtensionAPIPrefix() string { return "/api/ext/v1" }
 
 func repoAPIURL(fullName string) string  { return base() + APIPrefix() + "/repos/" + fullName }
 func repoHTMLURL(fullName string) string { return htmlBase() + "/" + fullName }

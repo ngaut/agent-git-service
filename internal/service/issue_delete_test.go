@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"testing"
 
@@ -39,8 +38,6 @@ func TestDeleteIssueByID_CascadeAndIsolation(t *testing.T) {
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("create issue: %v", err)
 	}
-	attachment := writeAttachmentFixture(t, svc, issue.ID, owner, "issue-notes.txt", "issue attachment")
-	attachmentPath := attachmentAbsPath(svc, attachment.StoredPath)
 	if err := svc.DB.Model(&issue).Association("Labels").Append(&label); err != nil {
 		t.Fatalf("associate issue label: %v", err)
 	}
@@ -85,7 +82,6 @@ func TestDeleteIssueByID_CascadeAndIsolation(t *testing.T) {
 
 	assertCount(t, svc, &db.Issue{}, 0, "id = ?", issue.ID)
 	assertCount(t, svc, &db.IssueComment{}, 0, "repository_id = ? AND issue_number = ?", repo.ID, issue.Number)
-	assertCount(t, svc, &db.Attachment{}, 0, "issue_id = ?", issue.ID)
 	assertCount(t, svc, &db.IssueEvent{}, 0, "issue_id = ?", issue.ID)
 	assertCount(t, svc, &db.Reaction{}, 0, "issue_id = ?", issue.ID)
 	assertCount(t, svc, &db.ProjectItem{}, 0, "type = ? AND content_id = ?", "ISSUE", fmt.Sprintf("Issue_%d", issue.ID))
@@ -98,10 +94,6 @@ func TestDeleteIssueByID_CascadeAndIsolation(t *testing.T) {
 	if joinCount != 0 {
 		t.Fatalf("expected issue_labels to be empty, got %d", joinCount)
 	}
-	if _, err := os.Stat(attachmentPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected issue attachment file to be removed, got %v", err)
-	}
-
 	assertCount(t, svc, &db.Issue{}, 1, "id = ?", otherIssue.ID)
 	assertCount(t, svc, &db.IssueComment{}, 1, "repository_id = ? AND issue_number = ?", otherRepo.ID, otherIssue.Number)
 	assertCount(t, svc, &db.Reaction{}, 1, "issue_id = ?", otherIssue.ID)
@@ -140,7 +132,6 @@ func TestDeleteIssueByID_RollbackOnError(t *testing.T) {
 	if err := svc.DB.Create(&issue).Error; err != nil {
 		t.Fatalf("create issue: %v", err)
 	}
-	writeAttachmentFixture(t, svc, issue.ID, owner, "issue-rollback.txt", "rollback attachment")
 	if err := svc.DB.Model(&issue).Association("Labels").Append(&label); err != nil {
 		t.Fatalf("associate issue label: %v", err)
 	}
@@ -184,7 +175,6 @@ func TestDeleteIssueByID_RollbackOnError(t *testing.T) {
 
 	assertCount(t, svc, &db.Issue{}, 1, "id = ?", issue.ID)
 	assertCount(t, svc, &db.IssueComment{}, 1, "repository_id = ? AND issue_number = ?", repo.ID, issue.Number)
-	assertCount(t, svc, &db.Attachment{}, 1, "issue_id = ?", issue.ID)
 	assertCount(t, svc, &db.IssueEvent{}, 1, "issue_id = ?", issue.ID)
 	assertCount(t, svc, &db.Reaction{}, 1, "issue_id = ?", issue.ID)
 	assertCount(t, svc, &db.ProjectItem{}, 1, "type = ? AND content_id = ?", "ISSUE", fmt.Sprintf("Issue_%d", issue.ID))

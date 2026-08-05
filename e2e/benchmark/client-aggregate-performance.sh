@@ -186,7 +186,7 @@ discover_wiki_slugs() {
     echo "$E2E_PERF_WIKI_SLUGS"
     return 0
   fi
-  request_optional GET "$BASE_URL/api/v3/repos/$repo_full/wiki/catalog?include=pages&recursive=true" | jq -r --argjson limit "$WIKI_BATCH_LIMIT" '[.pages[]?.slug][0:$limit] | join(",")'
+  request_optional GET "$BASE_URL/api/ext/v1/repos/$repo_full/wiki/catalog?include=pages&recursive=true" | jq -r --argjson limit "$WIKI_BATCH_LIMIT" '[.pages[]?.slug][0:$limit] | join(",")'
 }
 
 viewer_old_chain() {
@@ -195,11 +195,11 @@ viewer_old_chain() {
   request GET "$BASE_URL/api/v3/user/orgs"
   request GET "$BASE_URL/api/v3/user/repository_invitations"
   request GET "$BASE_URL/api/v3/user/organization_invitations"
-  request GET "$BASE_URL/api/v3/user/agents"
+  request GET "$BASE_URL/api/ext/v1/user/agents"
 }
 
 viewer_new_chain() {
-  request GET "$BASE_URL/api/v3/viewer/summary?include=user,orgs,repositories,invitations,agent_bindings&per_page=$PER_PAGE"
+  request GET "$BASE_URL/api/ext/v1/viewer/summary?include=user,orgs,repositories,invitations,agent_bindings&per_page=$PER_PAGE"
 }
 
 notifications_old_chain() {
@@ -207,7 +207,7 @@ notifications_old_chain() {
 }
 
 notifications_new_chain() {
-  request GET "$BASE_URL/api/v3/notifications/summary?include=subject,repository&per_page=$PER_PAGE"
+  request GET "$BASE_URL/api/ext/v1/notifications/summary?include=subject,repository&per_page=$PER_PAGE"
 }
 
 org_old_chain() {
@@ -219,18 +219,18 @@ org_old_chain() {
 }
 
 org_new_chain() {
-  request GET "$BASE_URL/api/v3/orgs/$ORG/management-summary?include=org,viewer,repos,members,invitations,teams"
+  request GET "$BASE_URL/api/ext/v1/orgs/$ORG/management-summary?include=org,viewer,repos,members,invitations,teams"
 }
 
 repo_old_chain() {
   request GET "$BASE_URL/api/v3/repos/$REPO_FULL"
   request GET "$BASE_URL/api/v3/repos/$REPO_FULL/labels"
-  request_optional GET "$BASE_URL/api/v3/repos/$REPO_FULL/wiki/pages?recursive=true&per_page=$PER_PAGE"
-  request GET "$BASE_URL/api/v3/user/agents"
+  request_optional GET "$BASE_URL/api/ext/v1/repos/$REPO_FULL/wiki/pages?recursive=true&per_page=$PER_PAGE"
+  request GET "$BASE_URL/api/ext/v1/user/agents"
 }
 
 repo_new_chain() {
-  request GET "$BASE_URL/api/v3/repos/$REPO_FULL/summary?include=repo,viewer,counts,labels,wiki,agents"
+  request GET "$BASE_URL/api/ext/v1/repos/$REPO_FULL/summary?include=repo,viewer,counts,labels,wiki,agents"
 }
 
 issue_list_old_chain() {
@@ -253,22 +253,22 @@ issue_thread_old_chain() {
 }
 
 issue_thread_new_chain() {
-  request GET "$BASE_URL/api/v3/repos/$REPO_FULL/issues/$ISSUE_NUMBER/thread?include=issue,comments&comments_per_page=$COMMENT_PER_PAGE"
+  request GET "$BASE_URL/api/ext/v1/repos/$REPO_FULL/issues/$ISSUE_NUMBER/thread?include=issue,comments&comments_per_page=$COMMENT_PER_PAGE"
 }
 
 wiki_catalog_old_chain() {
-  request GET "$BASE_URL/api/v3/repos/$REPO_FULL/wiki/tree"
-  request GET "$BASE_URL/api/v3/repos/$REPO_FULL/wiki/pages?recursive=true&per_page=$PER_PAGE"
+  request GET "$BASE_URL/api/ext/v1/repos/$REPO_FULL/wiki/tree"
+  request GET "$BASE_URL/api/ext/v1/repos/$REPO_FULL/wiki/pages?recursive=true&per_page=$PER_PAGE"
 }
 
 wiki_catalog_new_chain() {
-  request GET "$BASE_URL/api/v3/repos/$REPO_FULL/wiki/catalog?include=tree,pages,labels&recursive=true"
+  request GET "$BASE_URL/api/ext/v1/repos/$REPO_FULL/wiki/catalog?include=tree,pages,labels&recursive=true"
 }
 
 wiki_batch_old_chain() {
   local slug
   for slug in "${WIKI_SLUGS[@]}"; do
-    request GET "$BASE_URL/api/v3/repos/$REPO_FULL/wiki/pages/$(url_path_escape "$slug")"
+    request GET "$BASE_URL/api/ext/v1/repos/$REPO_FULL/wiki/pages/$(url_path_escape "$slug")"
   done
 }
 
@@ -277,7 +277,7 @@ wiki_batch_new_chain() {
   local body
   slugs_json="$(printf '%s\n' "${WIKI_SLUGS[@]}" | jq -R . | jq -s .)"
   body="$(jq -cn --argjson slugs "$slugs_json" '{slugs: $slugs, include: ["body", "labels"], body_limit: 20000}')"
-  request POST "$BASE_URL/api/v3/repos/$REPO_FULL/wiki/pages/batch" "$body"
+  request POST "$BASE_URL/api/ext/v1/repos/$REPO_FULL/wiki/pages/batch" "$body"
 }
 
 note "Base URL: $BASE_URL"

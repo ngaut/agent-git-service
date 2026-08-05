@@ -46,7 +46,7 @@ The implemented collaboration model is built from these rules:
 ### Organization
 
 - Implemented as `User{Type="Organization"}`.
-- Created explicitly through `CreateOrg` and `POST /api/v3/user/orgs`.
+- Created explicitly through `CreateOrg` and `POST /api/ext/v1/user/orgs`.
 - Carries `DefaultRepositoryPermission`, which is the org-wide base repository permission for explicit org members.
 - `GET /api/v3/orgs/{org}` only resolves existing org accounts; it does not auto-create them.
 

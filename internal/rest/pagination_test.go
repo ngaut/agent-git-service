@@ -78,13 +78,13 @@ func TestPaginateEmpty(t *testing.T) {
 }
 
 func TestSetLinkHeader(t *testing.T) {
-	r := httptest.NewRequest("GET", "/api/v3/repos/a/b/issues?state=open", nil)
+	r := httptest.NewRequest("GET", "/api/ext/v1/repos/a/b/issues?state=open", nil)
 	w := httptest.NewRecorder()
 
 	setLinkHeader(w, r, "http://localhost:8080", 50, 2, 20)
 
 	link := w.Header().Get("Link")
-	expected := `<http://localhost:8080/api/v3/repos/a/b/issues?page=3&per_page=20&state=open>; rel="next", <http://localhost:8080/api/v3/repos/a/b/issues?page=1&per_page=20&state=open>; rel="prev", <http://localhost:8080/api/v3/repos/a/b/issues?page=1&per_page=20&state=open>; rel="first", <http://localhost:8080/api/v3/repos/a/b/issues?page=3&per_page=20&state=open>; rel="last"`
+	expected := `<http://localhost:8080/api/ext/v1/repos/a/b/issues?page=3&per_page=20&state=open>; rel="next", <http://localhost:8080/api/ext/v1/repos/a/b/issues?page=1&per_page=20&state=open>; rel="prev", <http://localhost:8080/api/ext/v1/repos/a/b/issues?page=1&per_page=20&state=open>; rel="first", <http://localhost:8080/api/ext/v1/repos/a/b/issues?page=3&per_page=20&state=open>; rel="last"`
 
 	if link != expected {
 		t.Errorf("\ngot:  %s\nwant: %s", link, expected)
@@ -92,7 +92,7 @@ func TestSetLinkHeader(t *testing.T) {
 }
 
 func TestSetLinkHeaderPreservesEscapedPath(t *testing.T) {
-	r := httptest.NewRequest("GET", "/api/v3/repos/a/b/wiki/pages/guides%2Fsetup/history?per_page=1", nil)
+	r := httptest.NewRequest("GET", "/api/ext/v1/repos/a/b/wiki/pages/guides%2Fsetup/history?per_page=1", nil)
 	w := httptest.NewRecorder()
 
 	setLinkHeader(w, r, "http://localhost:8080", 3, 1, 1)

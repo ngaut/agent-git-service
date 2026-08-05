@@ -157,7 +157,7 @@ Handlers follow a consistent pattern:
 
 ### Wiki Backlinks
 
-`GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks` follows the standard REST pattern:
+`GET /api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/backlinks` follows the standard REST pattern:
 
 - resolve `{owner}`, `{repo}`, and `{slug}` from the path
 - delegate backlink lookup and cache handling to `service.ListWikiBacklinks`
@@ -168,16 +168,16 @@ Wiki path-slug hierarchy rules:
 
 - page slugs use the single writable path grammar, for example `guides/setup`
 - wiki page routes treat `{slug}` as one percent-encoded path parameter; clients must request nested slugs such as `guides/setup` as `guides%2Fsetup` when the slug is followed by a subresource, for example `/wiki/pages/guides%2Fsetup/history`
-- `GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}` accepts an optional `ref` query parameter to read the page body and blob SHA at a full commit SHA from that page's history; omitted `ref` still reads HEAD
-- `GET /api/v3/repos/{owner}/{repo}/wiki/tree` accepts `path` and optional `ref`; omitted `ref` returns the current page-resolvable directory view used by the console sidebar, while explicit `ref` returns the Git tree at that ref and carries the same `ref` through page URLs
-- `GET /api/v3/repos/{owner}/{repo}/wiki/pages` accepts `path`, `recursive`, `label`/`labels`, and `exclude_label`/`exclude_labels` query parameters for prefix-scoped and label-scoped listing
-- `GET /api/v3/repos/{owner}/{repo}/wiki/search` accepts `q`, `limit`, `offset`, `label`/`labels`, and `exclude_label`/`exclude_labels`, returns `{results, query, method, elapsed_ms}`, and caps `limit` server-side at 50
-- `GET /api/v3/repos/{owner}/{repo}/wiki/state` exposes the current derived-index SHA, timestamps, and page count for the authoritative wiki surface
-- `POST /api/v3/repos/{owner}/{repo}/wiki/reconcile/request` persists an async reconcile request marker; `POST /api/v3/repos/{owner}/{repo}/wiki/reconcile` runs the reconcile synchronously and returns the persisted result
-- `GET/POST/PUT/DELETE /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` attaches repo-scoped labels to wiki pages; labels are metadata, not git-tracked page content
-- `POST /api/v3/repos/{owner}/{repo}/wiki/move` atomically renames every page whose slug equals `from` or starts with `from/`, requires an `if_match` SHA map that covers the full source set, and returns one commit for the entire move
-- `POST /api/v3/repos/{owner}/{repo}/wiki/compact` remains reserved for repo-admin callers, but it is temporarily disabled while the wiki catalog corruption incident is contained and repaired
-- `POST /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/move` performs an atomic rename with `new_slug` and `if_match`, rewrites eligible inbound wiki references in the same commit, and returns `{ moved, rewrites, skipped }`
+- `GET /api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}` accepts an optional `ref` query parameter to read the page body and blob SHA at a full commit SHA from that page's history; omitted `ref` still reads HEAD
+- `GET /api/ext/v1/repos/{owner}/{repo}/wiki/tree` accepts `path` and optional `ref`; omitted `ref` returns the current page-resolvable directory view used by the console sidebar, while explicit `ref` returns the Git tree at that ref and carries the same `ref` through page URLs
+- `GET /api/ext/v1/repos/{owner}/{repo}/wiki/pages` accepts `path`, `recursive`, `label`/`labels`, and `exclude_label`/`exclude_labels` query parameters for prefix-scoped and label-scoped listing
+- `GET /api/ext/v1/repos/{owner}/{repo}/wiki/search` accepts `q`, `limit`, `offset`, `label`/`labels`, and `exclude_label`/`exclude_labels`, returns `{results, query, method, elapsed_ms}`, and caps `limit` server-side at 50
+- `GET /api/ext/v1/repos/{owner}/{repo}/wiki/state` exposes the current derived-index SHA, timestamps, and page count for the authoritative wiki surface
+- `POST /api/ext/v1/repos/{owner}/{repo}/wiki/reconcile/request` persists an async reconcile request marker; `POST /api/ext/v1/repos/{owner}/{repo}/wiki/reconcile` runs the reconcile synchronously and returns the persisted result
+- `GET/POST/PUT/DELETE /api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/labels...` attaches repo-scoped labels to wiki pages; labels are metadata, not git-tracked page content
+- `POST /api/ext/v1/repos/{owner}/{repo}/wiki/move` atomically renames every page whose slug equals `from` or starts with `from/`, requires an `if_match` SHA map that covers the full source set, and returns one commit for the entire move
+- `POST /api/ext/v1/repos/{owner}/{repo}/wiki/compact` remains reserved for repo-admin callers, but it is temporarily disabled while the wiki catalog corruption incident is contained and repaired
+- `POST /api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/move` performs an atomic rename with `new_slug` and `if_match`, rewrites eligible inbound wiki references in the same commit, and returns `{ moved, rewrites, skipped }`
 - wiki page get/list/search/backlink response `title` values are deterministically derived from the page slug leaf, not from the markdown body heading; for example `guides/plain-page` returns `Plain Page`
 - wiki page get/list/search responses include `labels`, shaped with the existing repository label JSON contract
 - wiki write endpoints reject `ref` because historical revision edits are out of scope for the current REST contract
@@ -188,7 +188,7 @@ Wiki path-slug hierarchy rules:
 
 ### Wiki Page History
 
-`GET /api/v3/repos/{owner}/{repo}/wiki/pages/{slug}/history` follows the standard REST pattern:
+`GET /api/ext/v1/repos/{owner}/{repo}/wiki/pages/{slug}/history` follows the standard REST pattern:
 
 - resolve `{owner}`, `{repo}`, and `{slug}` from the path
 - delegate path-filtered revision lookup to `service.ListWikiPageHistory`
@@ -199,14 +199,14 @@ Wiki path-slug hierarchy rules:
 
 ### Wiki History Compaction
 
-`POST /api/v3/repos/{owner}/{repo}/wiki/compact` follows the standard REST pattern:
+`POST /api/ext/v1/repos/{owner}/{repo}/wiki/compact` follows the standard REST pattern:
 
 - resolve `{owner}` and `{repo}` from the path
 - require `RepoPermissionAdmin`
 - reject `ref` and any non-empty `before` payload because bounded compaction is not implemented yet
 - create or resume one repo-scoped compaction job that performs a catalog-first compact and then materializes a `refs/heads/compacted-<timestamp>` git projection
 
-`GET /api/v3/repos/{owner}/{repo}/wiki/compact/{job_id}` requires `RepoPermissionAdmin` and returns the current async job state.
+`GET /api/ext/v1/repos/{owner}/{repo}/wiki/compact/{job_id}` requires `RepoPermissionAdmin` and returns the current async job state.
 
 ### Git-Backed REST Request
 
